@@ -32,6 +32,8 @@ TEMPLATE = '''goal = {goal}
 # One [[criteria]] block per success criterion. `check` is a shell command; exit 0 means pass.
 # source = "human" for criteria the human wrote, "agent-proposed" for ones you added.
 # An empty check is allowed: the criterion is then `unchecked` and never counts as met.
+# For a `human` criterion add `coverage = "what the check proves and what it does not"`.
+# Optional top level: test_budget = "...", known_limits = "when the claim may fail".
 #
 # [[criteria]]
 # id = "C1"
@@ -134,8 +136,9 @@ def validate_task(task):
             errs.append("quick route needs exactly one criterion")
         elif not str(crit[0].get("check", "")).strip():
             errs.append("quick route needs a runnable check")
-    if "test_budget" in task and not isinstance(task["test_budget"], str):
-        errs.append("test_budget: must be a string")
+    for key in ("test_budget", "known_limits"):
+        if key in task and not isinstance(task[key], str):
+            errs.append(f"{key}: must be a string")
     for c in crit:
         cid = c.get("id", "?")
         if not c.get("id"):
@@ -149,6 +152,8 @@ def validate_task(task):
             errs.append(f"{cid}: source must be one of {SOURCES}")
         if not isinstance(c.get("check"), str):
             errs.append(f"{cid}: check is missing (use an empty string for unchecked)")
+        if "coverage" in c and not isinstance(c["coverage"], str):
+            errs.append(f"{cid}: coverage must be a string")
     return errs
 
 
@@ -180,6 +185,18 @@ def check_warnings(task, request=None):
         check = c.get("check")
         if isinstance(check, str) and check.strip() and VACUOUS.fullmatch(check.strip()):
             out.append(f"{c.get('id', '?')}: check `{check.strip()}` does not run project code, so it proves little")
+    return out
+
+
+def coverage_warnings(task):
+    """Advisory: say what a human criterion's check does not cover, and when the claim may fail."""
+    out = []
+    for c in task.get("criteria", []):
+        if c.get("source") == "human" and not str(c.get("coverage", "")).strip():
+            out.append(f"{c.get('id', '?')}: human criterion has no `coverage`: say what its check proves "
+                       "and what it does not (every word of the criterion, such as `many` or `step by step`)")
+    if task.get("route", "standard") != "quick" and not str(task.get("known_limits", "")).strip():
+        out.append("no `known_limits`: say under what conditions the claim may fail or has not been shown")
     return out
 
 
@@ -225,7 +242,7 @@ def verify(root, slug):
     results = []
     for c in task["criteria"]:
         r = {"id": c["id"], "text": c["text"], "source": c["source"], "check": c["check"],
-             "exit_code": None, "output_tail": "", "status": "unchecked"}
+             "coverage": c.get("coverage"), "exit_code": None, "output_tail": "", "status": "unchecked"}
         if c["check"].strip():
             r["exit_code"], r["output_tail"] = run_check(root, c["check"], c.get("timeout_s", DEFAULT_TIMEOUT))
             r["status"] = "passing" if r["exit_code"] == 0 else "failing"
@@ -249,6 +266,7 @@ def verify(root, slug):
             timing["first_verify_s"] = _secs(started, red["at"])
     ev = {"task": slug, "goal": task["goal"], "at": now(), "head": head, "dirty": dirty,
           "route": task.get("route", "standard"), "test_budget": task.get("test_budget"),
+          "known_limits": task.get("known_limits"),
           "red": {"failed": red["failed"], "total": red["total"]} if red else None, "timing": timing,
           "human_not_verbatim": human_not_verbatim,
           "fingerprint": fingerprint(root), "task_sha": _task_sha(root, slug),
@@ -281,9 +299,15 @@ def report(ev):
                      + " (a human should confirm they were not narrowed)")
     if ev.get("test_budget"):
         lines.append(f"Test budget: {ev['test_budget']}")
+    if ev.get("known_limits"):
+        lines.append(f"Known limits: {ev['known_limits']}")
     lines += ["", "| id | status | source | check |", "| --- | --- | --- | --- |"]
     for r in ev["results"]:
         lines.append(f"| {r['id']} | {r['status']} | {r['source']} | `{r['check'] or '-'}` |")
+    covered = [r for r in ev["results"] if r["source"] == "human" and str(r.get("coverage") or "").strip()]
+    if covered:
+        lines += ["", "Coverage of human criteria (what each check proves and does not):"]
+        lines += [f"- {r['id']}: {r['coverage'].strip()}" for r in covered]
     for r in ev["results"]:
         if r["status"] == "failing":
             lines += ["", f"Failing {r['id']} (exit {r['exit_code']}), output tail:", "```", r["output_tail"].strip(), "```"]
@@ -371,10 +395,17 @@ def gate(root, hook):
 # ---- cli ------------------------------------------------------------------
 
 def _slug_arg(root, args):
+    """Slug from the arguments, the active task, or the only task that exists."""
     slug = args[0] if args else active_slug(root)
-    if not slug:
-        sys.exit("no active task: run `herd init <slug> \"<goal>\"`")
-    return slug
+    if slug:
+        return slug
+    tasks_dir = Path(root) / ".herd" / "tasks"
+    tasks = sorted(p.name for p in tasks_dir.iterdir() if (p / "task.toml").exists()) if tasks_dir.exists() else []
+    if len(tasks) == 1:
+        return tasks[0]
+    if tasks:
+        sys.exit(f"no active task; pass one of: {', '.join(tasks)}")
+    sys.exit("no active task: run `herd init <slug> \"<goal>\"`")
 
 
 def main(argv):
@@ -402,7 +433,7 @@ def main(argv):
             errs = validate_task(task)
             print("\n".join(errs) if errs else "ok")
             req_path = _dir(root, slug) / "request.md"
-            for w in check_warnings(task, req_path.read_text() if req_path.exists() else None):
+            for w in check_warnings(task, req_path.read_text() if req_path.exists() else None) + coverage_warnings(task):
                 print(f"warning: {w}")
             return 1 if errs else 0
         elif cmd == "detect":

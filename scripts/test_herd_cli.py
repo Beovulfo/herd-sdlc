@@ -314,6 +314,110 @@ class TestVerbatim(Base):
         self.assertIn("verbatim", out)
 
 
+class TestCoverageAndLimits(Base):
+    def task_with(self, extra_top="", extra_c1="", source="human", check="python3 -V"):
+        return (f'{extra_top}goal = "g"\n[[criteria]]\nid = "C1"\ntext = "t"\nsource = "{source}"\n'
+                f'check = "{check}"\n{extra_c1}')
+
+    def load(self, text):
+        import tomllib
+        return tomllib.loads(text)
+
+    def test_coverage_must_be_a_string(self):
+        task = self.load(self.task_with(extra_c1='coverage = 3\n'))
+        self.assertIn("coverage", " ".join(herd.validate_task(task)))
+        self.assertEqual(herd.validate_task(self.load(self.task_with(extra_c1='coverage = "x"\n'))), [])
+
+    def test_known_limits_must_be_a_string(self):
+        task = self.load(self.task_with(extra_top='known_limits = 3\n'))
+        self.assertIn("known_limits", " ".join(herd.validate_task(task)))
+
+    def test_human_criterion_without_coverage_is_warned(self):
+        warn = " ".join(herd.coverage_warnings(self.load(self.task_with())))
+        self.assertIn("C1", warn)
+        self.assertIn("coverage", warn)
+        ok = herd.coverage_warnings(self.load(self.task_with(extra_c1='coverage = "proves X, not Y"\n')))
+        self.assertFalse([w for w in ok if "coverage" in w])
+        agent = herd.coverage_warnings(self.load(self.task_with(source="agent-proposed")))
+        self.assertFalse([w for w in agent if "coverage" in w])
+
+    def test_blank_coverage_counts_as_missing(self):
+        warn = herd.coverage_warnings(self.load(self.task_with(extra_c1='coverage = "  "\n')))
+        self.assertTrue([w for w in warn if "coverage" in w])
+
+    def test_missing_known_limits_is_warned_on_standard_not_quick(self):
+        warn = herd.coverage_warnings(self.load(self.task_with()))
+        self.assertTrue([w for w in warn if "known_limits" in w])
+        quick = self.load('route = "quick"\n' + self.task_with())
+        self.assertFalse([w for w in herd.coverage_warnings(quick) if "known_limits" in w])
+        stated = self.load(self.task_with(extra_top='known_limits = "holds on the demo store only"\n'))
+        self.assertFalse([w for w in herd.coverage_warnings(stated) if "known_limits" in w])
+
+    def test_report_shows_coverage_and_known_limits(self):
+        herd.init_task(self.root, "t1", "g")
+        (self.root / ".herd/tasks/t1/task.toml").write_text(self.task_with(
+            extra_top='known_limits = "only the demo store; saving varies with basket size"\n',
+            extra_c1='coverage = "proves per-stop events, not per-cell steps"\n'))
+        ev = herd.verify(self.root, "t1")
+        self.assertEqual(ev["known_limits"], "only the demo store; saving varies with basket size")
+        self.assertEqual(ev["results"][0]["coverage"], "proves per-stop events, not per-cell steps")
+        text = herd.report(ev)
+        self.assertIn("Known limits: only the demo store; saving varies with basket size", text)
+        self.assertIn("Coverage of human criteria", text)
+        self.assertIn("C1: proves per-stop events, not per-cell steps", text)
+
+    def test_report_is_quiet_without_them(self):
+        self.task()
+        text = herd.report(herd.verify(self.root, "t1"))
+        self.assertNotIn("Known limits", text)
+        self.assertNotIn("Coverage of human criteria", text)
+
+    def test_agent_proposed_coverage_is_not_listed_under_human_heading(self):
+        herd.init_task(self.root, "t1", "g")
+        (self.root / ".herd/tasks/t1/task.toml").write_text(
+            self.task_with(source="agent-proposed", extra_c1='coverage = "internal"\n'))
+        self.assertNotIn("Coverage of human criteria", herd.report(herd.verify(self.root, "t1")))
+
+
+class TestSlugFallback(Base):
+    def run_cli(self, *args):
+        return subprocess.run(["python3", str(Path(herd.__file__)), *args], cwd=self.root,
+                              capture_output=True, text=True)
+
+    def finish_one(self, slug="t1"):
+        herd.init_task(self.root, slug, "g")
+        (self.root / f".herd/tasks/{slug}/task.toml").write_text(TASK)
+        (self.root / "greet.txt").write_text("hello")
+        self.assertEqual(self.run_cli("verify", slug).returncode, 0)
+        self.assertEqual(self.run_cli("done", slug).returncode, 0)
+
+    def test_single_task_is_used_when_none_is_active(self):
+        self.finish_one()
+        self.assertFalse((self.root / ".herd/active").exists())
+        p = self.run_cli("status")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("Evidence: t1", p.stdout)
+        self.assertEqual(self.run_cli("verify").returncode, 0)
+
+    def test_gate_does_not_treat_a_finished_task_as_active(self):
+        self.finish_one()
+        self.assertIsNone(herd.gate(self.root, {}))
+
+    def test_several_tasks_and_none_active_is_still_an_error(self):
+        self.finish_one("t1")
+        herd.init_task(self.root, "t2", "g")
+        (self.root / ".herd/active").unlink()
+        p = self.run_cli("status")
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("t1", p.stderr)
+        self.assertIn("t2", p.stderr)
+
+    def test_no_tasks_is_an_error(self):
+        p = self.run_cli("status")
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("herd init", p.stderr)
+
+
 class TestTiming(Base):
     def at(self, hhmmss):
         return mock.patch.object(herd, "now", return_value=f"2026-11-22T{hhmmss}Z")

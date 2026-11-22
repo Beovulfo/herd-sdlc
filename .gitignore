@@ -2,3 +2,6 @@ __pycache__/
 *.pyc
 .herd/
 /test/
+/baseline/
+/haiku-herd/
+/haiku-baseline/

@@ -93,7 +93,7 @@ source = "agent-proposed"
 check = "python3 -m unittest test_textutil.TestSlugify.test_empty"
 ```
 
-Optional top-level fields: `test_budget = "unit for parsing; the CLI wrapper is not tested"` and `route = "quick"` (set by `herd init --quick`). Before any work, both checks fail (that proves they test something). After the work:
+Optional fields: top-level `test_budget = "unit for parsing; the CLI wrapper is not tested"` and `known_limits = "holds on the demo store; saving varies with basket size"`, `route = "quick"` (set by `herd init --quick`), and per human criterion `coverage = "what the check proves and what it does not"`, which the report prints. Before any work, both checks fail (that proves they test something). After the work:
 
 ```text
 $ python3 scripts/herd.py verify
@@ -127,7 +127,7 @@ If the agent tries to finish while a check is failing, the Stop hook answers ins
 | `/herd:evidence` | Interactive: decide with you how to prove the change works for your project type |
 | `herd init <slug> "<goal>" --request "<message>"` | Create a task and make it active. `--request` stores the human's message verbatim so `herd check` can flag human criteria that are not quotes |
 | `herd init <slug> "<goal>" --quick "<check>"` | Quick route for a trivial change: one criterion, one check. Refused at a `high` risk floor |
-| `herd check` | Validate `task.toml`; warns about checks that do not run project code |
+| `herd check` | Validate `task.toml`; warns about checks that do not run project code, human criteria that are not quotes, and missing `coverage` or `known_limits` |
 | `herd detect` | Propose test and lint commands for Python, Node, Rust, Go and `make test` |
 | `herd triage "<text>"` | Print the risk floor for a task description |
 | `herd verify` | Run all checks, store `evidence.json`; exit 1 if any fail |
@@ -165,7 +165,7 @@ While a Herd task is active, each `Edit` or `Write` runs the command on that fil
 
 ## Status
 
-Version 0.2. Working and covered by 145 unit tests: the evidence harness (`scripts/herd.py`), the Stop gate, the quick route, project-type detection, the lint hook, and the risk-floor module. One trial run, where a fresh agent followed the `herd:run` skill text in a scratch repo, got a 5-criterion task to a passing `herd done`, and its notes on unclear wording were fixed. Not yet done: many live runs through the installed plugin, and issue-to-pull-request automation on GitHub, which is still design work.
+Version 0.2. Working and covered by 157 unit tests: the evidence harness (`scripts/herd.py`), the Stop gate, the quick route, project-type detection, the lint hook, and the risk-floor module. One trial run, where a fresh agent followed the `herd:run` skill text in a scratch repo, got a 5-criterion task to a passing `herd done`, and its notes on unclear wording were fixed. Not yet done: many live runs through the installed plugin, and issue-to-pull-request automation on GitHub, which is still design work.
 
 ## The design behind it
 

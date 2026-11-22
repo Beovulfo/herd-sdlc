@@ -1,0 +1,24 @@
+| tier | store layouts | finished in time | valid | mean time saved | worst | share at or above 30% | median wall (s) | distance vs exact optimum (S) or vs plain nearest-neighbour (M, L): mean, worst |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| S | 16 | 14 of 16 | 14 of 14 | 25.5% | 11.0% | 4 of 14 | 0.1 | +0.2%, +2.0% |
+| M | 16 | 12 of 16 | 12 of 12 | 67.1% | 39.8% | 12 of 12 | 0.8 | -10.4%, +4.3% |
+| L | 8 | 6 of 8 | 6 of 6 | 77.3% | 41.6% | 6 of 6 | 13.8 | -15.0%, -0.5% |
+
+By layout family (mean time saved, instances finished and valid):
+- parallel: 55.8% saved, 5 of 5
+- vertical: 55.9% saved, 5 of 5
+- islands: 56.8% saved, 5 of 5
+- random: 35.6% saved, 1 of 5
+- comb: 31.9% saved, 5 of 5
+- lshape: 54.2% saved, 5 of 5
+- maze: 61.2% saved, 5 of 5
+- clusters: 11.0% saved, 1 of 5
+! S random seed 1: crash: ValueError: unreachable item: station/P0033 (0s)
+! S clusters seed 1: crash: ValueError: unreachable item: station/P0001 (0s)
+! M random seed 0: crash: ValueError: unreachable item: station/P0181 (1s)
+! M random seed 1: crash: ValueError: unreachable item: station/P0153 (1s)
+! M clusters seed 0: crash: ValueError: unreachable item: station/P0069 (0s)
+! M clusters seed 1: crash: ValueError: unreachable item: station/P0102 (0s)
+! L random seed 0: crash: ValueError: unreachable item: station/P0336 (11s)
+! L clusters seed 0: crash: ValueError: unreachable item: station/P0132 (1s)
+RESULT: FAIL (every instance finished in time with a valid route)

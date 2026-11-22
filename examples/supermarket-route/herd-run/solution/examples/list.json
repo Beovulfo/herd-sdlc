@@ -1,0 +1,52 @@
+{
+ "items": [
+  {
+   "id": "P44",
+   "name": "detergent"
+  },
+  {
+   "id": "P12",
+   "name": "onions"
+  },
+  {
+   "id": "P07",
+   "name": "apples"
+  },
+  {
+   "id": "P38",
+   "name": "pork"
+  },
+  {
+   "id": "P37",
+   "name": "beef"
+  },
+  {
+   "id": "P41",
+   "name": "soap"
+  },
+  {
+   "id": "P13",
+   "name": "potatoes"
+  },
+  {
+   "id": "P24",
+   "name": "tea"
+  },
+  {
+   "id": "P46",
+   "name": "batteries"
+  },
+  {
+   "id": "P36",
+   "name": "chicken"
+  },
+  {
+   "id": "P05",
+   "name": "cheese"
+  },
+  {
+   "id": "P04",
+   "name": "butter"
+  }
+ ]
+}

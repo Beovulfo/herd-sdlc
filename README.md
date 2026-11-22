@@ -1,20 +1,79 @@
-# Herd
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
+    <img src="assets/logo.svg" alt="Herd" width="300">
+  </picture>
+</p>
 
-**Hand an agent a goal. Get back code and proof.**
+<h3 align="center">Hand an agent a goal. Get back code and proof.</h3>
 
-[![tests](https://github.com/Beovulfo/herd-sdlc/actions/workflows/ci.yml/badge.svg)](https://github.com/Beovulfo/herd-sdlc/actions/workflows/ci.yml)
-[![license: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-![python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue.svg)
+<p align="center">
+  <a href="https://github.com/Beovulfo/herd-sdlc/actions/workflows/ci.yml"><img alt="tests" src="https://github.com/Beovulfo/herd-sdlc/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="LICENSE"><img alt="license: Apache 2.0" src="https://img.shields.io/badge/license-Apache%202.0-blue.svg"></a>
+  <img alt="python 3.13+" src="https://img.shields.io/badge/python-3.13%2B-blue.svg">
+  <img alt="Claude Code plugin" src="https://img.shields.io/badge/Claude%20Code-plugin-2e7d32.svg">
+</p>
 
-Herd is a lightweight Claude Code plugin that runs a task end to end with as little human input as possible. You give it a goal and, if you like, success criteria. The agent plans, builds, reviews and verifies on its own. It only stops when **runnable checks prove the criteria pass**, and it only asks you something when an action is irreversible or a real trade-off needs a human.
+<p align="center">
+  <a href="#quickstart">Quickstart</a> &middot;
+  <a href="#how-it-works">How it works</a> &middot;
+  <a href="#see-it-work">See it work</a> &middot;
+  <a href="#benchmark-with-and-without-herd">Benchmark</a> &middot;
+  <a href="#commands-and-skills">Commands</a> &middot;
+  <a href="#the-design-behind-it">Design</a>
+</p>
 
-Most agent workflows ask humans to write long requirement lists and then trust the agent when it says "done". Herd flips that:
+<p align="center">
+  <img src="examples/supermarket-route/images/simulation.svg" alt="Animation: one basket walked in shopping-list order and on the optimized route, with time and distance bars running" width="860">
+</p>
 
-| Humans provide | Agents provide |
+Herd is a lightweight [Claude Code](https://claude.com/claude-code) plugin that runs a task end to end with as little human input as possible. You give it a goal and, if you like, success criteria. The agent plans, builds, tries to break its own work, reviews and verifies. It only stops when **runnable checks prove the criteria pass**, and it only asks you something when an action is irreversible or a real trade-off needs a human.
+
+Most agent workflows ask people to write long requirement lists, then trust the agent when it says "done". Herd flips that:
+
+| You provide | The agent provides |
 | --- | --- |
-| A goal, and optionally criteria with a check for each | Plan, code, tests, review, and **evidence** |
+| A goal, and optionally criteria with a check for each | Plan, code, tests, adversarial pass, review, and **evidence** |
 
-You review evidence (command output, commit SHA, timestamp), not process.
+You review evidence (command output, commit SHA, timestamps), not process.
+
+**Why use it**
+- **Done means proven.** A Stop hook blocks the agent from finishing until every check passes, with evidence newer than the last edit.
+- **Your words stay yours.** Criteria you write are quoted verbatim and never weakened. Gaps are filled by the agent and marked `agent-proposed`.
+- **Caveats surface early.** The agent must say what each check does not prove, try to break its own work, and log what it finds, so problems appear during the run, not after it.
+- **Light.** One Python file, no dependencies, plain-text task files. It reuses [Superpowers](https://github.com/obra/superpowers) and [EGM](https://github.com/google/elephant-goldfish-model) when they are installed.
+
+## Quickstart
+
+You need Claude Code, Python 3.13 or newer, and a git repository.
+
+```text
+/plugin marketplace add Beovulfo/herd-sdlc
+/plugin install herd@herd-sdlc
+```
+
+The same from a terminal:
+
+```bash
+claude plugin marketplace add Beovulfo/herd-sdlc
+claude plugin install herd@herd-sdlc
+```
+
+Optional, and recommended, the plugins Herd builds on. Herd works without them and uses them when present:
+
+```bash
+claude plugin install superpowers@claude-plugins-official
+claude plugin marketplace add google/elephant-goldfish-model
+claude plugin install egm@egm
+```
+
+Then, inside your project, in a new session:
+
+```text
+/herd:run Add a --json flag to the export command. Output must be valid JSON with every row.
+```
+
+Herd creates the task, writes criteria with checks and shows them to you, runs them once to see them fail, builds on a `herd/<slug>` branch, tries to break the result, gets a fresh-context review, verifies, and ends with an evidence report. High-risk changes get one approval question before building. For a trivial change, say "quick fix": one check, no ceremony. To plan with Herd how to prove a change for your project type, run `/herd:evidence`.
 
 ## How it works
 
@@ -25,7 +84,8 @@ flowchart LR
     B -->|trivial: quick route| Q[One criterion, one check]
     C --> D[Build: plan, tests first, code]
     Q --> D
-    D --> E[Fresh-eyes review<br/>medium and high risk]
+    D --> X[Break it<br/>generated cases, scale]
+    X --> E[Fresh-eyes review<br/>medium and high risk]
     E --> F[herd verify<br/>run every check]
     F -->|failing| D
     F -->|passing| G[herd done<br/>evidence report]
@@ -33,57 +93,25 @@ flowchart LR
 ```
 
 1. **Intake.** The task gets a folder, `.herd/tasks/<slug>/task.toml`, and a risk floor computed from path rules in `herd.toml` (migrations, auth, billing, and so on). The agent can raise the risk, never lower it. A trivial change takes the **quick route**: one criterion and one check, no criteria interview, no approval question, no review. It is refused at a `high` risk floor and still ends in fresh passing evidence.
-2. **Criteria.** Every criterion is "Given, when, then" with a `check`: a shell command where exit 0 means pass. Criteria you write are authoritative: the agent quotes your words exactly, and the report flags any `human` criterion that is not a verbatim quote. Criteria the agent adds are marked `agent-proposed`. A criterion with no check is `unchecked` and is never counted as met. `herd detect` proposes the project's real test command, and an optional `test_budget` line records what is tested at which level and what is deliberately not.
-3. **Build.** Tests first, small steps, on a branch. Herd reuses [Superpowers](https://github.com/obra/superpowers) for planning, TDD and subagents when it is installed.
-4. **Break it, then review.** Before review the agent tries to break its own work on exactly what the request promises (the words `any`, `every`, `very big` become generated cases of different shapes and a scale run), recording each attempt and failure with `herd note`. For medium and high risk, a fresh-context reviewer then looks at the diff: Superpowers code review, or the Goldfish agents from [EGM](https://github.com/google/elephant-goldfish-model) when installed.
-5. **Verify.** `herd verify` runs every check and stores evidence: status, exit code, output tail, commit SHA, a fingerprint of the workspace, a timestamp, how many checks failed on the first run (a check that was green before any work is visible), and the wall-clock time since `herd init`, including when the first verify happened.
+2. **Criteria.** Every criterion has a `check`: a shell command where exit 0 means pass. Criteria you write are authoritative: the agent quotes your words, adds a `coverage` note saying what the check proves and what it does not, and the report flags any `human` criterion that is not a verbatim quote. A criterion with no check is `unchecked` and is never counted as met. `herd detect` proposes the project's real test command.
+3. **Build.** Tests first, small steps, on a branch. Superpowers is used for planning, TDD and subagents when installed.
+4. **Break it, then review.** The agent tries to break its own work on exactly what the request promises: the words `any`, `every`, `very big` become generated cases of different shapes and a scale run. Each attempt, failure and fix is logged with `herd note`. For medium and high risk, a fresh-context reviewer then looks at the diff.
+5. **Verify.** `herd verify` runs every check and stores evidence: status, exit code, output tail, commit SHA, a fingerprint of the workspace, a timestamp, how many checks failed on the first run (a check that was green before any work is visible), and the wall-clock time since `herd init`.
 6. **Stop gate.** While a task is active, a Stop hook refuses to let the agent finish unless the evidence is fresh and passing. Edit a file after verifying and the evidence is stale. After 3 blocked attempts the gate lets the agent stop so it can ask you one question instead of looping.
 
-## Quickstart
+## See it work
 
-You need [Claude Code](https://claude.com/claude-code), Python 3.13 or newer, and a git repository.
-
-```text
-/plugin marketplace add Beovulfo/herd-sdlc
-/plugin install herd@herd-sdlc
-```
-
-Optional, and recommended: the plugins Herd builds on. Herd works without them and uses them when present.
-
-```bash
-claude plugin install superpowers@claude-plugins-official
-claude plugin marketplace add google/elephant-goldfish-model
-claude plugin install egm@egm
-```
-
-Then, inside your project:
-
-```text
-/herd:run Add a --json flag to the export command. Output must be valid JSON with every row.
-```
-
-Herd creates the task, writes criteria with checks (and shows them to you), runs them once to see them fail, builds on a `herd/<slug>` branch, gets a fresh-context review, verifies, and ends with an evidence report. For high-risk changes it asks one approval question before building. If you want to approve the criteria first on every task, say so in the request.
-
-For a trivial change, ask for the quick route, or say "quick fix". To plan with Herd how to prove a change for your project type, run `/herd:evidence`.
-
-Try it without an agent, to see the harness itself:
-
-```bash
-python3 scripts/herd.py init slugify "Add a slugify(text) function"
-# edit .herd/tasks/slugify/task.toml, add criteria with checks
-python3 scripts/herd.py verify     # run the checks, store evidence
-python3 scripts/herd.py done       # refuses unless evidence is fresh and passing
-```
-
-## A task file
+A task is a goal plus criteria, each with a runnable check:
 
 ```toml
 goal = "Add a slugify(text) function"
+known_limits = "ASCII text only; non-Latin scripts are not handled"
 
 [[criteria]]
 id = "C1"
 text = "Given 'Hello, World!', when slugify runs, then it returns 'hello-world'"
 source = "human"
+coverage = "proves the basic case and punctuation; does not prove accents or very long input"
 check = "python3 -m unittest test_textutil.TestSlugify.test_basic"
 
 [[criteria]]
@@ -93,18 +121,21 @@ source = "agent-proposed"
 check = "python3 -m unittest test_textutil.TestSlugify.test_empty"
 ```
 
-Optional fields: top-level `test_budget = "unit for parsing; the CLI wrapper is not tested"` and `known_limits = "holds on the demo store; saving varies with basket size"`, `route = "quick"` (set by `herd init --quick`), and per human criterion `coverage = "what the check proves and what it does not"`, which the report prints. Before any work, both checks fail (that proves they test something). After the work:
+Before any work, both checks fail, which proves they test something. After the work (output abridged):
 
 ```text
-$ python3 scripts/herd.py verify
+$ herd verify
 2 passing, 0 failing, 0 unchecked
   C1 passing: Given 'Hello, World!', when slugify runs, then it returns 'hello-world'
   C2 passing: Given only punctuation, when slugify runs, then it returns an empty string
 
-$ python3 scripts/herd.py done
+$ herd done
 # Evidence: slugify
 Result: 2 passing, 0 failing, 0 unchecked
 First verify: 2 of 2 checks failed before the work
+Elapsed: 2m 05s from herd init to this verify; first verify at 0m 40s (wall clock, includes any waiting on the human)
+Known limits: ASCII text only; non-Latin scripts are not handled
+Adversarial pass: 2 attempts recorded
 | id | status | source | check |
 | C1 | passing | human | `python3 -m unittest test_textutil.TestSlugify.test_basic` |
 | C2 | passing | agent-proposed | `python3 -m unittest test_textutil.TestSlugify.test_empty` |
@@ -118,11 +149,46 @@ If the agent tries to finish while a check is failing, the Stop hook answers ins
  C1 is failing: Given 'Hello, World!', ... Run `herd.py verify` after fixing. ..."}
 ```
 
+## Benchmark: with and without Herd
+
+The same short prompt, a route optimizer for picking a shopping list in a supermarket, was given to three models, each once with Herd and once with no workflow. Then every solution was checked by a hidden verifier it had never seen: generated store layouts at several sizes, with every walk validated step by step.
+
+<p align="center">
+  <img src="examples/supermarket-route/images/layouts.svg" alt="The optimized route on eight generated store layouts: parallel aisles, vertical aisles, islands, random obstacles, comb, L-shape, maze and departments" width="860">
+</p>
+
+**What the verifier found** (Sonnet, the pair measured on the hidden suite: 8 layout families, 4 sizes up to 600 by 400 cells with 200 items):
+
+| | With Herd | No workflow |
+| --- | --- | --- |
+| Stores solved with a valid route | **48 of 48** | 38 of 48 |
+| Failure | none | crash when a shelf borders a disconnected pocket of floor |
+| Route quality | the same | the same |
+| Median time to plan a 600 by 400 store | 17.2 s | 72.7 s |
+
+**Bad inputs** (an unknown product, a duplicate, an empty list, an unreachable product, a malformed map), and what each run cost in time:
+
+<p align="center">
+  <img src="examples/supermarket-route/images/benchmark.svg" alt="Bar chart: bad-input scenarios handled out of 6 and wall-clock minutes, for Opus, Haiku and Sonnet with and without Herd" width="760">
+</p>
+
+- **More robust and better tested.** In all three pairs, the Herd solution handled every bad-input scenario and had 4 to 9 times as many test lines. The no-workflow solutions crashed on an empty list, an unreachable product or a malformed map.
+- **The route itself is no better.** Both arms found routes of the same length. The difference is what happens at the edges.
+- **Herd said where the claim fails.** The Sonnet run's `known_limits` quantified when the 30% saving does not hold: always on a 1-item list, in 41 of 60 runs on 3 items, in 3 of 60 on 10 items. The hidden verifier confirmed it. The no-workflow run reported its best demo number.
+- **It costs more.** Herd runs took 1.3 to 8 times the wall-clock time. Tokens were measured on one pair (Haiku): 23 percent more.
+- **No extra input from you.** Herd needs only the one message; in the live Opus runs it asked no questions.
+
+One run per arm, three models, one task: read it as strong evidence about robustness, not as a precise cost figure. The full method, every number and the caveats are in [`examples/supermarket-route/BENCHMARK.md`](examples/supermarket-route/BENCHMARK.md), the issues the test found in Herd itself are in [`issues.md`](examples/supermarket-route/issues.md), and anyone can reproduce the checks:
+
+```bash
+python3 examples/supermarket-route/verifier/verify_general.py sonnet_herd examples/supermarket-route/sonnet-herd-run/solution
+```
+
 ## Commands and skills
 
 | What | Does |
 | --- | --- |
-| `/herd:run <task>` | The autopilot: intake, criteria, build, review, verify, evidence |
+| `/herd:run <task>` | The autopilot: intake, criteria, build, break it, review, verify, evidence |
 | `/herd:criteria` | Write success criteria with runnable checks |
 | `/herd:evidence` | Interactive: decide with you how to prove the change works for your project type |
 | `herd init <slug> "<goal>" --request "<message>"` | Create a task and make it active. `--request` stores the human's message verbatim so `herd check` can flag human criteria that are not quotes |
@@ -139,13 +205,7 @@ If the agent tries to finish while a check is failing, the Stop hook answers ins
 
 `herd` is `python3 scripts/herd.py`. Inside the plugin it is `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/herd.py"`.
 
-## Evidence that adapts to your project
-
-`/herd:evidence` detects your project type, proposes the real test and lint commands for you to confirm, asks at most five questions about what "working" looks like and what cannot be automated, and drafts criteria with checks. The report then shows how many checks failed before the work started (a check that was green from the start is visible), and an optional `test_budget` line in `task.toml` records what is tested at which level and what is deliberately not tested.
-
-## Lint feedback after each edit (opt-in)
-
-Add a `[lint]` table to your project's `herd.toml`:
+**Lint feedback after each edit (opt-in).** Add a `[lint]` table to your project's `herd.toml`:
 
 ```toml
 [lint]
@@ -166,20 +226,20 @@ While a Herd task is active, each `Edit` or `Write` runs the command on that fil
 
 ## Status
 
-Version 0.2. Working and covered by 174 unit tests: the evidence harness (`scripts/herd.py`), the Stop gate, the quick route, project-type detection, the lint hook, and the risk-floor module. One trial run, where a fresh agent followed the `herd:run` skill text in a scratch repo, got a 5-criterion task to a passing `herd done`, and its notes on unclear wording were fixed. Not yet done: many live runs through the installed plugin, and issue-to-pull-request automation on GitHub, which is still design work.
+Version 0.2. Working and covered by 174 unit tests: the evidence harness (`scripts/herd.py`), the Stop gate, the quick route, project-type detection, the lint hook, the caveat log, and the risk-floor module. Benchmarked on one task with three models (above). Not yet done: many live runs through the installed plugin across different project types, and issue-to-pull-request automation on GitHub, which is still design work.
 
 ## The design behind it
 
 Herd is built with its own method, using the [Elephant-Goldfish Model](https://github.com/google/elephant-goldfish-model): an Elephant agent with full context drafts, and Goldfish reviewers with no context check. The requirements and decisions are in the open:
 
 - [`PRD`](PRD%20%E2%80%94%20Autopilot%20SDLC%20plugin%20built%20on%20the%20Elephant-Goldfish%20Model.md): the product requirements, principles and roadmap.
-- [`docs/designs/`](docs/designs): specs for Triage, the Arbiter (an agent that rules on review findings) and Escalation (one issue to pause and ask a human), each with a tested module in `scripts/` that will power the GitHub automation phase, plus the [v0.2 plan](docs/designs/herd-coco-ideas.md) (quick route, detection, lint hook, evidence skill) with its review log in `docs/spikes/s1-runs/coco-ideas/`.
+- [`docs/designs/`](docs/designs): specs for Triage, the Arbiter (an agent that rules on review findings) and Escalation (one issue to pause and ask a human), each with a tested module in `scripts/` that will power the GitHub automation phase, plus the [v0.2 plan](docs/designs/herd-coco-ideas.md).
+- [`docs/spikes/`](docs/spikes): spike S1 ran EGM unattended on these features, with every review report and what broke.
 - [`docs/backlog.md`](docs/backlog.md): ideas not yet planned, such as an optional Trail Code integration.
-- [`docs/spikes/`](docs/spikes): spike S1 ran EGM unattended on these three features, with every review report and what broke.
 
 ## Roadmap
 
-- **Now (v0.2):** local autopilot with evidence and the Stop gate, a quick route, project-type detection, an opt-in lint hook and the evidence-planning skill.
+- **Now (v0.2):** local autopilot with evidence, the Stop gate, a quick route, project-type detection, an opt-in lint hook, an adversarial pass and the evidence-planning skill.
 - **Next:** GitHub automation: a labelled issue becomes a reviewed spec, then a pull request, with the Arbiter and Escalation modules.
 - **Later:** a release gate for high-risk changes, and other agent harnesses.
 
@@ -191,7 +251,7 @@ python3 -m unittest scripts.test_herd_cli scripts.test_herd_lint scripts.test_he
 claude plugin validate ./
 ```
 
-Python standard library only, no dependencies. Try the plugin from a clone with `claude --plugin-dir /path/to/herd-sdlc`.
+Python standard library only, no dependencies. Try the plugin from a clone with `claude --plugin-dir /path/to/herd-sdlc`. When plugin files change, bump `version` in `.claude-plugin/plugin.json`, because `claude plugin update` compares version numbers only.
 
 ## License
 

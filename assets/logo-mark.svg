@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 64 64" role="img" aria-label="Herd">
+  <title>Herd</title>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="8">
+    <path d="M13 10V54M51 10V54" stroke="#1f2937"/>
+    <path d="M23.5 35L30 41.5L40.5 26" stroke="#2e7d32"/>
+  </g>
+</svg>

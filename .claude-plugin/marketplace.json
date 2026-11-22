@@ -1,6 +1,8 @@
 {
   "name": "herd-sdlc",
-  "owner": { "name": "Beovulfo" },
+  "owner": {
+    "name": "Beovulfo"
+  },
   "plugins": [
     {
       "name": "herd",
@@ -9,5 +11,6 @@
       "category": "development",
       "homepage": "https://github.com/Beovulfo/herd-sdlc"
     }
-  ]
+  ],
+  "description": "Herd: an evidence-based autopilot SDLC harness for Claude Code. Hand an agent a goal, get back code and proof."
 }

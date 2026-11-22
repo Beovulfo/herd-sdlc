@@ -1,0 +1,14 @@
+| tier | store layouts | finished in time | valid | mean time saved | worst | share at or above 30% | median wall (s) | distance vs exact optimum (S) or vs plain nearest-neighbour (M, L): mean, worst |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| XL | 8 | 8 of 8 | 8 of 8 | 83.9% | 49.4% | 8 of 8 | 17.2 | -12.3%, -5.4% |
+
+By layout family (mean time saved, instances finished and valid):
+- parallel: 87.2% saved, 1 of 1
+- vertical: 87.9% saved, 1 of 1
+- islands: 87.1% saved, 1 of 1
+- random: 87.3% saved, 1 of 1
+- comb: 49.4% saved, 1 of 1
+- lshape: 87.0% saved, 1 of 1
+- maze: 94.0% saved, 1 of 1
+- clusters: 91.2% saved, 1 of 1
+RESULT: PASS (every instance finished in time with a valid route)

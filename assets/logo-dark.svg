@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="420" height="128" viewBox="0 0 420 128" role="img" aria-label="Herd">
+  <title>Herd</title>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="8" transform="translate(4 0) scale(2)">
+    <path d="M13 10V54M51 10V54" stroke="#e5e7eb"/>
+    <path d="M23.5 35L30 41.5L40.5 26" stroke="#66bb6a"/>
+  </g>
+  <text x="156" y="88" font-family="'SF Pro Rounded','Nunito','Segoe UI',-apple-system,Helvetica,Arial,sans-serif" font-size="76" font-weight="800" letter-spacing="-1" fill="#e5e7eb">herd</text>
+</svg>

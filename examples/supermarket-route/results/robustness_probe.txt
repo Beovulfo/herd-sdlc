@@ -1,0 +1,9 @@
+| solution | code lines | test lines | tests | functions documented | normal | unknown_id | duplicate_id | empty_list | unreachable | malformed_map | handled |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Opus, Herd run 1 | 287 | 172 | 23 | 6 of 18 | ok | clean error | ok | ok | clean error | clean error | 6 of 6 |
+| Opus, Herd run 2 | 181 | 164 | 19 | 6 of 15 | ok | clean error | ok | ok | clean error | clean error | 6 of 6 |
+| Opus, no workflow | 190 | 26 | 4 | 4 of 16 | ok | clean error | clean error | CRASH | CRASH | CRASH | 3 of 6 |
+| Haiku, Herd | 175 | 107 | 12 | 6 of 14 | ok | clean error | clean error | ok | clean error | clean error | 6 of 6 |
+| Haiku, no workflow | 182 | 27 | 3 | 4 of 12 | ok | clean error | clean error | CRASH | CRASH | CRASH | 3 of 6 |
+| Sonnet, Herd | 297 | 180 | 16 | 7 of 22 | ok | clean error | ok | clean error | clean error | clean error | 6 of 6 |
+| Sonnet, no workflow | 226 | 20 | 3 | 5 of 12 | ok | clean error | clean error | clean error | CRASH | CRASH | 4 of 6 |

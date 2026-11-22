@@ -1,0 +1,16 @@
+| tier | store layouts | finished in time | valid | mean time saved | worst | share at or above 30% | median wall (s) | distance vs exact optimum (S) or vs plain nearest-neighbour (M, L): mean, worst |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| XL | 8 | 6 of 8 | 6 of 6 | 81.7% | 49.4% | 6 of 6 | 72.7 | -5.6%, +40.3% |
+
+By layout family (mean time saved, instances finished and valid):
+- parallel: 87.3% saved, 1 of 1
+- vertical: 88.0% saved, 1 of 1
+- islands: 87.4% saved, 1 of 1
+- random: none valid, 0 of 1
+- comb: 49.4% saved, 1 of 1
+- lshape: 87.2% saved, 1 of 1
+- maze: 91.0% saved, 1 of 1
+- clusters: none valid, 0 of 1
+! XL random seed 0: crash: ValueError: unreachable item: station/P0234 (43s)
+! XL clusters seed 0: crash: ValueError: unreachable item: station/P0285 (2s)
+RESULT: FAIL (every instance finished in time with a valid route)

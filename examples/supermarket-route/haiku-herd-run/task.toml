@@ -1,0 +1,27 @@
+goal = "Build a supermarket route optimizer that finds the shortest delivery-guy route through the store, simulates it step by step with live KPIs, and compares it with the list-order route."
+
+test_budget = "Unit tests in test_route_optimizer.py. Logic (BFS distances, nearest-neighbour + 2-opt ordering, KPI math) is unit-tested. The step-by-step simulation and the compare CLI are tested end to end via subprocess. Savings are measured on 30 seeded baskets in the demo store (seeds 1 to 30, 12 items each). Not tested: real store layouts, real walking speeds and pick times (the time model is an assumption), and optimality of the heuristic (2-opt is not guaranteed optimal)."
+
+[[criteria]]
+id = "C1"
+text = "we can simulate step by step the route of the delivery guy, measuring in real time the KPIs: “time-to-prepare-basket” and “distance-covered”"
+source = "human"
+check = "python3 -m unittest test_route_optimizer.TestSimulation"
+
+[[criteria]]
+id = "C2"
+text = "compare it with the list-order route (not optimized)"
+source = "human"
+check = "python3 -m unittest test_route_optimizer.TestCompare"
+
+[[criteria]]
+id = "C3"
+text = "successfully saves more than 30% of time for the basket to be ready"
+source = "human"
+check = "python3 -m unittest test_route_optimizer.TestSavings"
+
+[[criteria]]
+id = "C4"
+text = "Given a basket with an unknown product id, a duplicate id or a product on a shelf cell, when the optimizer runs, then it exits 1 with an error and does not print a route; given an empty basket, then it plans only the walk to checkout."
+source = "agent-proposed"
+check = "python3 -m unittest test_route_optimizer.TestEdges"

@@ -33,5 +33,6 @@ Help the human choose what proves their goal works, for their kind of project. T
 
 ## Notes
 
+- When you find a problem, record it with `herd note --found "..."` (and `--fixed`, `--open`, `--tried`): the report lists them with the time each was found.
 - A `test_budget` line in `task.toml` records what is tested at which level and what is deliberately not tested.
 - Human-written criteria are never reworded or weakened.

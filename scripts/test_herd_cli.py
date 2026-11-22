@@ -379,6 +379,149 @@ class TestCoverageAndLimits(Base):
         self.assertNotIn("Coverage of human criteria", herd.report(herd.verify(self.root, "t1")))
 
 
+class TestQuantifierWarnings(Base):
+    def warn(self, text, coverage="x", source="human"):
+        task = {"goal": "g", "route": "quick", "criteria": [{"id": "C1", "text": text, "source": source,
+                                                              "check": "python3 -V", "coverage": coverage}]}
+        return herd.coverage_warnings(task)
+
+    def test_any_with_a_coverage_that_names_no_variation_is_warned(self):
+        out = self.warn("Works for any supermarket", "proves one demo store")
+        self.assertEqual(len(out), 1)
+        self.assertIn("any", out[0])
+        self.assertIn("what varies", out[0])
+
+    def test_coverage_that_names_the_variation_is_accepted(self):
+        for cov in ("checked on generated layouts from several families", "random seeds, 100 inputs",
+                    "property test over arbitrary inputs", "fuzz of many sizes"):
+            self.assertEqual(self.warn("Works for any supermarket", cov), [], cov)
+
+    def test_each_quantifier_word_triggers(self):
+        for word in ("any", "every", "whatever", "whichever", "many", "each", "arbitrary"):
+            self.assertEqual(len(self.warn(f"It works for {word} case", "one example")), 1, word)
+
+    def test_words_inside_other_words_do_not_trigger(self):
+        for text in ("The company ships a manyfold report", "Eachother and anyway", "It is wall-clock timed"):
+            self.assertEqual(self.warn(text, "one example"), [], text)
+
+    def test_scale_words_need_a_scale_statement(self):
+        out = self.warn("Handles very big stores quickly", "demo store, 40 products")
+        self.assertEqual(len(out), 1)
+        self.assertIn("scale", out[0])
+        for cov in ("scale tiers up to 600x400 with a time limit", "largest input timed at 20 seconds",
+                    "performance measured for size n up to 10000"):
+            self.assertEqual(self.warn("Handles very big stores quickly", cov), [], cov)
+
+    def test_both_kinds_give_two_warnings(self):
+        self.assertEqual(len(self.warn("Works for any layout, even huge ones", "one demo store")), 2)
+
+    def test_blank_coverage_gives_only_the_missing_coverage_warning(self):
+        out = self.warn("Works for any layout, even huge ones", "  ")
+        self.assertEqual(len(out), 1)
+        self.assertIn("no `coverage`", out[0])
+
+    def test_agent_proposed_and_plain_criteria_are_ignored(self):
+        self.assertEqual(self.warn("Works for any layout", "x", source="agent-proposed"), [])
+        self.assertEqual(self.warn("Prints a greeting", "one example"), [])
+
+
+class TestNotes(Base):
+    def at(self, hhmmss):
+        return mock.patch.object(herd, "now", return_value=f"2026-11-22T{hhmmss}Z")
+
+    def start(self):
+        with self.at("10:00:00"):
+            self.task()
+
+    def test_add_note_appends_a_line_with_time(self):
+        self.start()
+        with self.at("10:01:40"):
+            herd.add_note(self.root, "t1", "found", "unreachable pocket crashes the planner")
+        with self.at("10:03:00"):
+            herd.add_note(self.root, "t1", "fixed", "ignore cells with distance -1")
+        notes = herd.load_notes(self.root, "t1")
+        self.assertEqual([n["kind"] for n in notes], ["found", "fixed"])
+        self.assertEqual((notes[0]["text"], notes[0]["elapsed_s"]), ("unreachable pocket crashes the planner", 100))
+        self.assertEqual(notes[1]["at"], "2026-11-22T10:03:00Z")
+
+    def test_bad_kind_and_empty_text_are_rejected(self):
+        self.start()
+        with self.assertRaises(ValueError):
+            herd.add_note(self.root, "t1", "bug", "x")
+        with self.assertRaises(ValueError):
+            herd.add_note(self.root, "t1", "found", "   ")
+        self.assertEqual(herd.load_notes(self.root, "t1"), [])
+
+    def test_notes_without_a_start_file_have_no_elapsed(self):
+        self.task()
+        (self.root / ".herd/tasks/t1/started").unlink()
+        herd.add_note(self.root, "t1", "open", "only tested on one store")
+        self.assertIsNone(herd.load_notes(self.root, "t1")[0]["elapsed_s"])
+
+    def test_report_lists_caveats_with_times_and_counts(self):
+        self.start()
+        with self.at("10:01:40"):
+            herd.add_note(self.root, "t1", "found", "pockets crash")
+        with self.at("10:03:00"):
+            herd.add_note(self.root, "t1", "fixed", "pockets handled")
+        herd.add_note(self.root, "t1", "open", "slow above 600x400")
+        (self.root / "greet.txt").write_text("hello")
+        with self.at("10:04:16"):
+            text = herd.report(herd.verify(self.root, "t1"))
+        self.assertIn("Caveats during the run: 1 found, 1 fixed, 1 open", text)
+        self.assertIn("- 1m 40s found: pockets crash", text)
+        self.assertIn("- 3m 00s fixed: pockets handled", text)
+        self.assertIn("open: slow above 600x400", text)
+
+    def test_adversarial_pass_line(self):
+        self.start()
+        text = herd.report(herd.verify(self.root, "t1"))
+        self.assertIn("Adversarial pass: not recorded", text)
+        herd.add_note(self.root, "t1", "tried", "8 layout families at 3 sizes")
+        text = herd.report(herd.verify(self.root, "t1"))
+        self.assertIn("Adversarial pass: 1 attempt recorded", text)
+        self.assertNotIn("not recorded", text)
+
+    def test_quick_route_has_no_adversarial_line(self):
+        herd.init_task(self.root, "q1", "Fix a typo", quick_check="python3 -V")
+        self.assertNotIn("Adversarial", herd.report(herd.verify(self.root, "q1")))
+
+    def test_notes_are_in_evidence_and_do_not_make_it_stale(self):
+        self.task()
+        herd.add_note(self.root, "t1", "found", "x")
+        (self.root / "greet.txt").write_text("hello")
+        ev = herd.verify(self.root, "t1")
+        self.assertEqual(ev["notes"][0]["text"], "x")
+        herd.add_note(self.root, "t1", "fixed", "y")
+        self.assertEqual(herd.problems(self.root, "t1"), [])
+
+    def test_notes_added_after_the_last_verify_still_reach_done_and_status(self):
+        run = lambda *a: subprocess.run(["python3", str(Path(herd.__file__)), *a], cwd=self.root,
+                                        capture_output=True, text=True)
+        self.task()
+        (self.root / "greet.txt").write_text("hello")
+        self.assertEqual(run("verify").returncode, 0)
+        self.assertEqual(run("note", "--found", "late finding").returncode, 0)
+        self.assertIn("late finding", run("status").stdout)
+        done = run("done")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("late finding", done.stdout)
+        self.assertIn("late finding", (self.root / ".herd/tasks/t1/evidence.md").read_text())
+
+    def test_cli_note_flags(self):
+        run = lambda *a: subprocess.run(["python3", str(Path(herd.__file__)), *a], cwd=self.root,
+                                        capture_output=True, text=True)
+        self.task()
+        for flag, kind in (("--found", "found"), ("--fixed", "fixed"), ("--open", "open"), ("--tried", "tried")):
+            p = run("note", flag, f"a {kind} note")
+            self.assertEqual(p.returncode, 0, p.stderr)
+            self.assertIn(kind, p.stdout)
+        self.assertEqual([n["kind"] for n in herd.load_notes(self.root, "t1")], ["found", "fixed", "open", "tried"])
+        self.assertEqual(run("note", "--found").returncode, 1)          # no text
+        self.assertEqual(run("note", "just text").returncode, 1)        # no kind flag
+        self.assertEqual(run("note", "--bogus", "x").returncode, 1)
+
+
 class TestSlugFallback(Base):
     def run_cli(self, *args):
         return subprocess.run(["python3", str(Path(herd.__file__)), *args], cwd=self.root,

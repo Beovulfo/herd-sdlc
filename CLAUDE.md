@@ -8,7 +8,7 @@ Source of truth: `PRD — Autopilot SDLC plugin built on the Elephant-Goldfish M
 
 ## Layout
 - `.claude-plugin/` manifest and marketplace; `hooks/hooks.json` Stop gate and lint hook; `skills/{run,criteria,evidence}/SKILL.md`.
-- `scripts/herd.py` is the CLI (init, check, detect, verify, status, done, gate, lint, triage); `herd_detect.py`, `herd_triage.py`, `herd_arbiter.py`, `herd_escalation.py` are stdlib-only modules, each with `test_*.py`.
+- `scripts/herd.py` is the CLI (init, check, detect, verify, status, done, gate, lint, triage, note); `herd_detect.py`, `herd_triage.py`, `herd_arbiter.py`, `herd_escalation.py` are stdlib-only modules, each with `test_*.py`.
 - Tests: `python3 -m unittest scripts.test_herd_cli scripts.test_herd_lint scripts.test_herd_detect scripts.test_herd_triage scripts.test_herd_arbiter scripts.test_herd_escalation`; plugin check: `claude plugin validate ./`.
 - Bump `version` in `.claude-plugin/plugin.json` whenever plugin files change: `claude plugin update` compares version numbers only, so installed copies stay stale otherwise, and restart the session after updating.
 - Specs in `docs/designs/`, EGM run logs in `docs/spikes/`, deferred ideas in `docs/backlog.md`. Keep README, skills and these docs in sync when behaviour changes.

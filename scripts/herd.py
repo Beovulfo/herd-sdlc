@@ -59,6 +59,13 @@ PER_FILE_LINT = {
     "node": ('npx eslint {file}', '["**/*.js", "**/*.jsx", "**/*.ts", "**/*.tsx"]'),
 }
 LINT_TIMEOUT = 20
+QUANT = re.compile(r"\b(any|every|whatever|whichever|many|each|arbitrary)\b", re.I)
+SCALE = re.compile(r"\b(big|large|huge|massive|thousands|millions|scale|scalable)\b", re.I)
+VARIES = re.compile(r"\b(vary|varies|varied|varying|variation|generated?|random\w*|seeds?|property|fuzz\w*|"
+                    r"parametri[sz]ed|families|several|multiple|across|sizes?)\b", re.I)
+SCALED = re.compile(r"\b(scales?|sizes?|largest?|big|biggest|huge|time limit|timed|timing|seconds|performance|"
+                    r"runtime|latency|up to \d+)\b", re.I)
+NOTE_KINDS = ("found", "fixed", "open", "tried")
 
 
 def now():
@@ -192,9 +199,20 @@ def coverage_warnings(task):
     """Advisory: say what a human criterion's check does not cover, and when the claim may fail."""
     out = []
     for c in task.get("criteria", []):
-        if c.get("source") == "human" and not str(c.get("coverage", "")).strip():
-            out.append(f"{c.get('id', '?')}: human criterion has no `coverage`: say what its check proves "
+        if c.get("source") != "human":
+            continue
+        cid, cov = c.get("id", "?"), str(c.get("coverage", "")).strip()
+        if not cov:
+            out.append(f"{cid}: human criterion has no `coverage`: say what its check proves "
                        "and what it does not (every word of the criterion, such as `many` or `step by step`)")
+            continue
+        q, sc = QUANT.search(str(c.get("text", ""))), SCALE.search(str(c.get("text", "")))
+        if q and not VARIES.search(cov):
+            out.append(f"{cid}: human criterion says '{q.group(0)}' but its `coverage` does not say what varies "
+                       "(generated inputs, seeds, families, sizes)")
+        if sc and not SCALED.search(cov):
+            out.append(f"{cid}: human criterion says '{sc.group(0)}' but its `coverage` has no scale statement "
+                       "(largest size tried, time limit)")
     if task.get("route", "standard") != "quick" and not str(task.get("known_limits", "")).strip():
         out.append("no `known_limits`: say under what conditions the claim may fail or has not been shown")
     return out
@@ -266,7 +284,7 @@ def verify(root, slug):
             timing["first_verify_s"] = _secs(started, red["at"])
     ev = {"task": slug, "goal": task["goal"], "at": now(), "head": head, "dirty": dirty,
           "route": task.get("route", "standard"), "test_budget": task.get("test_budget"),
-          "known_limits": task.get("known_limits"),
+          "known_limits": task.get("known_limits"), "notes": load_notes(root, slug),
           "red": {"failed": red["failed"], "total": red["total"]} if red else None, "timing": timing,
           "human_not_verbatim": human_not_verbatim,
           "fingerprint": fingerprint(root), "task_sha": _task_sha(root, slug),
@@ -275,13 +293,33 @@ def verify(root, slug):
     return ev
 
 
+def add_note(root, slug, kind, text):
+    """Append a caveat to the task's log: found, fixed, open (a known limit) or tried (adversarial attempt)."""
+    if kind not in NOTE_KINDS:
+        raise ValueError(f"note kind must be one of {NOTE_KINDS}")
+    if not text.strip():
+        raise ValueError("note text is empty")
+    d, started = _dir(root, slug), _dir(root, slug) / "started"
+    t = now()
+    rec = {"at": t, "kind": kind, "text": text.strip(),
+           "elapsed_s": _secs(started.read_text().strip(), t) if started.exists() else None}
+    with open(d / "notes.jsonl", "a") as f:
+        f.write(json.dumps(rec) + "\n")
+
+
+def load_notes(root, slug):
+    p = _dir(root, slug) / "notes.jsonl"
+    return [json.loads(line) for line in p.read_text().splitlines() if line.strip()] if p.exists() else []
+
+
 def load_evidence(root, slug):
     p = _dir(root, slug) / "evidence.json"
     return json.loads(p.read_text()) if p.exists() else None
 
 
-def report(ev):
+def report(ev, notes=None):
     s = ev["summary"]
+    notes = ev.get("notes") or [] if notes is None else notes
     lines = [f"# Evidence: {ev['task']}", "", f"Goal: {ev['goal']}",
              f"Run at {ev['at']} on commit {ev['head'][:12]}" + (" plus uncommitted changes" if ev.get("dirty") else ""),
              f"Result: {s['passing']} passing, {s['failing']} failing, {s['unchecked']} unchecked"]
@@ -301,6 +339,10 @@ def report(ev):
         lines.append(f"Test budget: {ev['test_budget']}")
     if ev.get("known_limits"):
         lines.append(f"Known limits: {ev['known_limits']}")
+    if ev.get("route") != "quick":
+        tried = sum(n["kind"] == "tried" for n in notes)
+        lines.append(f"Adversarial pass: {tried} attempt{'s' if tried != 1 else ''} recorded" if tried
+                     else "Adversarial pass: not recorded")
     lines += ["", "| id | status | source | check |", "| --- | --- | --- | --- |"]
     for r in ev["results"]:
         lines.append(f"| {r['id']} | {r['status']} | {r['source']} | `{r['check'] or '-'}` |")
@@ -308,6 +350,14 @@ def report(ev):
     if covered:
         lines += ["", "Coverage of human criteria (what each check proves and does not):"]
         lines += [f"- {r['id']}: {r['coverage'].strip()}" for r in covered]
+    if notes:
+        count = {k: sum(n["kind"] == k for n in notes) for k in NOTE_KINDS}
+        lines.append("")
+        if count["found"] or count["fixed"] or count["open"]:
+            lines.append(f"Caveats during the run: {count['found']} found, {count['fixed']} fixed, {count['open']} open")
+        for n in notes:
+            when = f"{fmt_duration(n['elapsed_s'])} " if n.get("elapsed_s") is not None else ""
+            lines.append(f"- {when}{n['kind']}: {n['text']}")
     for r in ev["results"]:
         if r["status"] == "failing":
             lines += ["", f"Failing {r['id']} (exit {r['exit_code']}), output tail:", "```", r["output_tail"].strip(), "```"]
@@ -436,6 +486,14 @@ def main(argv):
             for w in check_warnings(task, req_path.read_text() if req_path.exists() else None) + coverage_warnings(task):
                 print(f"warning: {w}")
             return 1 if errs else 0
+        elif cmd == "note":
+            kinds = {"--found": "found", "--fixed": "fixed", "--open": "open", "--tried": "tried"}
+            flags = [a for a in args if a.startswith("--")]
+            rest = [a for a in args if not a.startswith("--")]
+            if len(flags) != 1 or flags[0] not in kinds or len(rest) != 1:
+                raise ValueError('usage: herd note --found|--fixed|--open|--tried "text"')
+            add_note(root, _slug_arg(root, []), kinds[flags[0]], rest[0])
+            print(f"noted ({kinds[flags[0]]}): {rest[0]}")
         elif cmd == "detect":
             print(json.dumps(herd_detect.detect(root), indent=2))
         elif cmd == "lint":
@@ -460,7 +518,7 @@ def main(argv):
         elif cmd == "status":
             slug = _slug_arg(root, args)
             ev = load_evidence(root, slug)
-            print(report(ev) if ev else f"task {slug}: no evidence yet")
+            print(report(ev, load_notes(root, slug)) if ev else f"task {slug}: no evidence yet")
             probs = problems(root, slug)
             print("not done: " + "; ".join(probs) if probs else "done: evidence is fresh and passing")
         elif cmd == "done":
@@ -469,7 +527,7 @@ def main(argv):
             if probs:
                 print("not done: " + "; ".join(probs), file=sys.stderr)
                 return 1
-            text = report(load_evidence(root, slug))
+            text = report(load_evidence(root, slug), load_notes(root, slug))
             (_dir(root, slug) / "evidence.md").write_text(text)
             (root / ".herd" / "active").unlink(missing_ok=True)
             print(text)

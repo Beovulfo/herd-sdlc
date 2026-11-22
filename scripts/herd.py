@@ -317,6 +317,18 @@ def load_evidence(root, slug):
     return json.loads(p.read_text()) if p.exists() else None
 
 
+BATCH_S = 5
+
+
+def _largest_batch(notes):
+    """Most notes whose timestamps fall inside one BATCH_S window (a sign they were logged together)."""
+    times = sorted(_secs("2000-01-01T00:00:00Z", n["at"]) for n in notes if n.get("at"))
+    best = 0
+    for i, t in enumerate(times):
+        best = max(best, sum(1 for u in times[i:] if u - t <= BATCH_S))
+    return best
+
+
 def report(ev, notes=None):
     s = ev["summary"]
     notes = ev.get("notes") or [] if notes is None else notes
@@ -358,6 +370,10 @@ def report(ev, notes=None):
         for n in notes:
             when = f"{fmt_duration(n['elapsed_s'])} " if n.get("elapsed_s") is not None else ""
             lines.append(f"- {when}{n['kind']}: {n['text']}")
+        batch = _largest_batch(notes)
+        if batch >= 3:
+            lines.append(f"Note: {batch} notes were logged within {BATCH_S} s of each other, so their times show "
+                         "when they were written, not when found.")
     for r in ev["results"]:
         if r["status"] == "failing":
             lines += ["", f"Failing {r['id']} (exit {r['exit_code']}), output tail:", "```", r["output_tail"].strip(), "```"]

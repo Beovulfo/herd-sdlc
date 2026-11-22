@@ -151,37 +151,36 @@ If the agent tries to finish while a check is failing, the Stop hook answers ins
 
 ## Benchmark: with and without Herd
 
-The same short prompt, a route optimizer for picking a shopping list in a supermarket, was given to three models, each once with Herd and once with no workflow. Then every solution was checked by a hidden verifier it had never seen: generated store layouts at several sizes, with every walk validated step by step.
+One short prompt, a route optimizer for picking a shopping list in a supermarket that "works for any layout, even very big ones", was given to the same model (Sonnet) twice: once with Herd and once with no workflow. Then each solution was checked by a hidden verifier it had never seen: 48 generated stores from eight layout families, up to 600 by 400 cells with 200 items, with every walk validated step by step.
 
 <p align="center">
   <img src="examples/supermarket-route/images/layouts.svg" alt="The optimized route on eight generated store layouts: parallel aisles, vertical aisles, islands, random obstacles, comb, L-shape, maze and departments" width="860">
 </p>
 
-**What the verifier found** (Sonnet, the pair measured on the hidden suite: 8 layout families, 4 sizes up to 600 by 400 cells with 200 items):
-
-| | With Herd | No workflow |
+| | With Herd | Without Herd |
 | --- | --- | --- |
 | Stores solved with a valid route | **48 of 48** | 38 of 48 |
 | Failure | none | crash when a shelf borders a disconnected pocket of floor |
-| Route quality | the same | the same |
-| Median time to plan a 600 by 400 store | 17.2 s | 72.7 s |
-
-**Bad inputs** (an unknown product, a duplicate, an empty list, an unreachable product, a malformed map), and what each run cost in time:
+| Bad-input scenarios handled (unknown product, duplicate, empty list, unreachable product, malformed map) | **6 of 6** | 4 of 6 |
+| Test lines written | 119 | 20 |
+| Median time to plan a 600 by 400 store | 36.1 s | 72.7 s |
+| Time to a finished result | 3m 19s | 1m 03s |
+| Tokens | 87k | 73k |
 
 <p align="center">
-  <img src="examples/supermarket-route/images/benchmark.svg" alt="Bar chart: bad-input scenarios handled out of 6 and wall-clock minutes, for Opus, Haiku and Sonnet with and without Herd" width="760">
+  <img src="examples/supermarket-route/images/benchmark.svg" alt="Bars comparing with and without Herd on stores solved, bad inputs handled, test lines, time and tokens" width="760">
 </p>
 
-- **More robust and better tested.** In all three pairs, the Herd solution handled every bad-input scenario and had 4 to 9 times as many test lines. The no-workflow solutions crashed on an empty list, an unreachable product or a malformed map.
-- **The route itself is no better.** Both arms found routes of the same length. The difference is what happens at the edges.
-- **Herd said where the claim fails.** The Sonnet run's `known_limits` quantified when the 30% saving does not hold: always on a 1-item list, in 41 of 60 runs on 3 items, in 3 of 60 on 10 items. The hidden verifier confirmed it. The no-workflow run reported its best demo number.
-- **It costs more.** Herd runs took 1.3 to 8 times the wall-clock time. Tokens were measured on one pair (Haiku): 23 percent more.
-- **No extra input from you.** Herd needs only the one message; in the live Opus runs it asked no questions.
+- **More robust and better tested.** Without Herd, the code crashed on stores with disconnected floor pockets, on an unreachable product and on a malformed map. With Herd it handled all of them, and wrote six times as many test lines.
+- **The route itself is not better.** The optimizers found routes of similar length; the no-workflow routes were slightly shorter on mid-size and large stores.
+- **Herd said where the claim fails.** Its `known_limits` stated that the 30% saving does not hold for baskets of about 15 items or fewer. The hidden verifier confirmed it. The no-workflow run reported its best demo number.
+- **It costs more.** 3.2 times the time and 19 percent more tokens.
+- **No extra input from you.** Herd needs only the one message; it asked no questions.
 
-One run per arm, three models, one task: read it as strong evidence about robustness, not as a precise cost figure. The full method, every number and the caveats are in [`examples/supermarket-route/BENCHMARK.md`](examples/supermarket-route/BENCHMARK.md), the issues the test found in Herd itself are in [`issues.md`](examples/supermarket-route/issues.md), and anyone can reproduce the checks:
+One run per arm, one model: read it as strong evidence about robustness, not a precise cost figure. The Herd run was an emulation (a subagent following the skills, with no Stop hook and no reviewer), and its "all checks failed first" step was gamed: it moved its code aside for the first verify. The full method, every number and these limits are in [`examples/supermarket-route/BENCHMARK.md`](examples/supermarket-route/BENCHMARK.md). To reproduce the main check:
 
 ```bash
-python3 examples/supermarket-route/verifier/verify_general.py sonnet_herd examples/supermarket-route/sonnet-herd-run/solution
+python3 examples/supermarket-route/verifier/verify_general.py with_herd examples/supermarket-route/with-herd
 ```
 
 ## Commands and skills
@@ -226,7 +225,7 @@ While a Herd task is active, each `Edit` or `Write` runs the command on that fil
 
 ## Status
 
-Version 0.2. Working and covered by 174 unit tests: the evidence harness (`scripts/herd.py`), the Stop gate, the quick route, project-type detection, the lint hook, the caveat log, and the risk-floor module. Benchmarked on one task with three models (above). Not yet done: many live runs through the installed plugin across different project types, and issue-to-pull-request automation on GitHub, which is still design work.
+Version 0.2. Working and covered by 179 unit tests: the evidence harness (`scripts/herd.py`), the Stop gate, the quick route, project-type detection, the lint hook, the caveat log, and the risk-floor module. Benchmarked on one task with Sonnet (above). Not yet done: many live runs through the installed plugin across different project types, and issue-to-pull-request automation on GitHub, which is still design work.
 
 ## The design behind it
 

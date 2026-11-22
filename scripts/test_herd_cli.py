@@ -486,6 +486,51 @@ class TestNotes(Base):
         herd.init_task(self.root, "q1", "Fix a typo", quick_check="python3 -V")
         self.assertNotIn("Adversarial", herd.report(herd.verify(self.root, "q1")))
 
+    def raw_notes(self, rows):
+        import json
+        d = self.root / ".herd/tasks/t1/notes.jsonl"
+        d.write_text("".join(json.dumps({"at": at, "kind": k, "text": f"n{i}", "elapsed_s": el}) + "\n"
+                             for i, (at, k, el) in enumerate(rows)))
+
+    def report_text(self):
+        self.start()
+        (self.root / "greet.txt").write_text("hello")
+        return herd.report(herd.verify(self.root, "t1"))
+
+    def test_notes_logged_in_one_batch_are_flagged(self):
+        self.start()
+        self.raw_notes([("2026-11-22T10:02:38Z", "tried", 158), ("2026-11-22T10:02:38Z", "found", 158),
+                        ("2026-11-22T10:02:38Z", "fixed", 158), ("2026-11-22T10:02:39Z", "open", 159)])
+        (self.root / "greet.txt").write_text("hello")
+        text = herd.report(herd.verify(self.root, "t1"))
+        self.assertIn("4 notes were logged within 5 s of each other", text)
+        self.assertIn("times show when they were written, not when found", text)
+
+    def test_spread_out_notes_are_not_flagged(self):
+        self.start()
+        self.raw_notes([("2026-11-22T10:01:00Z", "found", 60), ("2026-11-22T10:02:00Z", "fixed", 120),
+                        ("2026-11-22T10:03:00Z", "open", 180)])
+        (self.root / "greet.txt").write_text("hello")
+        self.assertNotIn("logged within", herd.report(herd.verify(self.root, "t1")))
+
+    def test_two_close_notes_are_not_a_batch(self):
+        self.start()
+        self.raw_notes([("2026-11-22T10:02:38Z", "found", 158), ("2026-11-22T10:02:39Z", "fixed", 159)])
+        (self.root / "greet.txt").write_text("hello")
+        self.assertNotIn("logged within", herd.report(herd.verify(self.root, "t1")))
+
+    def test_batch_is_found_inside_a_longer_log(self):
+        self.start()
+        self.raw_notes([("2026-11-22T10:00:30Z", "found", 30), ("2026-11-22T10:03:00Z", "tried", 180),
+                        ("2026-11-22T10:03:02Z", "found", 182), ("2026-11-22T10:03:04Z", "fixed", 184)])
+        (self.root / "greet.txt").write_text("hello")
+        self.assertIn("3 notes were logged within 5 s of each other", herd.report(herd.verify(self.root, "t1")))
+
+    def test_skill_tells_agents_to_log_each_note_when_found(self):
+        text = (Path(herd.__file__).parent.parent / "skills" / "run" / "SKILL.md").read_text()
+        self.assertIn("the moment you find", text)
+        self.assertIn("never in a batch", text)
+
     def test_notes_are_in_evidence_and_do_not_make_it_stale(self):
         self.task()
         herd.add_note(self.root, "t1", "found", "x")

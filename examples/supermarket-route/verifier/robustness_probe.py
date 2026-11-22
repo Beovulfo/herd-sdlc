@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Robustness and size probe for the five packaged solutions (run from the repo root).
+"""Robustness and size probe for the two packaged solutions (run from the repo root).
 
 Feeds each solution the same small store with six scenarios (a normal run, an unknown product, a
 duplicate, an empty list, an unreachable product, a malformed map) through its own CLI, and counts
@@ -38,46 +38,7 @@ def j(o):
     return json.dumps(o)
 
 
-def a_run1(sc, d):  # routeopt.py: grid, start (r, c), products with pos (r, c)
-    m = {"grid": GRID, "start": [1, 1], "products": [{"id": p, "name": NAMES[p], "pos": [CELL[p][1], CELL[p][0]]} for p in CELL]}
-    (d / "m.json").write_text("{bad" if sc == "malformed_map" else j(m))
-    (d / "l.txt").write_text("\n".join(lines(sc)))
-    return ["routeopt.py", "compare", "--map", str(d / "m.json"), "--list", str(d / "l.txt"), "--runs", "2"]
-
-
-def a_run2(sc, d):  # supermarket.py: products dict, cells [x, y]
-    m = {"grid": GRID, "start": list(START), "products": {p: {"name": NAMES[p], "cell": list(CELL[p])} for p in CELL}}
-    (d / "m.json").write_text("{bad" if sc == "malformed_map" else j(m))
-    (d / "l.json").write_text(j({"items": [{"id": p, "name": NAMES[p]} for p in ITEMS[sc]]}))
-    return ["supermarket.py", "simulate", "--map", str(d / "m.json"), "--list", str(d / "l.json"), "--algo", "optimized", "--seed", "1"]
-
-
-def a_opus_baseline(sc, d):  # route.py: store.txt with S, products.csv with shelf cells
-    g = [r for r in GRID]
-    g[1] = g[1][:1] + "S" + g[1][2:]
-    (d / "store.txt").write_text("" if sc == "malformed_map" else "\n".join(g) + "\n")
-    (d / "p.csv").write_text("id,short_name,row,col\n" + "".join(f"{p},{NAMES[p]},{SHELF[p][0]},{SHELF[p][1]}\n" for p in SHELF))
-    (d / "o.txt").write_text("\n".join(lines(sc)) + "\n")
-    return ["route.py", "compare", "--map", str(d / "store.txt"), "--products", str(d / "p.csv"), "--order", str(d / "o.txt"), "--runs", "2"]
-
-
-def a_haiku_baseline(sc, d):  # route_optimizer.py MAP ORDER: entrance, checkout, products x y
-    m = {"grid": GRID, "entrance": list(START), "checkout": list(START),
-         "products": [{"id": p, "name": NAMES[p], "x": CELL[p][0], "y": CELL[p][1]} for p in CELL]}
-    (d / "m.json").write_text("{bad" if sc == "malformed_map" else j(m))
-    (d / "o.json").write_text(j(lines(sc)))
-    return ["route_optimizer.py", str(d / "m.json"), str(d / "o.json")]
-
-
-def a_haiku_herd(sc, d):  # route_optimizer.py simulate MAP BASKET: start, end, products short x y
-    m = {"grid": GRID, "start": list(START), "end": list(START),
-         "products": [{"id": p, "short": NAMES[p], "x": CELL[p][0], "y": CELL[p][1]} for p in CELL]}
-    (d / "m.json").write_text("{bad" if sc == "malformed_map" else j(m))
-    (d / "b.txt").write_text("\n".join(lines(sc)))
-    return ["route_optimizer.py", "simulate", "--strategy", "optimized", str(d / "m.json"), str(d / "b.txt")]
-
-
-def a_sonnet_baseline(sc, d):  # router.py run store.json list.txt: grid with S, products {id: {name, pos [r, c]}}
+def a_without_herd(sc, d):  # router.py run store.json list.txt: grid with S, products {id: {name, pos [r, c]}}
     g = list(GRID)
     g[1] = g[1][:1] + "S" + g[1][2:]
     m = {"grid": g, "products": {p: {"name": NAMES[p], "pos": [CELL[p][1], CELL[p][0]]} for p in CELL}}
@@ -86,22 +47,17 @@ def a_sonnet_baseline(sc, d):  # router.py run store.json list.txt: grid with S,
     return ["router.py", "run", str(d / "store.json"), str(d / "l.txt")]
 
 
-def a_sonnet_herd(sc, d):  # routeopt.py run map.json list.txt: start [x, y], products [{id, name, x, y}]
-    m = {"grid": GRID, "start": list(START),
-         "products": [{"id": p, "name": NAMES[p], "x": CELL[p][0], "y": CELL[p][1]} for p in CELL]}
+def a_with_herd(sc, d):  # router.py map.json list.txt: start [r, c], products [{id, name, pos [r, c]}]
+    m = {"grid": GRID, "start": [START[1], START[0]],
+         "products": [{"id": p, "name": NAMES[p], "pos": [CELL[p][1], CELL[p][0]]} for p in CELL]}
     (d / "m.json").write_text("{bad" if sc == "malformed_map" else j(m))
     (d / "l.txt").write_text("\n".join(lines(sc)) + "\n")
-    return ["routeopt.py", "run", str(d / "m.json"), str(d / "l.txt")]
+    return ["router.py", str(d / "m.json"), str(d / "l.txt")]
 
 
 SOLUTIONS = {
-    "Opus, Herd run 1": ("run-1-original-prompt/solution", "routeopt.py", "tests", a_run1),
-    "Opus, Herd run 2": ("herd-run/solution", "supermarket.py", "tests", a_run2),
-    "Opus, no workflow": ("baseline-run", "route.py", ".", a_opus_baseline),
-    "Haiku, Herd": ("haiku-herd-run/solution", "route_optimizer.py", ".", a_haiku_herd),
-    "Haiku, no workflow": ("haiku-baseline-run", "route_optimizer.py", ".", a_haiku_baseline),
-    "Sonnet, Herd": ("sonnet-herd-run/solution", "routeopt.py", ".", a_sonnet_herd),
-    "Sonnet, no workflow": ("sonnet-baseline-run", "router.py", ".", a_sonnet_baseline),
+    "With Herd": ("with-herd", "router.py", ".", a_with_herd),
+    "Without Herd": ("without-herd", "router.py", ".", a_without_herd),
 }
 
 

@@ -1,0 +1,4 @@
+{"at": "2026-11-22T20:32:58Z", "kind": "tried", "text": "stress: 150x150 aisles store with 1000 items (18s, saving 0.88), 301x301 maze 100 items (5s), 400x400 open floor 150 items (23s); malformed maps (ragged rows, empty grid, start outside grid, blocked start, product off-map)", "elapsed_s": 158}
+{"at": "2026-11-22T20:32:58Z", "kind": "found", "text": "ragged/empty grid and out-of-grid start crashed with IndexError instead of a clear error", "elapsed_s": 158}
+{"at": "2026-11-22T20:32:58Z", "kind": "fixed", "text": "Store validates grid/start and raises ValueError; CLI prints 'bad map' and exits 1; regression tests added", "elapsed_s": 158}
+{"at": "2026-11-22T20:32:58Z", "kind": "open", "text": "400x400 stores take ~23s (pure Python BFS per item); small baskets (~15 items) can save under 30% (min 27% observed)", "elapsed_s": 158}

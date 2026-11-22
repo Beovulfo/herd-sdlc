@@ -1,0 +1,4 @@
+| solution | code lines | test lines | tests | functions documented | normal | unknown_id | duplicate_id | empty_list | unreachable | malformed_map | handled |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| With Herd | 177 | 119 | 10 | 4 of 13 | ok | clean error | ok | ok | clean error | clean error | 6 of 6 |
+| Without Herd | 226 | 20 | 3 | 5 of 12 | ok | clean error | clean error | clean error | CRASH | CRASH | 4 of 6 |

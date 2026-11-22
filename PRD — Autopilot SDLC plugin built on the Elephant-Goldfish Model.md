@@ -1,6 +1,6 @@
 # PRD — Herd: an evidence-based autopilot SDLC plugin built on the Elephant-Goldfish Model
 
-Status: Draft v2 (revised after the EGM review in `review/consolidated_review_report.md`; v1 kept in `review/prd_v1_before_revision.md`) · Date: 2026-11-22 · Author: Toni
+Status: Draft v2 (revised after an EGM review; the review reports and v1 are in git history, commit 3ed136e) · Date: 2026-11-22 · Author: Toni
 
 > **Implementation status (2026-11-22).** This PRD specifies the full product, including GitHub automation. What exists today is the local autopilot described in [`README.md`](README.md) (v0.2): evidence harness, Stop gate, quick route, detection and lint hook. The Triage, Arbiter and Escalation modules in `scripts/` implement the designs in `docs/designs/` and are not yet wired to GitHub. Where this PRD names `.herd/state/<feature>.json`, the local harness keeps `.herd/tasks/<slug>/` instead.
 
@@ -151,4 +151,4 @@ File layouts, schemas (criteria, `herd.toml`, `decisions.md` lines, state record
 - [google/elephant-goldfish-model README](https://github.com/google/elephant-goldfish-model)
 - [EGM architecture](https://github.com/google/elephant-goldfish-model/blob/main/docs/designs/architecture.md)
 - [EGM getting started](https://github.com/google/elephant-goldfish-model/blob/main/docs/getting_started.md)
-- Review of the previous draft: `review/consolidated_review_report.md`
+- Review of the previous draft: git history, commit 3ed136e

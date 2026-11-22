@@ -9,7 +9,7 @@ the gap to the exact optimum (small stores) and to a 1-tree lower bound (mid-siz
 
 Usage:
   verify_general.py ADAPTER PROJECT_DIR [--tiers S,M,L] [--seeds 2] [--families a,b] [--limit-scale 1.0]
-Adapters: sonnet_baseline, sonnet_herd, reference. Add one function `worker_<name>(project, canon, out_path)` per solution.
+Adapters: with_herd, without_herd, reference. Add one function `worker_<name>(project, canon, out_path)` per solution.
 Standard library only.
 """
 import argparse
@@ -286,7 +286,7 @@ def one_tree_bound(canon):
 
 # ---- adapters (one worker per solution, run in a subprocess so a time limit can be enforced) ----
 
-def worker_sonnet_baseline(project, canon, out_path):
+def worker_without_herd(project, canon, out_path):
     sys.path.insert(0, str(project))
     import router
     grid = [list(r) for r in canon["grid"]]
@@ -305,22 +305,21 @@ def worker_sonnet_baseline(project, canon, out_path):
     json.dump(res, open(out_path, "w"))
 
 
-def worker_sonnet_herd(project, canon, out_path):
+def worker_with_herd(project, canon, out_path):
     sys.path.insert(0, str(project))
-    import routeopt
-    raw = {"grid": canon["grid"], "start": [canon["station"][1], canon["station"][0]],
-           "products": [{"id": pid, "name": p["name"], "x": p["shelf"][1], "y": p["shelf"][0]}
-                        for pid, p in canon["products"].items()]}
-    store = routeopt.load_map(raw)
-    items = [(pid, canon["products"][pid]["name"]) for pid in canon["ids"]]
-    res = {"round_trip": True, "speed": store.speed_mps, "pick": store.pick_s}
+    import router
+    m = {"grid": [list(r) for r in canon["grid"]], "start": canon["station"],
+         "products": [{"id": p, "name": v["name"], "pos": v["access"][0]} for p, v in canon["products"].items()]}
+    store = router.Store(m)
+    ids = canon["ids"]
     t0 = time.time()
-    route = routeopt.plan(store, items)
-    res["opt_seconds"] = time.time() - t0
-    for label, r in (("list", routeopt.plan(store, items, optimize=False)), ("opt", route)):
-        k = routeopt.kpis(store, r)
-        res[label] = {"dist": r.distance, "time": k["time_s"], "speed": store.speed_mps, "pick": store.pick_s,
-                      "trace": [[y, x] for x, y in r.cells[1:]]}
+    opt = router.optimize(store, ids)
+    res = {"opt_seconds": time.time() - t0, "round_trip": True, "speed": router.SPEED, "pick": router.PICK_S}
+    for label, order in (("list", ids), ("opt", opt)):
+        trace = [list(ev["cell"]) for ev in router.simulate(store, order) if ev["kind"] == "move"]
+        k = router.kpis(store, order)
+        res[label] = {"dist": k["distance_m"], "time": k["time_s"], "speed": router.SPEED, "pick": router.PICK_S,
+                      "trace": trace}
     json.dump(res, open(out_path, "w"))
 
 
@@ -379,8 +378,7 @@ def worker_reference(project, canon, out_path):
     json.dump(res, open(out_path, "w"))
 
 
-WORKERS = {"sonnet_baseline": worker_sonnet_baseline, "sonnet_herd": worker_sonnet_herd,
-           "reference": worker_reference}
+WORKERS = {"with_herd": worker_with_herd, "without_herd": worker_without_herd, "reference": worker_reference}
 
 
 def run_worker(adapter, project, canon, limit):

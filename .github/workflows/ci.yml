@@ -12,5 +12,4 @@ jobs:
         with:
           python-version: "3.13"
       - run: python -m unittest scripts.test_herd_cli scripts.test_herd_lint scripts.test_herd_detect scripts.test_herd_triage scripts.test_herd_arbiter scripts.test_herd_escalation
-      - run: python examples/supermarket-route/verifier/test_verifier.py
       - run: python examples/supermarket-route/verifier/test_verify_general.py

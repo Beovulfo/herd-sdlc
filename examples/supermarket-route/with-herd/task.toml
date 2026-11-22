@@ -1,0 +1,32 @@
+goal = "Build a supermarket route optimizer: input a map with product locations plus a shopping list, output the picker route; simulate step by step with live KPIs time-to-prepare-basket and distance-covered, compared against list-order route; show more than 30% time saving"
+
+test_budget = "Unit/integration in test_router.py: 4 layout families (aisles, open floor, maze, ring) x several seeds validated by replaying the simulation (adjacent walkable steps, every item picked at its cell, ends at start); extremes (empty list, one item, 1x2 map, duplicates, unknown ids, walled-off products); one 250x250 store with 120 items under 60s; CLI end to end with files. Not tested: real store maps, one-way aisles, shelf-side picking (products must sit on walkable cells), congestion, multiple pickers, optimality (heuristic, no exact comparison)."
+known_limits = "Saving is measured with assumed constants (1.4 m/s, 8 s per pick, 1 cell = 1 m) on synthetic stores with random-order lists of 30 items. Small baskets (about 15 items or fewer) can fall under 30% (observed min 27% in aisle and ring stores at 15 items) because pick time is fixed and dominates. Stores above about 300x300 cells with 200+ items take 10s+ (pure-Python BFS plus O(n^2) 2-opt). Result is a heuristic tour, not proven optimal."
+
+[[criteria]]
+id = "C1"
+text = "a route optimizer that works inside any supermarket, even very big ones, whatever its layout"
+source = "human"
+check = "python3 -m unittest test_router.AnyLayout"
+coverage = "proves: valid routes (replayed step by step) on 4 generated layout families x 6 seeds, extremes (empty, single item, 1x2 map, duplicates, unknown, walled-off products reported not crashed), and a store at the largest size tried, 250x250 cells with 120 items, in under 60s (scale limit 60s). does not prove: real store maps, one-way aisles, stores bigger than 250x250, shelf-side picking."
+
+[[criteria]]
+id = "C2"
+text = "It uses as input the MAP of the supermarket with all the products localised in the map with the product ID and the short-name, and the list of products (id:short name) requested by a customer"
+source = "human"
+check = "python3 -m unittest test_router.Cli"
+coverage = "proves: CLI reads a JSON map (grid, start, products with id/name/pos) and an id:short name list file, exits 0 on valid input and 2 with an 'unknown' warning on an unknown id. does not prove: other map file formats, names matching ids (only ids are used for routing)."
+
+[[criteria]]
+id = "C3"
+text = "we can simulate step by step the route of the delivery guy, measuring in real time the KPIs: “time-to-prepare-basket” and “distance-covered”"
+source = "human"
+check = "python3 -m unittest test_router.Simulation"
+coverage = "proves: one event per step with running distance and time that never decrease, final KPIs equal moves and picks recomputed independently, --trace prints both KPI names per step for both routes. does not prove: wall-clock real-time pacing (events are a generator, a UI can pace them)."
+
+[[criteria]]
+id = "C4"
+text = "compare it with the list-order route (not optimized) so we can demonstrate that our optimization algorithm successfully saves more than 30% of time for the basket to be ready"
+source = "human"
+check = "python3 -m unittest test_router.Saving"
+coverage = "proves: over 4 families x 12 seeds with 30-item random-order lists in 61x81 stores both the mean and the minimum time saving exceed 30%, and optimized is never slower than list order on small 8-item baskets. does not prove: the claim for small baskets under about 15 items, other speed/pick constants, real stores."

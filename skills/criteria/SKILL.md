@@ -12,7 +12,8 @@ Criteria live in `.herd/tasks/<slug>/task.toml`.
 
 1. **Outcomes, not steps.** "Given X, when Y, then Z", observable from outside. Aim for 3 to 6 criteria. No list of requirements.
 2. **Every criterion has a `check`.** A shell command; exit 0 means pass. Prefer an existing test command, a new test you write, or a probe (`curl`, a script run, a file or output assertion).
-3. **Human criteria are authoritative.** If the human wrote criteria, copy them with `source = "human"` and never reword, drop or weaken them. Add your own as `source = "agent-proposed"`.
+3. **Human criteria are authoritative and quoted.** If the human wrote criteria, put their words in `text` exactly as written (no Given/When/Then conversion, no added scenario details), with `source = "human"`. Never reword, drop or narrow them. `herd check` warns when a `human` text is not a verbatim quote of the request. Put your concrete scenario in a separate `agent-proposed` criterion.
+   **The check must cover all the words of a human criterion.** If it says "many baskets" or "any input", the check varies the inputs (several seeds, stores or cases), not one fixture. If you can cover only part of it, say which part in `test_budget` and add `agent-proposed` criteria for the rest. Quoting the human while testing one example is still narrowing.
 4. **Fill gaps, never block.** A missing check is yours to write: a test, a script, or a proxy measure. Say which in `text`. Only if nothing can run, set `check = ""`; the criterion is then `unchecked` and is reported as such, never counted as met.
 5. **Include one edge or failure case.** Wrong input, empty state, or the thing that must not change.
 6. **The check must fail first.** Run `herd verify` before building (`herd` is `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/herd.py"`). A check that already passes proves nothing: tighten it.
@@ -23,13 +24,14 @@ Criteria live in `.herd/tasks/<slug>/task.toml`.
 ## Format
 
 ```toml
+# The user's request said: "Add a --json flag to the export command. The output must be valid JSON with every row."
 goal = "Add a --json flag to the export command"
 
 [[criteria]]
 id = "C1"
-text = "Given data, when `export --json` runs, then stdout is valid JSON with every row"
+text = "The output must be valid JSON with every row"   # the human's words, quoted
 source = "human"
-check = "python3 -m unittest tests.test_export_json"
+check = "python3 -m unittest tests.test_export_json"   # covers several inputs, not one fixture
 
 [[criteria]]
 id = "C2"

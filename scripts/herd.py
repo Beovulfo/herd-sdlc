@@ -63,6 +63,19 @@ def now():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _secs(a, b):
+    fmt = "%Y-%m-%dT%H:%M:%SZ"
+    return int((datetime.strptime(b, fmt) - datetime.strptime(a, fmt)).total_seconds())
+
+
+def fmt_duration(secs):
+    h, rem = divmod(int(secs), 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}h {m:02d}m {s:02d}s"
+    return f"{m}m {s:02d}s" if m else f"{s}s"
+
+
 def _dir(root, slug):
     return Path(root) / ".herd" / "tasks" / slug
 
@@ -74,8 +87,11 @@ def active_slug(root):
 
 # ---- task -----------------------------------------------------------------
 
-def init_task(root, slug, goal, quick_check=None):
-    """Create a task. quick_check makes a one-criterion `quick` task (refused at a high risk floor)."""
+def init_task(root, slug, goal, quick_check=None, request=None):
+    """Create a task. quick_check makes a one-criterion `quick` task (refused at a high risk floor).
+
+    request is the human's message, verbatim: human criteria must quote it (see human_unquoted).
+    """
     if not SLUG.fullmatch(slug):
         raise ValueError("slug must be lower-case letters, digits and dashes (max 41 chars)")
     d = _dir(root, slug)
@@ -93,6 +109,9 @@ def init_task(root, slug, goal, quick_check=None):
         text = QUICK.format(goal=json.dumps(goal), check=json.dumps(quick_check))
     d.mkdir(parents=True)
     (d / "task.toml").write_text(text)
+    (d / "started").write_text(now() + "\n")
+    if request is not None:
+        (d / "request.md").write_text(request)
     (Path(root) / ".herd" / "active").write_text(slug + "\n")
 
 
@@ -133,9 +152,30 @@ def validate_task(task):
     return errs
 
 
-def check_warnings(task):
-    """Advisory only: checks that cannot show the criterion holds (a denylist with known gaps)."""
+def _squash(s):
+    return re.sub(r"\s+", " ", s.strip().lower())
+
+
+def human_unquoted(task, request):
+    """Ids of `human` criteria whose text is not a verbatim quote of the request. None if no request."""
+    if request is None:
+        return None
+    req = _squash(request)
+    return [c.get("id", "?") for c in task.get("criteria", [])
+            if c.get("source") == "human" and _squash(str(c.get("text", ""))) not in req]
+
+
+def check_warnings(task, request=None):
+    """Advisory only: checks that cannot show the criterion holds (a denylist with known gaps),
+    and human criteria that are not a verbatim quote of the human's request."""
     out = []
+    if request is None:
+        if any(c.get("source") == "human" for c in task.get("criteria", [])):
+            out.append("no request recorded (`herd init ... --request`): cannot confirm human criteria are verbatim")
+    else:
+        for cid in human_unquoted(task, request):
+            out.append(f"{cid}: human criterion is not a verbatim quote of the request; quote the human's words and "
+                       "put your own scenario in a separate agent-proposed criterion")
     for c in task.get("criteria", []):
         check = c.get("check")
         if isinstance(check, str) and check.strip() and VACUOUS.fullmatch(check.strip()):
@@ -199,9 +239,18 @@ def verify(root, slug):
         red_path.write_text(json.dumps({"at": now(), "failed": sum(r["status"] == "failing" for r in checked),
                                         "total": len(checked)}))
     red = json.loads(red_path.read_text()) if red_path.exists() else None
+    req_path = _dir(root, slug) / "request.md"
+    human_not_verbatim = human_unquoted(task, req_path.read_text() if req_path.exists() else None)
+    timing, started_path = None, _dir(root, slug) / "started"
+    if started_path.exists():  # wall clock from `herd init`, so it includes any waiting on the human
+        started = started_path.read_text().strip()
+        timing = {"started_at": started, "elapsed_s": _secs(started, now())}
+        if red:
+            timing["first_verify_s"] = _secs(started, red["at"])
     ev = {"task": slug, "goal": task["goal"], "at": now(), "head": head, "dirty": dirty,
           "route": task.get("route", "standard"), "test_budget": task.get("test_budget"),
-          "red": {"failed": red["failed"], "total": red["total"]} if red else None,
+          "red": {"failed": red["failed"], "total": red["total"]} if red else None, "timing": timing,
+          "human_not_verbatim": human_not_verbatim,
           "fingerprint": fingerprint(root), "task_sha": _task_sha(root, slug),
           "results": results, "summary": summary}
     (_dir(root, slug) / "evidence.json").write_text(json.dumps(ev, indent=2))
@@ -222,6 +271,14 @@ def report(ev):
         lines.append("Route: quick")
     if ev.get("red"):
         lines.append(f"First verify: {ev['red']['failed']} of {ev['red']['total']} checks failed before the work")
+    if ev.get("timing"):
+        t = ev["timing"]
+        first = f"; first verify at {fmt_duration(t['first_verify_s'])}" if "first_verify_s" in t else ""
+        lines.append(f"Elapsed: {fmt_duration(t['elapsed_s'])} from herd init to this verify{first} "
+                     "(wall clock, includes any waiting on the human)")
+    if ev.get("human_not_verbatim"):
+        lines.append("Human criteria not quoted verbatim from the request: " + ", ".join(ev["human_not_verbatim"])
+                     + " (a human should confirm they were not narrowed)")
     if ev.get("test_budget"):
         lines.append(f"Test budget: {ev['test_budget']}")
     lines += ["", "| id | status | source | check |", "| --- | --- | --- | --- |"]
@@ -325,21 +382,27 @@ def main(argv):
     cmd, args = (argv[0], argv[1:]) if argv else ("status", [])
     try:
         if cmd == "init":
-            quick = None
+            quick = request = None
             if "--quick" in args:
                 i = args.index("--quick")
                 quick = args[i + 1]
                 args = args[:i] + args[i + 2:]
-            init_task(root, args[0], args[1], quick_check=quick)
+            if "--request" in args:
+                i = args.index("--request")
+                request = args[i + 1]
+                args = args[:i] + args[i + 2:]
+            init_task(root, args[0], args[1], quick_check=quick, request=request)
             if quick is None:
                 print(f"created .herd/tasks/{args[0]}/task.toml (commented template): add criteria with checks, then run `herd check`")
             else:
                 print(f"created quick task {args[0]} with one criterion: run `herd verify` and expect it to fail first")
         elif cmd == "check":
-            task = load_task(root, _slug_arg(root, args))
+            slug = _slug_arg(root, args)
+            task = load_task(root, slug)
             errs = validate_task(task)
             print("\n".join(errs) if errs else "ok")
-            for w in check_warnings(task):
+            req_path = _dir(root, slug) / "request.md"
+            for w in check_warnings(task, req_path.read_text() if req_path.exists() else None):
                 print(f"warning: {w}")
             return 1 if errs else 0
         elif cmd == "detect":

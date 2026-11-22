@@ -4,6 +4,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from scripts import herd
 
@@ -239,6 +240,130 @@ class TestBudgetAndRed(Base):
         self.assertIn("First verify: 0 of 1 checks failed before the work", herd.report(ev))
 
     def test_red_does_not_make_evidence_stale(self):
+        self.task()
+        (self.root / "greet.txt").write_text("hello")
+        herd.verify(self.root, "t1")
+        self.assertEqual(herd.problems(self.root, "t1"), [])
+
+
+class TestVerbatim(Base):
+    REQUEST = "Build a thing.\n\nSuccess: the optimized route saves MORE than 20 percent of the time   vs a random walk."
+
+    def human(self, text, source="human"):
+        return {"goal": "g", "criteria": [{"id": "C1", "text": text, "source": source, "check": "python3 -m unittest"}]}
+
+    def test_init_records_request(self):
+        herd.init_task(self.root, "t1", "g", request=self.REQUEST)
+        self.assertEqual((self.root / ".herd/tasks/t1/request.md").read_text(), self.REQUEST)
+        herd.init_task(self.root, "t2", "g")
+        self.assertFalse((self.root / ".herd/tasks/t2/request.md").exists())
+
+    def test_quote_is_accepted_ignoring_case_and_spacing(self):
+        task = self.human("the optimized route saves more than 20 percent of the time vs a random walk")
+        self.assertEqual(herd.human_unquoted(task, self.REQUEST), [])
+        self.assertEqual(herd.check_warnings(task, self.REQUEST), [])
+
+    def test_reworded_or_narrowed_human_criterion_is_flagged(self):
+        task = self.human("Given the sample store, when compared over 10 runs, then optimized is more than 20% lower")
+        self.assertEqual(herd.human_unquoted(task, self.REQUEST), ["C1"])
+        warn = " ".join(herd.check_warnings(task, self.REQUEST))
+        self.assertIn("C1", warn)
+        self.assertIn("verbatim", warn)
+
+    def test_agent_proposed_criteria_are_not_checked(self):
+        task = self.human("Given anything, then something", source="agent-proposed")
+        self.assertEqual(herd.human_unquoted(task, self.REQUEST), [])
+        self.assertEqual(herd.check_warnings(task, self.REQUEST), [])
+
+    def test_no_request_recorded_warns_for_human_criteria_only(self):
+        warn = herd.check_warnings(self.human("anything"), None)
+        self.assertTrue(any("no request" in w for w in warn))
+        self.assertEqual(herd.check_warnings(self.human("anything", "agent-proposed"), None), [])
+        self.assertIsNone(herd.human_unquoted(self.human("anything"), None))
+
+    def test_evidence_and_report_show_unquoted_human_criteria(self):
+        herd.init_task(self.root, "t1", "g", request=self.REQUEST)
+        (self.root / ".herd/tasks/t1/task.toml").write_text(
+            'goal = "g"\n[[criteria]]\nid = "C1"\ntext = "Given a sample, then it is 20% lower"\n'
+            'source = "human"\ncheck = "true"\n')
+        ev = herd.verify(self.root, "t1")
+        self.assertEqual(ev["human_not_verbatim"], ["C1"])
+        self.assertIn("Human criteria not quoted verbatim from the request: C1", herd.report(ev))
+
+    def test_report_is_quiet_when_quoted_or_unknown(self):
+        herd.init_task(self.root, "t1", "g", request=self.REQUEST)
+        (self.root / ".herd/tasks/t1/task.toml").write_text(
+            'goal = "g"\n[[criteria]]\nid = "C1"\ntext = "saves MORE than 20 percent of the time"\n'
+            'source = "human"\ncheck = "true"\n')
+        ev = herd.verify(self.root, "t1")
+        self.assertEqual(ev["human_not_verbatim"], [])
+        self.assertNotIn("verbatim", herd.report(ev))
+        herd.init_task(self.root, "t2", "g")  # no request recorded
+        (self.root / ".herd/tasks/t2/task.toml").write_text(
+            'goal = "g"\n[[criteria]]\nid = "C1"\ntext = "x"\nsource = "human"\ncheck = "true"\n')
+        self.assertIsNone(herd.verify(self.root, "t2")["human_not_verbatim"])
+
+    def test_cli_request_flag_and_check(self):
+        run = lambda *a: subprocess.run(["python3", str(Path(herd.__file__)), *a], cwd=self.root,
+                                        capture_output=True, text=True)
+        self.assertEqual(run("init", "t1", "g", "--request", self.REQUEST).returncode, 0)
+        (self.root / ".herd/tasks/t1/task.toml").write_text(
+            'goal = "g"\n[[criteria]]\nid = "C1"\ntext = "reworded"\nsource = "human"\ncheck = "python3 -V"\n')
+        out = run("check").stdout
+        self.assertIn("warning: C1", out)
+        self.assertIn("verbatim", out)
+
+
+class TestTiming(Base):
+    def at(self, hhmmss):
+        return mock.patch.object(herd, "now", return_value=f"2026-11-22T{hhmmss}Z")
+
+    def test_duration_format(self):
+        for secs, text in ((0, "0s"), (45, "45s"), (71, "1m 11s"), (256, "4m 16s"), (3600, "1h 00m 00s"),
+                           (3731, "1h 02m 11s")):
+            self.assertEqual(herd.fmt_duration(secs), text)
+
+    def test_init_records_start_time(self):
+        with self.at("10:00:00"):
+            herd.init_task(self.root, "t1", "g")
+        self.assertEqual((self.root / ".herd/tasks/t1/started").read_text().strip(), "2026-11-22T10:00:00Z")
+        with self.at("10:00:05"):
+            herd.init_task(self.root, "q1", "g", quick_check="true")
+        self.assertTrue((self.root / ".herd/tasks/q1/started").exists())
+
+    def test_evidence_carries_elapsed_and_first_verify_time(self):
+        with self.at("10:00:00"):
+            self.task()
+        with self.at("10:01:11"):
+            ev = herd.verify(self.root, "t1")  # first verify
+        self.assertEqual(ev["timing"], {"started_at": "2026-11-22T10:00:00Z", "elapsed_s": 71, "first_verify_s": 71})
+        (self.root / "greet.txt").write_text("hello")
+        with self.at("10:04:16"):
+            ev = herd.verify(self.root, "t1")
+        self.assertEqual(ev["timing"]["elapsed_s"], 256)
+        self.assertEqual(ev["timing"]["first_verify_s"], 71)  # fixed by the first run
+        text = herd.report(ev)
+        self.assertIn("Elapsed: 4m 16s from herd init to this verify; first verify at 1m 11s", text)
+        self.assertIn("wall clock", text)
+
+    def test_task_without_start_file_has_no_timing(self):
+        self.task()
+        (self.root / ".herd/tasks/t1/started").unlink()
+        ev = herd.verify(self.root, "t1")
+        self.assertIsNone(ev["timing"])
+        self.assertNotIn("Elapsed", herd.report(ev))
+
+    def test_all_unchecked_has_elapsed_but_no_first_verify(self):
+        with self.at("10:00:00"):
+            herd.init_task(self.root, "t1", "g")
+        (self.root / ".herd/tasks/t1/task.toml").write_text(
+            'goal = "g"\n[[criteria]]\nid = "C1"\ntext = "t"\nsource = "human"\ncheck = ""\n')
+        with self.at("10:02:00"):
+            ev = herd.verify(self.root, "t1")
+        self.assertEqual(ev["timing"], {"started_at": "2026-11-22T10:00:00Z", "elapsed_s": 120})
+        self.assertNotIn("first verify at", herd.report(ev))
+
+    def test_timing_does_not_make_evidence_stale(self):
         self.task()
         (self.root / "greet.txt").write_text("hello")
         herd.verify(self.root, "t1")

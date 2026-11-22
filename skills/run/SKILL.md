@@ -14,8 +14,8 @@ Run `herd` commands from the project root (a git repository), written out in ful
 ## Steps
 
 1. **Intake.** Pick a short slug and a route.
-   - **Quick** for a trivial change: one file, no new behaviour surface, and an existing command that can fail first. Run `herd init <slug> "<goal>" --quick "<check>"`. It refuses a `high` risk floor. Quick skips the criteria interview, the approval question and the fresh-context review. It still needs red first, `herd verify` and `herd done`. Skip steps 2, 4 and 6 below; continue at step 3.
-   - **Standard** for everything else: run `herd init <slug> "<goal>"`.
+   - **Quick** for a trivial change: one file, no new behaviour surface, and an existing command that can fail first. Run `herd init <slug> "<goal>" --quick "<check>" --request "<the user's message, verbatim>"`. It refuses a `high` risk floor. Quick skips the criteria interview, the approval question and the fresh-context review. It still needs red first, `herd verify` and `herd done`. Skip steps 2, 4 and 6 below; continue at step 3.
+   - **Standard** for everything else: run `herd init <slug> "<goal>" --request "<the user's message, verbatim>"`. The request is stored so `herd check` can confirm that human criteria quote the human.
    Then run `herd triage "<goal text>"` (standard route). Triage prints a risk floor from `herd.toml` path rules: `high` or `medium` if a rule matched, `medium` by default when the text names no path, `low` only if a maintainer labelled it. You may raise the risk, never lower it. Do not ask clarifying questions: fill gaps with stated assumptions.
 2. **Criteria.** Follow the `herd:criteria` skill, then run `herd check`. Run `herd detect` to find the project's real test command instead of guessing. If the user wants to plan the evidence together, point them to `/herd:evidence`.
 3. **Red.** Run `herd verify` once before building. It should report the checks failing. A check that already passes proves nothing: tighten it.

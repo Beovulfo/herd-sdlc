@@ -33,10 +33,10 @@ flowchart LR
 ```
 
 1. **Intake.** The task gets a folder, `.herd/tasks/<slug>/task.toml`, and a risk floor computed from path rules in `herd.toml` (migrations, auth, billing, and so on). The agent can raise the risk, never lower it. A trivial change takes the **quick route**: one criterion and one check, no criteria interview, no approval question, no review. It is refused at a `high` risk floor and still ends in fresh passing evidence.
-2. **Criteria.** Every criterion is "Given, when, then" with a `check`: a shell command where exit 0 means pass. Criteria you write are authoritative. Criteria the agent adds are marked `agent-proposed`. A criterion with no check is `unchecked` and is never counted as met. `herd detect` proposes the project's real test command, and an optional `test_budget` line records what is tested at which level and what is deliberately not.
+2. **Criteria.** Every criterion is "Given, when, then" with a `check`: a shell command where exit 0 means pass. Criteria you write are authoritative: the agent quotes your words exactly, and the report flags any `human` criterion that is not a verbatim quote. Criteria the agent adds are marked `agent-proposed`. A criterion with no check is `unchecked` and is never counted as met. `herd detect` proposes the project's real test command, and an optional `test_budget` line records what is tested at which level and what is deliberately not.
 3. **Build.** Tests first, small steps, on a branch. Herd reuses [Superpowers](https://github.com/obra/superpowers) for planning, TDD and subagents when it is installed.
 4. **Review.** For medium and high risk, a fresh-context reviewer looks at the diff: Superpowers code review, or the Goldfish agents from [EGM](https://github.com/google/elephant-goldfish-model) when installed.
-5. **Verify.** `herd verify` runs every check and stores evidence: status, exit code, output tail, commit SHA, a fingerprint of the workspace, a timestamp, and how many checks failed on the first run (a check that was green before any work is visible).
+5. **Verify.** `herd verify` runs every check and stores evidence: status, exit code, output tail, commit SHA, a fingerprint of the workspace, a timestamp, how many checks failed on the first run (a check that was green before any work is visible), and the wall-clock time since `herd init`, including when the first verify happened.
 6. **Stop gate.** While a task is active, a Stop hook refuses to let the agent finish unless the evidence is fresh and passing. Edit a file after verifying and the evidence is stale. After 3 blocked attempts the gate lets the agent stop so it can ask you one question instead of looping.
 
 ## Quickstart
@@ -125,7 +125,7 @@ If the agent tries to finish while a check is failing, the Stop hook answers ins
 | `/herd:run <task>` | The autopilot: intake, criteria, build, review, verify, evidence |
 | `/herd:criteria` | Write success criteria with runnable checks |
 | `/herd:evidence` | Interactive: decide with you how to prove the change works for your project type |
-| `herd init <slug> "<goal>"` | Create a task and make it active |
+| `herd init <slug> "<goal>" --request "<message>"` | Create a task and make it active. `--request` stores the human's message verbatim so `herd check` can flag human criteria that are not quotes |
 | `herd init <slug> "<goal>" --quick "<check>"` | Quick route for a trivial change: one criterion, one check. Refused at a `high` risk floor |
 | `herd check` | Validate `task.toml`; warns about checks that do not run project code |
 | `herd detect` | Propose test and lint commands for Python, Node, Rust, Go and `make test` |
@@ -165,7 +165,7 @@ While a Herd task is active, each `Edit` or `Write` runs the command on that fil
 
 ## Status
 
-Version 0.2. Working and covered by 131 unit tests: the evidence harness (`scripts/herd.py`), the Stop gate, the quick route, project-type detection, the lint hook, and the risk-floor module. One trial run, where a fresh agent followed the `herd:run` skill text in a scratch repo, got a 5-criterion task to a passing `herd done`, and its notes on unclear wording were fixed. Not yet done: many live runs through the installed plugin, and issue-to-pull-request automation on GitHub, which is still design work.
+Version 0.2. Working and covered by 145 unit tests: the evidence harness (`scripts/herd.py`), the Stop gate, the quick route, project-type detection, the lint hook, and the risk-floor module. One trial run, where a fresh agent followed the `herd:run` skill text in a scratch repo, got a 5-criterion task to a passing `herd done`, and its notes on unclear wording were fixed. Not yet done: many live runs through the installed plugin, and issue-to-pull-request automation on GitHub, which is still design work.
 
 ## The design behind it
 

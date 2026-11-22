@@ -32,6 +32,27 @@ class TestFloor(unittest.TestCase):
         rules = {"high": ["auth/*"], "medium": []}
         self.assertEqual(ht.floor(["auth/deep/x.py"], {}, rules)[0], "medium")
 
+    def test_fallback_glob_agrees_with_full_match(self):
+        """The 3.11/3.12 fallback must give the same answer as PurePosixPath.full_match."""
+        globs = ["migrations/**", "auth/**", "herd.toml", "**/*.py", "**/*", "api/*.py", "src/**/test_?.py",
+                 "*.md", "**", "a/**/b"]
+        paths = ["migrations", "migrations/x.py", "migrations/a/b.sql", "auth", "authx/y", "herd.toml",
+                 "x/herd.toml", "a.py", "d/e/f.py", "api/v.py", "api/x/v.py", "src/test_a.py",
+                 "src/k/l/test_b.py", "src/test_ab.py", "README.md", "docs/a.md", "a/b", "a/x/y/b", "a/bc"]
+        expected = {  # what full_match returns on 3.13, written out so the test also runs on 3.11 and 3.12
+            ("migrations/**", "migrations/x.py"), ("migrations/**", "migrations/a/b.sql"), ("herd.toml", "herd.toml"),
+            ("**/*.py", "migrations/x.py"), ("**/*.py", "a.py"), ("**/*.py", "d/e/f.py"), ("**/*.py", "api/v.py"),
+            ("**/*.py", "api/x/v.py"), ("**/*.py", "src/test_a.py"), ("**/*.py", "src/k/l/test_b.py"),
+            ("**/*.py", "src/test_ab.py"), ("api/*.py", "api/v.py"), ("src/**/test_?.py", "src/test_a.py"),
+            ("src/**/test_?.py", "src/k/l/test_b.py"), ("*.md", "README.md"), ("a/**/b", "a/b"),
+            ("a/**/b", "a/x/y/b"),
+        } | {("**/*", p) for p in paths} | {("**", p) for p in paths}
+        for g in globs:
+            for p in paths:
+                want = (g, p) in expected
+                self.assertEqual(ht.re.fullmatch(ht._glob_re(g), p + "/") is not None, want, (g, p))
+                self.assertEqual(ht.glob_match(p, g), want, (g, p))
+
     def test_case_sensitive(self):
         self.assertEqual(ht.floor(["Migrations/x.sql"], {}, RULES)[0], "medium")
 

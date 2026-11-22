@@ -198,8 +198,8 @@ findings + spec + rubric + prior rulings
 
 | Phase | Work | Exit check |
 | --- | --- | --- |
-| 1 | `finding_id()`, `merge_findings()`, `validate()` | `python3 -m unittest scripts.test_herd_arbiter.TestValidate` passes |
-| 2 | `build_input()`, `format_lines()`, `needs_audit()`, `overturn_rate()`, `summary()` | `python3 -m unittest scripts.test_herd_arbiter` passes (all tests) |
+| 1 | `finding_id()`, `merge_findings()`, `validate()` | `python3 -m unittest tests.test_herd_arbiter.TestValidate` passes |
+| 2 | `build_input()`, `format_lines()`, `needs_audit()`, `overturn_rate()`, `summary()` | `python3 -m unittest tests.test_herd_arbiter` passes (all tests) |
 | 3 | `rubrics/arbiter-v1.md` | `grep -c "^Rule [1-5]:" rubrics/arbiter-v1.md` prints `5` |
 | 4 | `agents/herd-arbiter.md`; `herd.toml` key | `python3 -c "import tomllib; print(tomllib.load(open('herd.toml','rb')).get('arbiter'))"` prints `{'model': 'inherit'}` |
 
@@ -220,7 +220,7 @@ Phase 4 modifies the `herd.toml` from the Triage design (`docs/designs/herd-tria
   * `overturn_rate(lines: list[str]) -> dict`: keys `n`, `overturned`, `rate`, `escalate_rate`, `agreed_escalations`, each split by `same_model`.
   * `summary(lines: list[str]) -> str`.
 
-#### 2. `scripts/test_herd_arbiter.py` (Create)
+#### 2. `tests/test_herd_arbiter.py` (Create)
 
 * **Type / Scope**: `unittest`, standard library only. Inline generic findings and a short spec string.
 * **Proposed Changes**: One test per name in Goals and CUJs, plus `test_reason_cut_at_140`, `test_merge_same_text`, `test_overturn_excludes_escalate`, and `test_round_trip` (format, parse, summary).
@@ -243,7 +243,7 @@ Phase 4 modifies the `herd.toml` from the Triage design (`docs/designs/herd-tria
 ### Verification Plan
 
 * **Build**: none.
-* **Unit Tests**: `python3 -m unittest scripts.test_herd_arbiter`.
+* **Unit Tests**: `python3 -m unittest tests.test_herd_arbiter`.
 * **Static Analysis & Linting**: none required in M0.
 * **Test Coverage Requirement**: every goal and CUJ above names a test.
 * **E2E/Integration**: none in this design. The first 5 features give the overturn data.

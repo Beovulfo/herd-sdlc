@@ -10,13 +10,14 @@
 <p align="center">
   <a href="https://github.com/Beovulfo/herd-sdlc/actions/workflows/ci.yml"><img alt="tests" src="https://github.com/Beovulfo/herd-sdlc/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="license: Apache 2.0" src="https://img.shields.io/badge/license-Apache%202.0-blue.svg"></a>
-  <img alt="python 3.13+" src="https://img.shields.io/badge/python-3.13%2B-blue.svg">
+  <img alt="python 3.11+" src="https://img.shields.io/badge/python-3.11%2B-blue.svg">
   <img alt="Claude Code plugin" src="https://img.shields.io/badge/Claude%20Code-plugin-2e7d32.svg">
 </p>
 
 <p align="center">
   <a href="#quickstart">Quickstart</a> &middot;
   <a href="#how-it-works">How it works</a> &middot;
+  <a href="#architecture">Architecture</a> &middot;
   <a href="#see-it-work">See it work</a> &middot;
   <a href="#benchmark-with-and-without-herd">Benchmark</a> &middot;
   <a href="#commands-and-skills">Commands</a> &middot;
@@ -41,11 +42,11 @@ You review evidence (command output, commit SHA, timestamps), not process.
 - **Done means proven.** A Stop hook blocks the agent from finishing until every check passes, with evidence newer than the last edit.
 - **Your words stay yours.** Criteria you write are quoted verbatim and never weakened. Gaps are filled by the agent and marked `agent-proposed`.
 - **Caveats surface early.** The agent must say what each check does not prove, try to break its own work, and log what it finds, so problems appear during the run, not after it.
-- **Light.** One Python file, no dependencies, plain-text task files. It reuses [Superpowers](https://github.com/obra/superpowers) and [EGM](https://github.com/google/elephant-goldfish-model) when they are installed.
+- **Light.** A small Python CLI on the standard library, no dependencies, plain-text task files. It reuses [Superpowers](https://github.com/obra/superpowers) and [EGM](https://github.com/google/elephant-goldfish-model) when they are installed.
 
 ## Quickstart
 
-You need Claude Code, Python 3.13 or newer, and a git repository.
+You need Claude Code, Python 3.11 or newer as `python3`, and a git repository. With an older `python3` the hooks stay silent and do nothing, and the CLI says which version it needs.
 
 ```text
 /plugin marketplace add Beovulfo/herd-sdlc
@@ -97,7 +98,37 @@ flowchart LR
 3. **Build.** Tests first, small steps, on a branch. Superpowers is used for planning, TDD and subagents when installed.
 4. **Break it, then review.** The agent tries to break its own work on exactly what the request promises: the words `any`, `every`, `very big` become generated cases of different shapes and a scale run. Each attempt, failure and fix is logged with `herd note`. For medium and high risk, a fresh-context reviewer then looks at the diff.
 5. **Verify.** `herd verify` runs every check and stores evidence: status, exit code, output tail, commit SHA, a fingerprint of the workspace, a timestamp, how many checks failed on the first run (a check that was green before any work is visible), and the wall-clock time since `herd init`.
-6. **Stop gate.** While a task is active, a Stop hook refuses to let the agent finish unless the evidence is fresh and passing. Edit a file after verifying and the evidence is stale. After 3 blocked attempts the gate lets the agent stop so it can ask you one question instead of looping.
+6. **Stop gate.** While a task is active, a Stop hook refuses to let the agent finish unless the evidence is fresh and passing. Edit a file after verifying and the evidence is stale. After 3 blocked attempts the gate lets the agent stop so it can ask you one question instead of looping. To drop a task, `herd cancel` closes it and keeps its files as a record.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    subgraph Plugin
+        S["Skills<br/>run, criteria, evidence"]
+        H["Hooks<br/>Stop gate, lint"]
+    end
+    CLI["herd CLI<br/>scripts/herd.py"]
+    T["herd_triage<br/>risk floor"]
+    D["herd_detect<br/>test command"]
+    subgraph State[".herd/tasks/&lt;slug&gt;/"]
+        TT["task.toml<br/>goal, criteria, checks"]
+        EV["evidence.json<br/>results, SHA, fingerprint"]
+        NO["notes.jsonl<br/>caveats"]
+    end
+    S -->|instruct the agent to run| CLI
+    H -->|gate, lint| CLI
+    CLI --> T
+    CLI --> D
+    CLI -->|reads| TT
+    CLI -->|runs checks, writes| EV
+    CLI -->|appends| NO
+```
+
+- **The skills are the method; the CLI is the referee.** The skills tell the agent what to do in each step. The CLI only records and checks: it runs the commands in `task.toml` and decides from their exit codes, never from what the agent says.
+- **The Stop hook enforces it.** It asks the CLI whether the stored evidence is passing and still matches the workspace: a SHA-1 over `HEAD`, the diff and untracked files, plus a hash of `task.toml`. Any edit after `herd verify` makes the evidence stale.
+- **State is plain files** in the project, one folder per task, so a human can read, diff or delete it.
+- **Two modules are not wired in yet.** `herd_arbiter.py` (rules on review findings) and `herd_escalation.py` (one GitHub issue to pause and ask a human) are tested building blocks for the GitHub automation on the roadmap.
 
 ## See it work
 
@@ -199,6 +230,8 @@ python3 examples/supermarket-route/verifier/verify_general.py with_herd examples
 | `herd verify` | Run all checks, store `evidence.json`; exit 1 if any fail |
 | `herd status` | Show evidence and whether the task is done |
 | `herd done` | Write `evidence.md`, close the task; refuses unless fresh and passing |
+| `herd cancel --reason "text"` | Abandon the task: keep its files, stop the Stop gate from blocking |
+| `herd help` | List every command with its usage |
 | `herd gate` | The Stop hook (reads hook JSON on stdin) |
 | `herd lint` | The optional PostToolUse lint hook; `herd lint --suggest` prints a `[lint]` block for `herd.toml` |
 
@@ -225,15 +258,15 @@ While a Herd task is active, each `Edit` or `Write` runs the command on that fil
 
 ## Status
 
-Version 0.2. Working and covered by 179 unit tests: the evidence harness (`scripts/herd.py`), the Stop gate, the quick route, project-type detection, the lint hook, the caveat log, and the risk-floor module. Benchmarked on one task with Sonnet (above). Not yet done: many live runs through the installed plugin across different project types, and issue-to-pull-request automation on GitHub, which is still design work.
+Version 0.2.6 (see the [changelog](CHANGELOG.md)). Working and covered by 188 unit tests on Python 3.11 to 3.13: the evidence harness (`scripts/herd.py`), the Stop gate, the quick route, project-type detection, the lint hook, the caveat log, and the risk-floor module. Benchmarked on one task with Sonnet (above). Not yet done: many live runs through the installed plugin across different project types, and issue-to-pull-request automation on GitHub, which is still design work.
 
 ## The design behind it
 
 Herd is built with its own method, using the [Elephant-Goldfish Model](https://github.com/google/elephant-goldfish-model): an Elephant agent with full context drafts, and Goldfish reviewers with no context check. The requirements and decisions are in the open:
 
-- [`PRD`](PRD%20%E2%80%94%20Autopilot%20SDLC%20plugin%20built%20on%20the%20Elephant-Goldfish%20Model.md): the product requirements, principles and roadmap.
+- [`docs/PRD.md`](docs/PRD.md): the product requirements, principles and roadmap.
 - [`docs/designs/`](docs/designs): specs for Triage, the Arbiter (an agent that rules on review findings) and Escalation (one issue to pause and ask a human), each with a tested module in `scripts/` that will power the GitHub automation phase, plus the [v0.2 plan](docs/designs/herd-coco-ideas.md).
-- [`docs/spikes/`](docs/spikes): spike S1 ran EGM unattended on these features, with every review report and what broke.
+- [`docs/spikes/`](docs/spikes): spike S1 ran EGM unattended on these features; the run logs say what each review found and what broke.
 - [`docs/backlog.md`](docs/backlog.md): ideas not yet planned, such as an optional Trail Code integration.
 
 ## Roadmap
@@ -245,12 +278,12 @@ Herd is built with its own method, using the [Elephant-Goldfish Model](https://g
 ## Development
 
 ```bash
-python3 -m unittest scripts.test_herd_cli scripts.test_herd_lint scripts.test_herd_detect \
-  scripts.test_herd_triage scripts.test_herd_arbiter scripts.test_herd_escalation
+python3 -m unittest discover -s tests -t .
+ruff check .
 claude plugin validate ./
 ```
 
-Python standard library only, no dependencies. Try the plugin from a clone with `claude --plugin-dir /path/to/herd-sdlc`. When plugin files change, bump `version` in `.claude-plugin/plugin.json`, because `claude plugin update` compares version numbers only.
+Python standard library only, no dependencies. Try the plugin from a clone with `claude --plugin-dir /path/to/herd-sdlc`. When plugin files change, bump `version` in `.claude-plugin/plugin.json` and add a [changelog](CHANGELOG.md) entry, because `claude plugin update` compares version numbers only.
 
 ## License
 

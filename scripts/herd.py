@@ -1,20 +1,26 @@
 #!/usr/bin/env python3
-"""herd: the evidence harness. Standard library only, Python 3.13+.
+"""herd: the evidence harness. Standard library only, Python 3.11+.
 
 A task is `.herd/tasks/<slug>/task.toml`: a goal plus success criteria, each with a
 `check` command. `herd verify` runs the checks and stores evidence. `herd gate` (the
 Stop hook) refuses to let the agent finish without fresh, passing evidence.
 """
+import sys
+
+if sys.version_info < (3, 11):  # keep this block parseable by old Pythons: it runs before tomllib is imported
+    if sys.argv[1:2] in (["gate"], ["lint"]):
+        sys.exit(0)  # a hook must never break the session; the CLI says why below
+    sys.exit("herd needs Python 3.11 or newer, found " + sys.version.split()[0])
+
 import hashlib
 import json
 import os
 import re
 import shlex
 import subprocess
-import sys
 import tomllib
 from datetime import datetime, timezone
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import herd_detect  # noqa: E402
@@ -122,6 +128,22 @@ def init_task(root, slug, goal, quick_check=None, request=None):
     if request is not None:
         (d / "request.md").write_text(request)
     (Path(root) / ".herd" / "active").write_text(slug + "\n")
+
+
+def cancel_task(root, slug, reason=""):
+    """Abandon a task. Its files stay as a record; the Stop gate no longer blocks on it."""
+    d = _dir(root, slug)
+    if not (d / "task.toml").exists():
+        raise ValueError(f"no task {slug}")
+    (d / "cancelled").write_text(json.dumps({"at": now(), "reason": reason.strip()}) + "\n")
+    (d / "gate_blocks").unlink(missing_ok=True)
+    if active_slug(root) == slug:
+        (Path(root) / ".herd" / "active").unlink()
+
+
+def cancelled(root, slug):
+    p = _dir(root, slug) / "cancelled"
+    return json.loads(p.read_text()) if p.exists() else None
 
 
 def load_task(root, slug):
@@ -401,7 +423,7 @@ def lint(hook):
         return None
     if not isinstance(cfg, dict) or not isinstance(cfg.get("command"), str):
         return None
-    if not any(PurePosixPath(rel.as_posix()).full_match(g) for g in cfg.get("globs", ["**/*"])):
+    if not any(herd_triage.glob_match(rel.as_posix(), g) for g in cfg.get("globs", ["**/*"])):
         return None
     cmd = cfg["command"].replace("{file}", shlex.quote(rel.as_posix()))
     code, out = run_check(cwd, cmd, cfg.get("timeout_s", LINT_TIMEOUT))
@@ -441,7 +463,7 @@ def problems(root, slug):
 def gate(root, hook):
     """Stop hook. None allows the stop; a dict blocks it with a reason for the agent."""
     slug = active_slug(root)
-    if not slug or not _dir(root, slug).exists():
+    if not slug or not _dir(root, slug).exists() or cancelled(root, slug):
         return None
     counter = _dir(root, slug) / "gate_blocks"
     probs = problems(root, slug)
@@ -454,7 +476,8 @@ def gate(root, hook):
     counter.write_text(str(n + 1))
     cmd = f"python3 {SELF} verify"
     reason = (f"Herd task `{slug}` is not done ({n + 1}/{MAX_BLOCKS} stop attempts blocked). "
-              + "; ".join(probs) + f". Run `{cmd}` after fixing. If you are stuck, ask the human one question and stop.")
+              + "; ".join(probs) + f". Run `{cmd}` after fixing. If you are stuck, ask the human one question and stop."
+              + f" If the human abandoned the task, run `python3 {SELF} cancel --reason \"...\"`.")
     return {"decision": "block", "reason": reason}
 
 
@@ -474,20 +497,50 @@ def _slug_arg(root, args):
     sys.exit("no active task: run `herd init <slug> \"<goal>\"`")
 
 
+USAGE = {
+    "init": 'herd init <slug> "<goal>" [--request "<message>"] [--quick "<check>"]',
+    "check": "herd check [slug]",
+    "note": 'herd note --found|--fixed|--open|--tried "text"',
+    "detect": "herd detect",
+    "lint": "herd lint [--suggest]   (without --suggest: the PostToolUse hook, reads hook JSON on stdin)",
+    "verify": "herd verify [slug]",
+    "status": "herd status [slug]",
+    "done": "herd done [slug]",
+    "cancel": 'herd cancel [slug] [--reason "text"]',
+    "gate": "herd gate   (the Stop hook, reads hook JSON on stdin)",
+    "triage": 'herd triage "<text>"',
+}
+
+
+class UsageError(Exception):
+    pass
+
+
+def _opt(args, flag):
+    """Remove `flag value` from args; return (value or None, rest)."""
+    if flag not in args:
+        return None, args
+    i = args.index(flag)
+    if i + 1 >= len(args):
+        raise UsageError
+    return args[i + 1], args[:i] + args[i + 2:]
+
+
 def main(argv):
     root = Path.cwd()
     cmd, args = (argv[0], argv[1:]) if argv else ("status", [])
+    if cmd in ("help", "-h", "--help"):
+        print(__doc__ + "\nCommands:\n" + "\n".join(f"  {u}" for u in USAGE.values()))
+        return 0
+    if cmd not in USAGE:
+        print(f"herd: unknown command `{cmd}`; run `herd help`", file=sys.stderr)
+        return 2
     try:
         if cmd == "init":
-            quick = request = None
-            if "--quick" in args:
-                i = args.index("--quick")
-                quick = args[i + 1]
-                args = args[:i] + args[i + 2:]
-            if "--request" in args:
-                i = args.index("--request")
-                request = args[i + 1]
-                args = args[:i] + args[i + 2:]
+            quick, args = _opt(args, "--quick")
+            request, args = _opt(args, "--request")
+            if len(args) != 2:
+                raise UsageError
             init_task(root, args[0], args[1], quick_check=quick, request=request)
             if quick is None:
                 print(f"created .herd/tasks/{args[0]}/task.toml (commented template): add criteria with checks, then run `herd check`")
@@ -507,7 +560,7 @@ def main(argv):
             flags = [a for a in args if a.startswith("--")]
             rest = [a for a in args if not a.startswith("--")]
             if len(flags) != 1 or flags[0] not in kinds or len(rest) != 1:
-                raise ValueError('usage: herd note --found|--fixed|--open|--tried "text"')
+                raise UsageError
             add_note(root, _slug_arg(root, []), kinds[flags[0]], rest[0])
             print(f"noted ({kinds[flags[0]]}): {rest[0]}")
         elif cmd == "detect":
@@ -535,6 +588,10 @@ def main(argv):
             slug = _slug_arg(root, args)
             ev = load_evidence(root, slug)
             print(report(ev, load_notes(root, slug)) if ev else f"task {slug}: no evidence yet")
+            c = cancelled(root, slug)
+            if c:
+                print(f"cancelled at {c['at']}" + (f": {c['reason']}" if c["reason"] else ""))
+                return 0
             probs = problems(root, slug)
             print("not done: " + "; ".join(probs) if probs else "done: evidence is fresh and passing")
         elif cmd == "done":
@@ -548,6 +605,11 @@ def main(argv):
             (root / ".herd" / "active").unlink(missing_ok=True)
             print(text)
             print("done: evidence is fresh and passing")
+        elif cmd == "cancel":
+            reason, args = _opt(args, "--reason")
+            slug = _slug_arg(root, args)
+            cancel_task(root, slug, reason or "")
+            print(f"cancelled {slug}: its files stay in .herd/tasks/{slug}/ and the Stop gate no longer blocks")
         elif cmd == "gate":
             raw = sys.stdin.read() if not sys.stdin.isatty() else ""
             hook = json.loads(raw) if raw.strip() else {}
@@ -558,10 +620,10 @@ def main(argv):
             toml_path = root / "herd.toml"
             rec = herd_triage.build_record("task", 0, " ".join(args), {}, toml_path.read_text() if toml_path.exists() else "")
             print(json.dumps(rec, indent=2))
-        else:
-            print(__doc__)
-            return 2
-    except (ValueError, FileNotFoundError, IndexError) as e:
+    except UsageError:
+        print(f"herd: usage: {USAGE[cmd]}", file=sys.stderr)
+        return 1
+    except (ValueError, FileNotFoundError) as e:
         print(f"herd: {e}", file=sys.stderr)
         return 1
     return 0

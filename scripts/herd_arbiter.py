@@ -1,4 +1,5 @@
 """Herd Arbiter (M0): orchestrator-side validation and logging.
+Not wired into the CLI yet: a tested building block for the planned GitHub automation.
 See docs/designs/herd-arbiter.md. Standard library only; reads no config file.
 """
 import hashlib
@@ -46,7 +47,7 @@ def build_input(rubric, spec, prior, findings):
     """Rubric first (outside data), then spec, prior rulings, findings in data blocks."""
     prior_lines = [json.dumps({"id": k, **v}) for k, v in sorted(prior.items())]
     blocks = [f'<data kind="spec">\n{spec}\n</data>',
-              f'<data kind="prior_rulings">\n' + "\n".join(prior_lines) + "\n</data>",
+              '<data kind="prior_rulings">\n' + "\n".join(prior_lines) + "\n</data>",
               '<data kind="findings">\n' + "\n".join(
                   json.dumps({"id": f["id"], "severity": f["severity"], "scope": f["scope"], "text": f["text"]})
                   for f in findings) + "\n</data>"]

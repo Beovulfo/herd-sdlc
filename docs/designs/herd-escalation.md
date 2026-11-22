@@ -211,9 +211,9 @@ GitHub events --> replay --> state --> herd_status, next_escalation, apply_comma
 
 | Phase | Work | Exit check |
 | --- | --- | --- |
-| 1 | `replay()`, `herd_status()`, `parse_command()`, `apply_command()` | `python3 -m unittest scripts.test_herd_escalation.TestStatus` passes |
-| 2 | `parse_answer()`, `build_issue_body()`, `next_escalation()` | `python3 -m unittest scripts.test_herd_escalation.TestEscalation` passes |
-| 3 | `effective_limits()`, `paused_seconds()`, `touchpoints()` | `python3 -m unittest scripts.test_herd_escalation` passes (all tests) |
+| 1 | `replay()`, `herd_status()`, `parse_command()`, `apply_command()` | `python3 -m unittest tests.test_herd_escalation.TestStatus` passes |
+| 2 | `parse_answer()`, `build_issue_body()`, `next_escalation()` | `python3 -m unittest tests.test_herd_escalation.TestEscalation` passes |
+| 3 | `effective_limits()`, `paused_seconds()`, `touchpoints()` | `python3 -m unittest tests.test_herd_escalation` passes (all tests) |
 | 4 | `herd.toml` `budget` key; PRD edit | `python3 -c "import tomllib; print(tomllib.load(open('herd.toml','rb'))['budget'])"` prints a dict with `tokens`, `minutes`, `raise_by_pct`; `grep -n "answer <trigger>" PRD*.md` matches one line |
 
 Whichever of the Triage, Arbiter and Escalation designs is built first creates `herd.toml`; the others modify it. Phase 4 runs after that.
@@ -235,7 +235,7 @@ Whichever of the Triage, Arbiter and Escalation designs is built first creates `
   * `paused_seconds(events: list[dict], now: str) -> int`.
   * `touchpoints(state: dict) -> dict`.
 
-#### 2. `scripts/test_herd_escalation.py` (Create)
+#### 2. `tests/test_herd_escalation.py` (Create)
 
 * **Type / Scope**: `unittest`, standard library only. Inline generic events. `TestStatus` holds the status, command and parsing tests; `TestEscalation` the rest.
 * **Proposed Changes**:
@@ -262,13 +262,13 @@ Whichever of the Triage, Arbiter and Escalation designs is built first creates `
 
 #### 4. PRD (Modify)
 
-* **Type / Scope**: Docs, the file at the repo root whose name starts with `PRD`.
+* **Type / Scope**: Docs, `docs/PRD.md` (then at the repo root).
 * **Proposed Changes**: In section 4, Commands: change `/herd answer <n>` to `/herd answer <trigger>=<n> [<trigger>=<n> ...]`.
 
 ### Verification Plan
 
 * **Build**: none.
-* **Unit Tests**: `python3 -m unittest scripts.test_herd_escalation`.
+* **Unit Tests**: `python3 -m unittest tests.test_herd_escalation`.
 * **Static Analysis & Linting**: none required in M0.
 * **Test Coverage Requirement**: every goal and CUJ above names a test in the table.
 * **E2E/Integration**: none in this design. The orchestrator design owns the GitHub flow.

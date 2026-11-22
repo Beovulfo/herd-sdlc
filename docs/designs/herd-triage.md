@@ -18,7 +18,7 @@ Every later step needs a risk level, and H1 needs one to show the human. A perso
 
 ## Goals
 
-* G1: `effective` is never below `floor`, unless a human override is recorded in `risk.override`. Check: `python3 -m unittest scripts/test_herd_triage.py` passes `test_floor_hit`, `test_no_path`, `test_low_label`, `test_label_raises`.
+* G1: `effective` is never below `floor`, unless a human override is recorded in `risk.override`. Check: `python3 -m unittest tests/test_herd_triage.py` passes `test_floor_hit`, `test_no_path`, `test_low_label`, `test_label_raises`.
 * G2: A human override records actor login, comment id, old value, new value and time in `risk.override`. Check: `test_override_recorded`.
 * G3: Any failure to compute a floor gives `effective: high` and `status: fallback` with a `cause`. Check: `test_fallback_cases`.
 
@@ -74,7 +74,7 @@ Every later step needs a risk level, and H1 needs one to show the human. A perso
 
 **Path extraction.** One regular expression over the issue body: tokens of letters, digits, `.`, `_`, `-` containing at least one `/`, or ending in a known extension from `herd.toml` (`path_extensions`, default `py, ts, js, sql, toml, json, md`). Each token is normalised: strip a leading `./`, collapse `//`, keep case, and drop any token that contains `..` or starts with `/`. Case is significant, because the rules are case-sensitive. The extractor misses paths written in prose ("the auth module"), so the rate of unknown input is known to be high. That is why unknown input gives `medium`.
 
-**Floor.** `herd.toml` has two lists of globs, `floor.high` and `floor.medium`, plus optional `path_extensions`. Matching uses `PurePosixPath.full_match` (Python 3.13): `*` does not cross `/`, `**` matches zero or more segments, no negation. The highest matching level wins. Labels `risk:high` and `risk:medium` raise the floor to that level. `risk:low` counts only when a maintainer applied it, and lowers the floor to `low` only when no rule matched. With no rule match and no label, the floor is `medium`. The default rule set, used when `herd.toml` has no `floor` block: `high` for `migrations/**`, `auth/**`, `billing/**`, `herd.toml`; `medium` for `api/**`. A `herd.toml` edit counts as touching a `high` path, so a feature that edits it floors at `high` once a diff exists (M1); at intake the extractor sees it only if the issue names it.
+**Floor.** `herd.toml` has two lists of globs, `floor.high` and `floor.medium`, plus optional `path_extensions`. Matching uses `PurePosixPath.full_match` (Python 3.13; `glob_match` falls back to an equivalent matcher on 3.11 and 3.12): `*` does not cross `/`, `**` matches zero or more segments, no negation. The highest matching level wins. Labels `risk:high` and `risk:medium` raise the floor to that level. `risk:low` counts only when a maintainer applied it, and lowers the floor to `low` only when no rule matched. With no rule match and no label, the floor is `medium`. The default rule set, used when `herd.toml` has no `floor` block: `high` for `migrations/**`, `auth/**`, `billing/**`, `herd.toml`; `medium` for `api/**`. A `herd.toml` edit counts as touching a `high` path, so a feature that edits it floors at `high` once a diff exists (M1); at intake the extractor sees it only if the issue names it.
 
 **Effective value.** `effective = floor`, unless `risk.override` is set, in which case `effective = override.to`. Only the `human_override` event sets `risk.override`, and a later `triage` event for the same feature never changes an existing override.
 
@@ -156,15 +156,15 @@ issue + label + herd.toml (base branch)
 
 | Phase | Work | Exit check |
 | --- | --- | --- |
-| 1 | `extract_paths()`, `floor()` | `python3 -m unittest scripts.test_herd_triage.TestFloor` passes |
-| 2 | `build_record()`, `apply_override()`, fallback and atomic write | `python3 -m unittest scripts.test_herd_triage` passes (all tests) |
+| 1 | `extract_paths()`, `floor()` | `python3 -m unittest tests.test_herd_triage.TestFloor` passes |
+| 2 | `build_record()`, `apply_override()`, fallback and atomic write | `python3 -m unittest tests.test_herd_triage` passes (all tests) |
 | 3 | `herd.toml` example | `python3 -c "import tomllib; d=tomllib.load(open('herd.toml','rb')); print(sorted(d['floor']))"` prints `['high', 'medium']` |
 
 ### Target Files to Create/Modify
 
 #### 1. `scripts/herd_triage.py` (Create)
 
-* **Type / Scope**: Python module, Python 3.13 or later (3.13 for `PurePosixPath.full_match`), standard library only. `herd.toml` is read with `tomllib` and the record is read and written as JSON, so there is no dependency.
+* **Type / Scope**: Python module, Python 3.11 or later (`full_match` on 3.13, a tested fallback on 3.11 and 3.12), standard library only. `herd.toml` is read with `tomllib` and the record is read and written as JSON, so there is no dependency.
 * **Proposed Changes**: Five public functions, plus `effective_of(record)` (a stored record's effective level; an out-of-range value is `high`). As built in `scripts/herd_triage.py`: `build_record(feature, issue, body, labels, herd_toml, prior=None)` takes the text of `herd.toml` or `None` when the file is missing, and an optional prior record. With a prior record it keeps any existing override and every key it does not own, and a prior whose `schema_version` is missing or not 1 gives a fallback with cause `schema`. `cause` values are `herd_toml`, `schema` and `error`.
   * `extract_paths(body: str, extensions: list[str]) -> list[str]`: returns normalised paths as described in Path extraction.
   * `floor(paths: list[str], labels: dict[str, str], rules: dict) -> tuple[str, list[str], str]`: `labels` maps a label name to its applier's role (`maintainer` or `other`). Returns level, matched rules and source (`issue_text`, `label` or `default`).
@@ -172,7 +172,7 @@ issue + label + herd.toml (base branch)
   * `apply_override(record: dict, level: str, actor: str, comment_id: int, now: str) -> dict`: sets `risk.override` and `risk.effective`; raises `ValueError` for a level outside the three. When reading a stored record, an out-of-range level is treated as `high` instead.
   * `write_record(path: str, record: dict) -> None`: writes JSON to a temporary file in the same directory, then renames it.
 
-#### 2. `scripts/test_herd_triage.py` (Create)
+#### 2. `tests/test_herd_triage.py` (Create)
 
 * **Type / Scope**: `unittest` file, standard library only.
 * **Proposed Changes**: Tests `test_floor_hit`, `test_no_path`, `test_low_label`, `test_label_raises`, `test_override_recorded`, `test_fallback_cases` (missing file, invalid TOML, unknown key inside `floor`, exception in matching), plus `test_other_top_level_keys_ignored`, plus `test_path_normalisation` (`./a`, `a//b`, `..`, leading `/`, case) and `test_triage_keeps_override`. Inputs are inline literals with generic paths.
@@ -193,7 +193,7 @@ issue + label + herd.toml (base branch)
 ### Verification Plan
 
 * **Build**: none.
-* **Unit Tests**: `python3 -m unittest scripts/test_herd_triage.py`.
+* **Unit Tests**: `python3 -m unittest tests/test_herd_triage.py`.
 * **Static Analysis & Linting**: none required in M0.
 * **Test Coverage Requirement**: every CUJ has at least one named test (CUJ 1 `test_floor_hit`; 2 `test_no_path`; 3 `test_low_label`, `test_label_raises`; 4 `test_override_recorded`; 5 `test_fallback_cases`).
 * **E2E/Integration**: none in this design; the orchestrator design owns the label-to-record flow.

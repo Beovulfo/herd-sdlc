@@ -1,5 +1,5 @@
 import json
-import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -770,6 +770,81 @@ class TestCli(Base):
         rc, out, _ = self.run_cli("triage", "Change auth/session.py to rotate tokens")
         self.assertEqual(rc, 0)
         self.assertEqual(json.loads(out)["risk"]["floor"], "high")
+
+    def test_missing_arguments_print_usage(self):
+        for args, usage in ((["init"], "herd init <slug>"), (["init", "t1", "g", "--quick"], "herd init <slug>"),
+                            (["note", "text"], "herd note --found"), (["cancel", "--reason"], "herd cancel")):
+            rc, _, err = self.run_cli(*args)
+            self.assertEqual(rc, 1, args)
+            self.assertIn(f"usage: {usage}", err)
+
+    def test_help_and_unknown_command(self):
+        rc, out, _ = self.run_cli("help")
+        self.assertEqual(rc, 0)
+        self.assertIn("herd cancel", out)
+        rc, _, err = self.run_cli("frobnicate")
+        self.assertEqual(rc, 2)
+        self.assertIn("unknown command `frobnicate`", err)
+
+
+class TestCancel(Base):
+    def test_cancel_stops_the_gate_and_keeps_the_record(self):
+        self.task()
+        self.assertEqual(herd.gate(self.root, {})["decision"], "block")
+        herd.cancel_task(self.root, "t1", "the human changed their mind")
+        self.assertIsNone(herd.gate(self.root, {}))
+        self.assertFalse((self.root / ".herd/active").exists())
+        self.assertFalse((self.root / ".herd/tasks/t1/gate_blocks").exists())
+        self.assertTrue((self.root / ".herd/tasks/t1/task.toml").exists())
+        self.assertEqual(herd.cancelled(self.root, "t1")["reason"], "the human changed their mind")
+
+    def test_gate_ignores_a_cancelled_task_even_if_marked_active(self):
+        self.task()
+        herd.cancel_task(self.root, "t1")
+        (self.root / ".herd/active").write_text("t1\n")
+        self.assertIsNone(herd.gate(self.root, {}))
+
+    def test_cancel_unknown_task_fails(self):
+        with self.assertRaises(ValueError):
+            herd.cancel_task(self.root, "nope")
+
+    def test_cli_cancel_and_status(self):
+        run = lambda *a: subprocess.run(["python3", str(Path(herd.__file__)), *a], cwd=self.root,
+                                        capture_output=True, text=True)
+        run("init", "t1", "g")
+        p = run("cancel", "--reason", "superseded")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        p = run("status")
+        self.assertIn("cancelled at", p.stdout)
+        self.assertIn("superseded", p.stdout)
+
+
+def _old_python():
+    for exe in ("/usr/bin/python3", "python3.10", "python3.9"):
+        path = shutil.which(exe)
+        if not path:
+            continue
+        v = subprocess.run([path, "-c", "import sys; print(sys.version_info < (3, 11))"], capture_output=True, text=True)
+        if v.stdout.strip() == "True":
+            return path
+    return None
+
+
+@unittest.skipUnless(_old_python(), "no Python older than 3.11 on this machine")
+class TestOldPython(Base):
+    def run_old(self, *args):
+        return subprocess.run([_old_python(), str(Path(herd.__file__)), *args], cwd=self.root,
+                              input="{}", capture_output=True, text=True)
+
+    def test_hooks_exit_quietly(self):
+        for hook in ("gate", "lint"):
+            p = self.run_old(hook)
+            self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "", ""), hook)
+
+    def test_cli_names_the_version_it_needs(self):
+        p = self.run_old("status")
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("herd needs Python 3.11 or newer", p.stderr)
 
 
 if __name__ == "__main__":

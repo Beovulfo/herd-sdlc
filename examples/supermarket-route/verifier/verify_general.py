@@ -272,7 +272,6 @@ def one_tree_bound(canon):
     maps = [bfs_flat(rows, w, h, s) for s in sets]  # distance from the nearest cell of each set
     n = len(sets)
     D = [[0 if i == j else min(maps[i][c] for c in sets[j] if maps[i][c] >= 0) for j in range(n)] for i in range(n)]
-    inf = math.inf
     in_tree, key, total = {1}, {j: D[1][j] for j in range(2, n)}, 0
     while key:
         j = min(key, key=key.get)

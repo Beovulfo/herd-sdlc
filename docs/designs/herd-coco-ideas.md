@@ -56,11 +56,11 @@ v0.2 adds four small things, three of them ideas from the [Coco workflow plugin]
 | `go.mod` | go | `go test ./...` | `go vet ./...` |
 | `Makefile` with a `test:` target | make | `make test` | none |
 
-The conventions are from general knowledge, not docs; the human confirms them in the skill. Other ecosystems return an empty list. Wrapped by `herd detect` (prints JSON). Check: `python3 -m unittest scripts.test_herd_detect`, one fixture directory per row plus the npm-init stub and an empty directory.
+The conventions are from general knowledge, not docs; the human confirms them in the skill. Other ecosystems return an empty list. Wrapped by `herd detect` (prints JSON). Check: `python3 -m unittest tests.test_herd_detect`, one fixture directory per row plus the npm-init stub and an empty directory.
 
 ### Step B: check hygiene (advisory)
 
-`herd check` prints warnings, still exit 0, for a `check` that is only `true`, `:`, `exit 0`, `echo ...`, `test -f` or `test -e`. It is a denylist: it will miss `python3 -c pass` and may flag a legitimate `grep -q`. A warning never blocks. Warnings are a separate list returned by `validate_task`, printed after `ok`. Check: `python3 -m unittest scripts.test_herd_cli -k hygiene`.
+`herd check` prints warnings, still exit 0, for a `check` that is only `true`, `:`, `exit 0`, `echo ...`, `test -f` or `test -e`. It is a denylist: it will miss `python3 -c pass` and may flag a legitimate `grep -q`. A warning never blocks. Warnings are a separate list returned by `validate_task`, printed after `ok`. Check: `python3 -m unittest tests.test_herd_cli -k hygiene`.
 
 ### Step C: quick route
 
@@ -69,14 +69,14 @@ The conventions are from general knowledge, not docs; the human confirms them in
 * **What quick skips:** the criteria interview, the approval question and the fresh-context review. **What it keeps:** red first (reported, see Step D), `verify`, the Stop gate and the evidence report.
 * Triage is advisory: a goal that names no path floors at `medium`, so a risky change can be described to dodge a `high` floor. The human sees `route = "quick"` in the report. Quick is meant for one-file changes the agent states as such.
 * `skills/run`: step 1 chooses the route.
-Check: `python3 -m unittest scripts.test_herd_cli -k quick`.
+Check: `python3 -m unittest tests.test_herd_cli -k quick`.
 
 ### Step D: test-budget note and red report
 
 * `task.toml` gains optional `test_budget`, a free-text string: what is tested at which level and what is deliberately not tested. `report` prints it. No warning, no enforcement.
 * `herd verify` writes `red.json` once, on the first verify for a task: each criterion's status. `report` adds a line: `first verify: N of M checks failed before the work`. No gate rule and no waiver: a check green from the start is visible, and the human judges it. This is a visibility aid, not a guard.
 * `skills/criteria` gets a short "test budget" section; `skills/run` review step compares the diff to the budget in both directions (missing coverage and low-value extra tests).
-Check: `python3 -m unittest scripts.test_herd_cli -k budget` and `-k red`.
+Check: `python3 -m unittest tests.test_herd_cli -k budget` and `-k red`.
 
 ### Step E: lint hook
 
@@ -84,7 +84,7 @@ Check: `python3 -m unittest scripts.test_herd_cli -k budget` and `-k red`.
 * `herd lint` is a PostToolUse command hook. It reads the payload, takes `tool_input.file_path` and `cwd`, and does nothing unless a Herd task is active in `cwd`, `[lint]` is configured and the path matches the globs. It runs the command through the existing `run_check` with the path shell-quoted. On a non-zero exit it prints `{"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": "<output tail, 2000 chars>"}}`, which adds context without blocking, so there is no loop and no circuit breaker is needed. Exit 0 and no output otherwise. This output shape is from the Claude Code hooks docs (https://code.claude.com/docs/en/hooks); the test checks that exact shape.
 * `hooks/hooks.json` adds `PostToolUse` with matcher `Edit|Write` and `timeout` 30 (above the 20 second default). Other editing tools (`MultiEdit`, `NotebookEdit`) are not matched, and the README says so.
 * **Trust:** the command comes from `herd.toml` in the repository and runs with the user's permissions, the same trust as a `check` in `task.toml`. `herd.toml` is on the triage high-floor list, so editing it is already a high-risk change. `herd_triage` ignores other top-level tables, so `[lint]` does not break triage (covered by `test_other_top_level_keys_ignored`).
-Check: `python3 -m unittest scripts.test_herd_lint`: no config, no active task, glob miss, failing lint, passing lint, timeout, a path with spaces and shell characters, and the exact JSON shape.
+Check: `python3 -m unittest tests.test_herd_lint`: no config, no active task, glob miss, failing lint, passing lint, timeout, a path with spaces and shell characters, and the exact JSON shape.
 
 ### Step F: `/herd:evidence` skill
 
@@ -95,7 +95,7 @@ A human-invoked, interactive skill (not part of `/herd:run`, which asks nothing)
 4. Show the advisory hygiene warnings (Step B) and ask for a check that runs project code.
 5. Run `herd verify` and show the evidence for the human to review.
 `skills/run` points to detected defaults. Per-type reference files are deferred.
-Check: `python3 -m unittest scripts.test_herd_cli -k detect_cli`, plus an agent trial on a scratch repo (manual).
+Check: `python3 -m unittest tests.test_herd_cli -k detect_cli`, plus an agent trial on a scratch repo (manual).
 
 ### Step G: docs
 

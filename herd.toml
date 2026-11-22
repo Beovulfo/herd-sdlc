@@ -1,14 +1,30 @@
+# Herd's own config for this repository (Herd is developed with Herd).
+# A project using the plugin does not need this file: without it, Herd uses the same
+# default floor rules. Copy it to your project root to change them.
+
+# File extensions `herd triage` reads as paths in a task description.
 path_extensions = ["py", "ts", "js", "sql", "toml", "json", "md"]
 
+# Risk floor: a task touching a matching path starts at this risk level.
+# High risk means one approval question before building and no quick route.
 [floor]
 high = ["migrations/**", "auth/**", "billing/**", "herd.toml"]
 medium = ["api/**"]
 
+# Used by the planned GitHub automation (docs/designs/herd-arbiter.md), not by the local autopilot.
 [arbiter]
 model = "inherit"
 
+# Used by the planned GitHub automation (docs/designs/herd-escalation.md), not by the local autopilot.
 # Placeholder values for the owner to set, not a recommendation.
 [budget]
 tokens = 500000
 minutes = 60
 raise_by_pct = 50
+
+# Optional per-file lint after each edit while a task is active. Print a block for your
+# project with `herd lint --suggest`. Example:
+# [lint]
+# command = "ruff check {file}"
+# globs = ["**/*.py"]
+# timeout_s = 20

@@ -88,8 +88,8 @@ def size(folder, code_file, tests):
     documented = sum(ast.get_docstring(f) is not None for f in funcs)
     test_files = list((root / tests).glob("test_*.py")) if tests != "." else list(root.glob("test_*.py"))
     tsrc = "".join(f.read_text() for f in test_files)
-    code = sum(1 for l in src.splitlines() if l.strip() and not l.strip().startswith("#"))
-    tcode = sum(1 for l in tsrc.splitlines() if l.strip() and not l.strip().startswith("#"))
+    code = sum(1 for ln in src.splitlines() if ln.strip() and not ln.strip().startswith("#"))
+    tcode = sum(1 for ln in tsrc.splitlines() if ln.strip() and not ln.strip().startswith("#"))
     n_tests = len(re.findall(r"def test_\w+", tsrc)) or len(re.findall(r"^def test_|^def check_|\bassert\b", tsrc, re.M))
     return code, tcode, n_tests, len(funcs), documented
 

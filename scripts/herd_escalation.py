@@ -1,4 +1,5 @@
 """Herd Escalation, hold and resume (M0). See docs/designs/herd-escalation.md.
+Not wired into the CLI yet: a tested building block for the planned GitHub automation.
 
 Standard library only. Pure functions: they take a list of GitHub events and return
 values; the orchestrator does the `gh` calls.

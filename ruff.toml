@@ -1,0 +1,5 @@
+# The two agent-written solutions in the benchmark are kept exactly as the runs produced them.
+extend-exclude = ["examples/supermarket-route/with-herd", "examples/supermarket-route/without-herd"]
+
+[lint]
+ignore = ["E731"]  # small lambdas in tests read fine

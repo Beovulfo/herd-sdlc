@@ -1,7 +1,6 @@
 """Herd Triage (M0): deterministic risk floor. See docs/designs/herd-triage.md.
 
-Standard library only. Pure functions except write_record. Python 3.13+
-(PurePosixPath.full_match).
+Standard library only. Pure functions except write_record. Python 3.11+.
 """
 import json
 import os
@@ -9,6 +8,26 @@ import re
 import tempfile
 import tomllib
 from pathlib import PurePosixPath
+
+
+def _glob_re(pattern):
+    segs, out = pattern.split("/"), []
+    for i, seg in enumerate(segs):
+        if seg == "**":  # zero or more segments; a trailing ** needs at least one, as in full_match
+            out.append("(?:[^/]+/)+" if i == len(segs) - 1 else "(?:[^/]+/)*")
+        else:
+            out.append("".join("[^/]*" if ch == "*" else "[^/]" if ch == "?" else re.escape(ch) for ch in seg) + "/")
+    return "".join(out)
+
+
+def glob_match(path, pattern):
+    """PurePosixPath(path).full_match(pattern), with a fallback for Python 3.11 and 3.12.
+
+    ponytail: the fallback handles *, ? and **, not [seq] classes; add them if a rule needs one.
+    """
+    if hasattr(PurePosixPath, "full_match"):
+        return PurePosixPath(path).full_match(pattern)
+    return re.fullmatch(_glob_re(pattern), path + "/") is not None
 
 LEVELS = ("low", "medium", "high")
 DEFAULT_RULES = {
@@ -46,7 +65,7 @@ def floor(paths, labels, rules):
     matched, level = [], None
     for lvl in ("high", "medium"):
         for glob in rules.get(lvl, []):
-            if any(PurePosixPath(p).full_match(glob) for p in paths):
+            if any(glob_match(p, glob) for p in paths):
                 matched.append(glob)
                 level = level or lvl
     source = "issue_text" if matched else "default"

@@ -141,7 +141,8 @@ def verify(root, slug):
         results.append(r)
     summary = {s: sum(r["status"] == s for r in results) for s in ("passing", "failing", "unchecked")}
     head = _git(root, "rev-parse", "HEAD").decode().strip() or "none"
-    ev = {"task": slug, "goal": task["goal"], "at": now(), "head": head,
+    dirty = bool(_git(root, "status", "--porcelain", "--", ".", ":!.herd").strip())
+    ev = {"task": slug, "goal": task["goal"], "at": now(), "head": head, "dirty": dirty,
           "fingerprint": fingerprint(root), "task_sha": _task_sha(root, slug),
           "results": results, "summary": summary}
     (_dir(root, slug) / "evidence.json").write_text(json.dumps(ev, indent=2))
@@ -156,7 +157,7 @@ def load_evidence(root, slug):
 def report(ev):
     s = ev["summary"]
     lines = [f"# Evidence: {ev['task']}", "", f"Goal: {ev['goal']}",
-             f"Run at {ev['at']} on commit {ev['head'][:12]}",
+             f"Run at {ev['at']} on commit {ev['head'][:12]}" + (" plus uncommitted changes" if ev.get("dirty") else ""),
              f"Result: {s['passing']} passing, {s['failing']} failing, {s['unchecked']} unchecked", "",
              "| id | status | source | check |", "| --- | --- | --- | --- |"]
     for r in ev["results"]:
@@ -219,7 +220,7 @@ def main(argv):
     try:
         if cmd == "init":
             init_task(root, args[0], args[1])
-            print(f"created .herd/tasks/{args[0]}/task.toml: add success criteria with checks")
+            print(f"created .herd/tasks/{args[0]}/task.toml (commented template): add criteria with checks, then run `herd check`")
         elif cmd == "check":
             errs = validate_task(load_task(root, _slug_arg(root, args)))
             print("\n".join(errs) if errs else "ok")
@@ -247,6 +248,7 @@ def main(argv):
             (_dir(root, slug) / "evidence.md").write_text(text)
             (root / ".herd" / "active").unlink(missing_ok=True)
             print(text)
+            print("done: evidence is fresh and passing")
         elif cmd == "gate":
             raw = sys.stdin.read() if not sys.stdin.isatty() else ""
             hook = json.loads(raw) if raw.strip() else {}

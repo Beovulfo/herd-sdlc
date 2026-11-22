@@ -15,7 +15,7 @@ Criteria live in `.herd/tasks/<slug>/task.toml`.
 3. **Human criteria are authoritative.** If the human wrote criteria, copy them with `source = "human"` and never reword, drop or weaken them. Add your own as `source = "agent-proposed"`.
 4. **Fill gaps, never block.** A missing check is yours to write: a test, a script, or a proxy measure. Say which in `text`. Only if nothing can run, set `check = ""`; the criterion is then `unchecked` and is reported as such, never counted as met.
 5. **Include one edge or failure case.** Wrong input, empty state, or the thing that must not change.
-6. **The check must fail first.** Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/herd.py" verify` before building. A check that already passes proves nothing: tighten it.
+6. **The check must fail first.** Run `herd verify` before building (`herd` is `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/herd.py"`). A check that already passes proves nothing: tighten it.
 7. **Fast checks.** Each under a minute. For slow ones set `timeout_s`.
 
 ## Format
@@ -36,4 +36,4 @@ source = "agent-proposed"
 check = "python3 -m unittest tests.test_export_empty"
 ```
 
-Validate with `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/herd.py" check`.
+Checks run from the project root. Validate the file with `herd check`.

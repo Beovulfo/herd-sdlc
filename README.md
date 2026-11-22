@@ -60,7 +60,7 @@ Then, inside your project:
 /herd:run Add a --json flag to the export command. Output must be valid JSON with every row.
 ```
 
-Herd creates the task, writes criteria with checks (and shows them to you), builds, reviews, verifies, and ends with an evidence report. For high-risk changes it asks one approval question before building. If you want to approve the criteria first on every task, say so in the request.
+Herd creates the task, writes criteria with checks (and shows them to you), runs them once to see them fail, builds on a `herd/<slug>` branch, gets a fresh-context review, verifies, and ends with an evidence report. For high-risk changes it asks one approval question before building. If you want to approve the criteria first on every task, say so in the request.
 
 Try it without an agent, to see the harness itself:
 
@@ -138,7 +138,7 @@ If the agent tries to finish while a check is failing, the Stop hook answers ins
 
 ## Status
 
-Version 0.1, an MVP. Working and covered by 84 unit tests: the evidence harness (`scripts/herd.py`), the Stop gate, and the risk-floor module. Not yet done: the `herd:run` skill has not been exercised at scale by many live agent runs, and issue-to-pull-request automation on GitHub is still design work.
+Version 0.1, an MVP. Working and covered by 85 unit tests: the evidence harness (`scripts/herd.py`), the Stop gate, and the risk-floor module. One trial run, where a fresh agent followed the `herd:run` skill text in a scratch repo, got a 5-criterion task to a passing `herd done`, and its notes on unclear wording were fixed. Not yet done: many live runs through the installed plugin, and issue-to-pull-request automation on GitHub, which is still design work.
 
 ## The design behind it
 

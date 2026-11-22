@@ -100,6 +100,16 @@ class TestVerify(Base):
         r = herd.verify(self.root, "t1")["results"][0]
         self.assertLessEqual(len(r["output_tail"]), herd.TAIL_CHARS)
 
+    def test_dirty_flag_in_evidence_and_report(self):
+        self.task()
+        ev = herd.verify(self.root, "t1")
+        self.assertFalse(ev["dirty"])  # only .herd/ exists, and it is ignored
+        self.assertNotIn("uncommitted", herd.report(ev))
+        (self.root / "greet.txt").write_text("hello")  # new untracked file counts as uncommitted work
+        ev = herd.verify(self.root, "t1")
+        self.assertTrue(ev["dirty"])
+        self.assertIn("plus uncommitted changes", herd.report(ev))
+
     def test_report_text(self):
         self.task()
         (self.root / "greet.txt").write_text("hello")
@@ -182,6 +192,7 @@ class TestCli(Base):
         self.assertEqual(rc, 0)
         self.assertFalse((self.root / ".herd/active").exists())
         self.assertTrue((self.root / ".herd/tasks/t1/evidence.md").exists())
+        self.assertIn("done: evidence is fresh and passing", out)
 
     def test_done_refuses_when_not_passing(self):
         self.run_cli("init", "t1", "g")

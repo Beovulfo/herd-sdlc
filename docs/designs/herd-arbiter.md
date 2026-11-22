@@ -75,7 +75,7 @@ In EGM a human triages every finding. Herd step 7 replaces that human with an ag
 
 ## Technical Plan
 
-**Roles.** The Arbiter is a read-only agent (Read, Grep, Glob; no network, no secrets, no project instruction files). It returns JSON. `scripts/herd_arbiter.py` has the orchestrator-side code: it builds the input, validates the output, applies the policy checks and is the only writer of `decisions.md`. The caller (the orchestrator) loads `herd.yaml`, supplies the Elephant model name and the optional Arbiter model name, and starts the fresh-context agent. The module imports no YAML library.
+**Roles.** The Arbiter is a read-only agent (Read, Grep, Glob; no network, no secrets, no project instruction files). It returns JSON. `scripts/herd_arbiter.py` has the orchestrator-side code: it builds the input, validates the output, applies the policy checks and is the only writer of `decisions.md`. The caller (the orchestrator) loads `herd.toml`, supplies the Elephant model name and the optional Arbiter model name, and starts the fresh-context agent. The module reads no config file.
 
 **Finding.** A dict `{persona, severity, scope, text}`. Findings with the same normalised text (lower case, whitespace collapsed) from several personas are merged into one finding with a persona list. The id is the first 8 hex characters of SHA-1 over the normalised text. A reviewer that rephrases a finding gets a new id; that is accepted (see Risks).
 
@@ -201,9 +201,9 @@ findings + spec + rubric + prior rulings
 | 1 | `finding_id()`, `merge_findings()`, `validate()` | `python3 -m unittest scripts.test_herd_arbiter.TestValidate` passes |
 | 2 | `build_input()`, `format_lines()`, `needs_audit()`, `overturn_rate()`, `summary()` | `python3 -m unittest scripts.test_herd_arbiter` passes (all tests) |
 | 3 | `rubrics/arbiter-v1.md` | `grep -c "^Rule [1-5]:" rubrics/arbiter-v1.md` prints `5` |
-| 4 | `agents/herd-arbiter.md`; `herd.yaml` key | `python3 -c "import yaml; print(yaml.safe_load(open('herd.yaml'))['arbiter'])"` prints `{'model': None}` |
+| 4 | `agents/herd-arbiter.md`; `herd.toml` key | `python3 -c "import tomllib; print(tomllib.load(open('herd.toml','rb')).get('arbiter'))"` prints `{'model': 'inherit'}` |
 
-Phase 4 needs the Triage design's `herd.yaml` and its PyYAML pin (`docs/designs/herd-triage.md`). If that file does not exist yet, create it with only the `arbiter` key.
+Phase 4 modifies the `herd.toml` from the Triage design (`docs/designs/herd-triage.md`). If that file does not exist yet, create it with only the `arbiter` table.
 
 ### Target Files to Create/Modify
 
@@ -235,10 +235,10 @@ Phase 4 needs the Triage design's `herd.yaml` and its PyYAML pin (`docs/designs/
 * **Type / Scope**: Agent definition with tools Read, Grep and Glob, and no inherited project instruction files.
 * **Proposed Changes**: Points to the rubric and states the output contract.
 
-#### 5. `herd.yaml` (Modify; Create if the Triage design has not made it)
+#### 5. `herd.toml` (Modify; Create if the Triage design has not made it)
 
 * **Type / Scope**: Config.
-* **Proposed Changes**: Add `arbiter: {model: null}`. `null` means the Arbiter inherits the Elephant's model.
+* **Proposed Changes**: Add `[arbiter]` with `model = "inherit"`. The value `inherit` (TOML has no null) means the Arbiter uses the Elephant's model, and the caller then sets `arbiter_model` to none.
 
 ### Verification Plan
 

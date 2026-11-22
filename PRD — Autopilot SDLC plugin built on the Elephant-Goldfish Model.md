@@ -88,9 +88,9 @@ Steps 1 to 9; the only human step is 4.
 
 **Arbiter authority.** A fresh-context agent that receives the findings, the spec and a rubric. For each finding it accepts, rejects or defers, with a one-line reason and a path or line citation. In M0 it may auto-reject only Nit findings; Blocker and Major rulings are logged and audited by sample (section 3). Where the harness allows, the Arbiter uses a different model from the Elephant; where it does not, results are reported with that caveat.
 
-**State.** The current step is derived from GitHub (issue labels, PR status) wherever possible. A small record `.herd/state/<feature>.yaml` holds only what GitHub cannot: the round counter, the risk field, and the budget used. One workflow run owns a feature at a time.
+**State.** The current step is derived from GitHub (issue labels, PR status) wherever possible. A small record `.herd/state/<feature>.json` holds only what GitHub cannot: the round counter, the risk field, and the budget used. One workflow run owns a feature at a time.
 
-**Risk floor.** In M0 Triage computes the risk from path rules and labels, with no LLM. `herd.yaml` holds the path rules (for example migrations, auth, public API, billing). Agents can raise the score but never lower it below the rule floor; only a maintainer's `/herd risk` command can.
+**Risk floor.** In M0 Triage computes the risk from path rules and labels, with no LLM. `herd.toml` holds the path rules (for example migrations, auth, public API, billing). Agents can raise the score but never lower it below the rule floor; only a maintainer's `/herd risk` command can.
 
 ## 6. Hypotheses, alternatives, risks
 
@@ -118,9 +118,9 @@ Steps 1 to 9; the only human step is 4.
 | Spec looks right but intent was misread | H1 approves checkable criteria, with agent-proposed ones marked |
 | H1 approved without reading | Track gap-fill rework; a very low rate is a warning |
 | Review noise | The Arbiter defers non-blocking findings to a backlog |
-| Runaway cost | 3-round cap; per-feature budget in `herd.yaml` (tokens, wall-clock) |
+| Runaway cost | 3-round cap; per-feature budget in `herd.toml` (tokens, wall-clock) |
 | Prompt injection through issues and comments | Principle P6: maintainers only, no secrets in agent context |
-| Many features at once | One workflow run per feature; a global concurrency limit in `herd.yaml` |
+| Many features at once | One workflow run per feature; a global concurrency limit in `herd.toml` |
 
 **Open questions**
 - Spike S1 (done, `docs/spikes/s1-egm-unattended.md`): EGM skills pause for the human, so Herd depends on EGM's reviewer agents and rubrics and supplies the gate answers itself; no fork. Open: whether upstream would accept a no-pause flag.
@@ -132,10 +132,10 @@ One line per milestone; each is designed with EGM when it starts.
 
 - **M0** Define half at L1 (this document). First, spike S1 (can EGM run non-interactively) and spike S2 (baseline: EGM by hand on 5 features).
 - **M1** Build: plan, builders, code review, evidence step with a CI-based check runner. Auto-merge at L2 only once minimal rollback exists.
-- **M2** Ship and operate: release gate for high risk, one thin deploy contract (deploy, health and rollback commands in `herd.yaml`), weekly drift loop, daily digest.
+- **M2** Ship and operate: release gate for high risk, one thin deploy contract (deploy, health and rollback commands in `herd.toml`), weekly drift loop, daily digest.
 - **M3** Multi-harness packaging, L3, golden-run tests. Size and path return with the Lite path.
 
-File layouts, schemas (criteria, `herd.yaml`, `decisions.md` lines, state record), scoring scales and CI tools go in `docs/designs/herd-*.md`, written for the milestone being built.
+File layouts, schemas (criteria, `herd.toml`, `decisions.md` lines, state record), scoring scales and CI tools go in `docs/designs/herd-*.md`, written for the milestone being built.
 
 ## 8. Constraints
 

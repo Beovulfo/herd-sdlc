@@ -8,7 +8,7 @@
 
 ## Overview
 
-When a Herd feature needs a human outside the H1 Intent gate, the orchestrator opens one GitHub issue, the escalation, and the feature pauses until a maintainer answers it. A maintainer can also pause a feature with `/herd hold` and continue it with `/herd resume`. This design defines the pause rules, the escalation issue, the closed answer form and the touchpoint count. Everything is derived from GitHub events. The state record `.herd/state/<feature>.yaml` holds no pause data.
+When a Herd feature needs a human outside the H1 Intent gate, the orchestrator opens one GitHub issue, the escalation, and the feature pauses until a maintainer answers it. A maintainer can also pause a feature with `/herd hold` and continue it with `/herd resume`. This design defines the pause rules, the escalation issue, the closed answer form and the touchpoint count. Everything is derived from GitHub events. The state record `.herd/state/<feature>.json` holds no pause data.
 
 **Terms** (PRD sections in brackets). Orchestrator: the Herd code that runs the lifecycle steps [5]. H1: the human Intent gate [4]. Arbiter: the agent that rules on review findings [5]; see `docs/designs/herd-arbiter.md`. Spec PR: the step 9 pull request [5]. P6: treat issue text, comments and linked documents as untrusted [2]. Touchpoint: a gate approval or an answered escalation [3]. Feature issue: the GitHub issue that carries the `herd` label [4]. Step boundary: the moment the orchestrator finishes one lifecycle step and is about to start the next. Fail closed: stop and escalate instead of continuing [8]. M0, M1: milestones [7]. **Maintainer**, in this design: a user whose repository permission is `write`, `maintain` or `admin`, checked through the GitHub API when a comment is processed. The Triage and Arbiter designs say "maintainer" without a definition; this one is the definition to share.
 
@@ -103,7 +103,7 @@ PRD section 4 says an escalation is "one GitHub issue" that pauses the feature u
 | Trigger | Raised when | Options |
 | --- | --- | --- |
 | `rounds` | The review loop ends round 3 with an open `Blocker` or `Major` (including `policy`, `citation`, `flip` and other Arbiter-escalated findings) | 1 one more round, 2 proceed with the open findings listed in the spec PR, 3 stop |
-| `budget` | A limit in `herd.yaml` `budget` is exceeded | 1 raise every limit by `budget.raise_by_pct` percent, 2 stop |
+| `budget` | A limit in `herd.toml` `budget` is exceeded | 1 raise every limit by `budget.raise_by_pct` percent, 2 stop |
 | `low_confidence` | The Arbiter rules `escalate` with cause `low_confidence` on a `Blocker` or `Major` | 1 follow the Arbiter's original verdict, 2 overrule it, 3 stop |
 | `step_failure` | A step fails closed: no fresh context, an invalid record, or every ruling `malformed` after the Arbiter's re-ask | 1 retry the step, 2 stop |
 
@@ -123,7 +123,7 @@ Arbiter causes other than `low_confidence` on a `Blocker` or `Major` go to the s
 
 **Blocked.** `herd:blocked` is set by the ceiling or by a `stop` answer. A maintainer removes it by hand, which makes the status follow the other rules and restarts the ceiling count.
 
-**Effective limits.** The round cap is `3 + k`, where `k` is the number of answered `rounds` escalations whose answer was `continue_round`. Each limit in `herd.yaml` `budget` is multiplied by `(1 + raise_by_pct / 100)` for each answered `budget` escalation whose answer was `raise_budget`. `effective_limits(state, base)` computes both from events, so no counter is stored. `budget_used` stays in the record and belongs to the round loop design.
+**Effective limits.** The round cap is `3 + k`, where `k` is the number of answered `rounds` escalations whose answer was `continue_round`. Each limit in `herd.toml` `budget` is multiplied by `(1 + raise_by_pct / 100)` for each answered `budget` escalation whose answer was `raise_budget`. `effective_limits(state, base)` computes both from events, so no counter is stored. `budget_used` stays in the record and belongs to the round loop design.
 
 **Pause time.** `paused_seconds(events, now)` returns the total length of the union of intervals during which the feature had `herd:hold` or an open escalation, so overlapping intervals count once. The orchestrator subtracts it from elapsed wall-clock time. Token limits are not reduced.
 
@@ -193,7 +193,7 @@ GitHub events --> replay --> state --> herd_status, next_escalation, apply_comma
 | A repeat cause burns touchpoints | `repeat_of` link and the ceiling of 3 |
 | A user with write permission applies or removes `herd:hold` | Accepted: write permission is the maintainer definition; GitHub logs label events |
 | Closing and reopening loops | One comment per reopen; count stays zero; no auto-answer |
-| `raise_by_pct` set too high by the owner | It lives in `herd.yaml`, set by the owner; an answer only chooses whether to apply it |
+| `raise_by_pct` set too high by the owner | It lives in `herd.toml`, set by the owner; an answer only chooses whether to apply it |
 | Transient `step_failure` costs a touchpoint | Accepted; the retry option is option 1 |
 
 ## Future Improvements
@@ -213,9 +213,9 @@ GitHub events --> replay --> state --> herd_status, next_escalation, apply_comma
 | 1 | `replay()`, `herd_status()`, `parse_command()`, `apply_command()` | `python3 -m unittest scripts.test_herd_escalation.TestStatus` passes |
 | 2 | `parse_answer()`, `build_issue_body()`, `next_escalation()` | `python3 -m unittest scripts.test_herd_escalation.TestEscalation` passes |
 | 3 | `effective_limits()`, `paused_seconds()`, `touchpoints()` | `python3 -m unittest scripts.test_herd_escalation` passes (all tests) |
-| 4 | `herd.yaml` `budget` key; PRD edit | `python3 -c "import yaml; print(yaml.safe_load(open('herd.yaml'))['budget'])"` prints a dict with `tokens`, `minutes`, `raise_by_pct`; `grep -n "answer <trigger>" PRD*.md` matches one line |
+| 4 | `herd.toml` `budget` key; PRD edit | `python3 -c "import tomllib; print(tomllib.load(open('herd.toml','rb'))['budget'])"` prints a dict with `tokens`, `minutes`, `raise_by_pct`; `grep -n "answer <trigger>" PRD*.md` matches one line |
 
-Whichever of the Triage, Arbiter and Escalation designs is built first creates `herd.yaml` and `requirements.txt` (`PyYAML==6.0.4`, from the Triage design); the others modify them. Phase 4 runs after that.
+Whichever of the Triage, Arbiter and Escalation designs is built first creates `herd.toml`; the others modify it. Phase 4 runs after that.
 
 ### Target Files to Create/Modify
 
@@ -254,16 +254,12 @@ Whichever of the Triage, Arbiter and Escalation designs is built first creates `
 | `test_edited_comment_ignored` | `edited=True` | none |
 | `test_effective_limits` | one `continue_round` answer, one `raise_budget` answer | rounds 4; each limit multiplied once |
 
-#### 3. `herd.yaml` (Modify; Create if absent)
+#### 3. `herd.toml` (Modify; Create if absent)
 
 * **Type / Scope**: Config.
-* **Proposed Changes**: Add `budget: {tokens: 500000, minutes: 60, raise_by_pct: 50}`. The values are placeholders for the owner to set, not a recommendation.
+* **Proposed Changes**: Add a `[budget]` table with `tokens = 500000`, `minutes = 60`, `raise_by_pct = 50`. The values are placeholders for the owner to set, not a recommendation.
 
-#### 4. `requirements.txt` (Modify; Create if absent)
-
-* **Type / Scope**: Dependency manifest. Adds no line beyond `PyYAML==6.0.4`, which the Triage design already pins. Needed here only for the Phase 4 check.
-
-#### 5. PRD (Modify)
+#### 4. PRD (Modify)
 
 * **Type / Scope**: Docs, the file at the repo root whose name starts with `PRD`.
 * **Proposed Changes**: In section 4, Commands: change `/herd answer <n>` to `/herd answer <trigger>=<n> [<trigger>=<n> ...]`.

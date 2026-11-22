@@ -18,7 +18,7 @@ In EGM a human triages every finding. Herd step 7 replaces that human with an ag
 
 ## Goals
 
-* G1: Every finding gets exactly one ruling. A missing, duplicate or unknown ruling id becomes an `escalate` ruling with cause `missing`, `duplicate` or `unknown`. Check: `test_one_ruling_per_finding`.
+* G1: Every finding gets exactly one ruling. A missing or duplicate ruling id becomes an `escalate` ruling with cause `missing` or `duplicate`, and a ruling with an unknown id is ignored. Check: `test_one_ruling_per_finding`.
 * G2: The Arbiter cannot change a severity. The ruling schema has no severity field, and the code copies the severity from the finding. Check: `test_severity_copied`.
 * G3: In M0 a ruling is effective without a human only when it is `accept`, or when it is `decline` or `contest` on a `Nit`. A `decline` or `contest` on a `Blocker` or `Major` becomes `escalate`, cause `policy`, and keeps the Arbiter's original verdict in the log. Check: `test_blocker_major_never_declined`.
 * G4: A non-`escalate` ruling carries a citation with a required quote that resolves in the spec. Otherwise it becomes `escalate`, cause `citation`. Check: `test_citation_resolves`.
@@ -75,7 +75,7 @@ In EGM a human triages every finding. Herd step 7 replaces that human with an ag
 
 ## Technical Plan
 
-**Roles.** The Arbiter is a read-only agent (Read, Grep, Glob; no network, no secrets, no project instruction files). It returns JSON. `scripts/herd_arbiter.py` has the orchestrator-side code: it builds the input, validates the output, applies the policy checks and is the only writer of `decisions.md`. The caller (the orchestrator) loads `herd.toml`, supplies the Elephant model name and the optional Arbiter model name, and starts the fresh-context agent. The module reads no config file.
+**Roles.** The Arbiter is a read-only agent (Read, Grep, Glob; no network, no secrets, no project instruction files). It returns JSON. `scripts/herd_arbiter.py` has the orchestrator-side code: it builds the input, validates the output, applies the policy checks and formats the `decisions.md` lines. The orchestrator is the only writer of `decisions.md`; its line types are `header`, `ruling`, `audit`, and `human` (the Escalation design's answer lines). The caller (the orchestrator) loads `herd.toml`, supplies the Elephant model name and the optional Arbiter model name, and starts the fresh-context agent. The module reads no config file.
 
 **Finding.** A dict `{persona, severity, scope, text}`. Findings with the same normalised text (lower case, whitespace collapsed) from several personas are merged into one finding with a persona list. The id is the first 8 hex characters of SHA-1 over the normalised text. A reviewer that rephrases a finding gets a new id; that is accepted (see Risks).
 
@@ -93,7 +93,7 @@ In EGM a human triages every finding. Herd step 7 replaces that human with an ag
 
 **Policy checks (code).** Applied in this order to each ruling; the first that fails rewrites the ruling to `escalate` and sets `cause`. The Arbiter's own verdict is kept as `arbiter_verdict`.
 1. Output is not valid JSON, or an object breaks the schema: one re-ask of the Arbiter for the whole round; if it fails again, `malformed` for the affected findings.
-2. Id unknown, or listed twice: `unknown`, `duplicate`. A finding with no ruling: `missing`.
+2. Id listed twice: `duplicate`. A finding with no ruling: `missing`. A ruling whose id matches no finding is ignored, so the finding it should have ruled becomes `missing`.
 3. `confidence` is `L`: `low_confidence`.
 4. `decline` or `contest` on a `Blocker` or `Major`: `policy`.
 5. Citation does not resolve: the path is not the spec path, a line is outside the file, or the quote does not appear in the cited lines: `citation`. No re-ask.
@@ -210,7 +210,7 @@ Phase 4 modifies the `herd.toml` from the Triage design (`docs/designs/herd-tria
 #### 1. `scripts/herd_arbiter.py` (Create)
 
 * **Type / Scope**: Python module, standard library only, on the Python version the Triage design pins.
-* **Proposed Changes**: Data shapes: a finding is `{persona, severity, scope, text}`; a ruling is `{id, verdict, arbiter_verdict, cause, conf, citation, reason, severity, personas}`; `prior` maps id to `{arbiter_verdict, quote_sha}`.
+* **Proposed Changes**: As built in `scripts/herd_arbiter.py` (these settle the contract gaps the review found): `finding_id` is the first 8 hex of SHA-1 over lower-cased, whitespace-collapsed text; `quote_sha` is the first 12 hex of the same hash over the quote; line numbers in a citation are 1-based and inclusive; a quote matches when it appears in the cited lines after lower-casing and whitespace collapse; merged findings keep the highest severity; an object that breaks the schema gives `malformed` for its own finding only, while unparseable output gives `malformed` for all, and the caller re-asks once only in that second case. Extra functions: `make_header(round, arbiter_model, elephant_model, rubric_text, spec_text)` (`same_model` is true when the Arbiter model is none, `inherit` or equal to the Elephant's) and `prior_from_lines(lines, round)`. `overturn_rate` returns stats under the keys `same` and `different`, each with `n`, `overturned`, `rate`, `bm_n`, `bm_overturned`, `bm_rate` (Blocker and Major only) and `escalate_rate`. Data shapes: a finding is `{persona, severity, scope, text}`; a ruling is `{id, verdict, arbiter_verdict, cause, conf, citation, reason, severity, personas}`; `prior` maps id to `{arbiter_verdict, quote_sha}`.
   * `finding_id(text: str) -> str`.
   * `merge_findings(findings: list[dict]) -> list[dict]`: merges same normalised text, adds `id` and `personas`.
   * `build_input(rubric: str, spec: str, prior: dict, findings: list[dict]) -> str`: the prompt in the order above, with data blocks.
@@ -235,7 +235,7 @@ Phase 4 modifies the `herd.toml` from the Triage design (`docs/designs/herd-tria
 * **Type / Scope**: Agent definition with tools Read, Grep and Glob, and no inherited project instruction files.
 * **Proposed Changes**: Points to the rubric and states the output contract.
 
-#### 5. `herd.toml` (Modify; Create if the Triage design has not made it)
+#### 5. `herd.toml` (Modify; Create if absent; the Triage design owns `[floor]`, this design owns `[arbiter]`)
 
 * **Type / Scope**: Config.
 * **Proposed Changes**: Add `[arbiter]` with `model = "inherit"`. The value `inherit` (TOML has no null) means the Arbiter uses the Elephant's model, and the caller then sets `arbiter_model` to none.

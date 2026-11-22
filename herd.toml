@@ -1,0 +1,14 @@
+path_extensions = ["py", "ts", "js", "sql", "toml", "json", "md"]
+
+[floor]
+high = ["migrations/**", "auth/**", "billing/**", "herd.toml"]
+medium = ["api/**"]
+
+[arbiter]
+model = "inherit"
+
+# Placeholder values for the owner to set, not a recommendation.
+[budget]
+tokens = 500000
+minutes = 60
+raise_by_pct = 50

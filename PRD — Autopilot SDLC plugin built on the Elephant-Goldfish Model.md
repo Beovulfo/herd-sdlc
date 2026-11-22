@@ -86,7 +86,7 @@ Steps 1 to 9; the only human step is 4.
 
 **New personas.** Only the **Arbiter** in M0, and the **Evidence Auditor** in M1. Every other reviewer is an existing EGM persona with a different rubric.
 
-**Arbiter authority.** A fresh-context agent that receives the findings, the spec and a rubric. For each finding it accepts, rejects or defers, with a one-line reason and a path or line citation. In M0 it may auto-reject only Nit findings; Blocker and Major rulings are logged and audited by sample (section 3). Where the harness allows, the Arbiter uses a different model from the Elephant; where it does not, results are reported with that caveat.
+**Arbiter authority.** A fresh-context agent that receives the findings, the spec and a rubric. For each finding it accepts, contests, declines or escalates, with a one-line reason and a path or line citation. In M0 it may auto-reject only Nit findings; Blocker and Major rulings are logged and audited by sample (section 3). Where the harness allows, the Arbiter uses a different model from the Elephant; where it does not, results are reported with that caveat.
 
 **State.** The current step is derived from GitHub (issue labels, PR status) wherever possible. A small record `.herd/state/<feature>.json` holds only what GitHub cannot: the round counter, the risk field, and the budget used. One workflow run owns a feature at a time.
 
@@ -117,7 +117,7 @@ Steps 1 to 9; the only human step is 4.
 | Arbiter rubber-stamps the Elephant (shared model bias) | Different model where possible; human audit; Nit-only auto-reject in M0; escalate on low confidence |
 | Spec looks right but intent was misread | H1 approves checkable criteria, with agent-proposed ones marked |
 | H1 approved without reading | Track gap-fill rework; a very low rate is a warning |
-| Review noise | The Arbiter defers non-blocking findings to a backlog |
+| Review noise | The Arbiter declines Nit findings and escalates what it cannot settle |
 | Runaway cost | 3-round cap; per-feature budget in `herd.toml` (tokens, wall-clock) |
 | Prompt injection through issues and comments | Principle P6: maintainers only, no secrets in agent context |
 | Many features at once | One workflow run per feature; a global concurrency limit in `herd.toml` |

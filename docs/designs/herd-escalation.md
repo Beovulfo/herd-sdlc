@@ -113,13 +113,14 @@ Arbiter causes other than `low_confidence` on a `Blocker` or `Major` go to the s
 
 **Escalation issue.** `build_issue_body(feature, causes)` fills a fixed template with no model call, so an over-budget feature cannot overspend to report itself. Contents: the feature issue number, each cause with its numbered options, and the answer syntax with a worked line. Finding text and reasons are not included, only ids. The issue has the label `herd:escalation` and never the `herd` label. Its first line is a hidden marker `<!-- herd:escalation v1 feature=<n> -->`, trusted only when the issue author is the bot. It is assigned to the maintainers. A trigger whose `(feature, trigger, step)` matches an earlier answered escalation opens a new issue with `repeat_of` set, and counts as a touchpoint again.
 
-**Commands.** `parse_command(body, author_is_bot, edited)` takes the first line of the comment that is outside code fences and not quoted (starts with `>`), and matches one of `/herd hold`, `/herd resume` or `/herd answer ` followed by one or more `<trigger>=<n>` pairs. Bot-authored and edited comments return none. Commands go on the feature issue, except `/herd answer`, which goes on the escalation issue. `apply_command(state, command, is_maintainer)` returns `{action, reply}` as in this table:
+**Commands.** `parse_command(body, author_is_bot, edited)` takes the first line of the comment that is outside code fences and not quoted (starts with `>`), and matches one of `/herd hold`, `/herd resume`, `/herd risk <low|medium|high>` or `/herd answer ` followed by one or more `<trigger>=<n>` pairs. Bot-authored and edited comments return none. Commands go on the feature issue, except `/herd answer`, which goes on the escalation issue. `apply_command(state, command, is_maintainer)` returns `{action, reply}` as in this table:
 
 | Command | `running` | `held` | `awaiting_answer` | `held_and_awaiting` | `blocked` |
 | --- | --- | --- | --- | --- | --- |
 | `/herd hold` | add label | reply "already held" | add label | reply "already held" | no action |
 | `/herd resume` | reply "not paused" | remove label | reply naming the open issue | remove label, reply naming the issue | no action |
 | `/herd answer` | no action | no action | validate, close on valid | validate, close on valid; the hold stays | no action |
+| `/herd risk <level>` | `set_risk` | `set_risk` | `set_risk` | `set_risk` | no action |
 
 **Blocked.** `herd:blocked` is set by the ceiling or by a `stop` answer. A maintainer removes it by hand, which makes the status follow the other rules and restarts the ceiling count.
 
@@ -222,11 +223,11 @@ Whichever of the Triage, Arbiter and Escalation designs is built first creates `
 #### 1. `scripts/herd_escalation.py` (Create)
 
 * **Type / Scope**: Python module, standard library only, on the Python version the Triage design pins. Pure functions; no `gh` calls and no file writes.
-* **Proposed Changes**: An event is a dict with `type` and `at` (ISO 8601 UTC string), plus the fields for its type: `label_added` and `label_removed` (`label`); `issue_opened` (`issue`, `kind` of `feature` or `escalation`; for an escalation also `causes` and `repeat_of`); `issue_closed` and `issue_reopened` (`issue`); `comment` (`issue`, `id`, `body`, `author`, `author_is_bot`, `author_is_maintainer`, `edited`). `replay` yields a state `{labels: set, escalations: list}`, each escalation `{number, causes, repeat_of, opened_at, closed_at, answer}` where `answer` is the first valid maintainer answer or none. An escalation is open while `answer` is none.
+* **Proposed Changes**: As built in `scripts/herd_escalation.py`: besides the event types below, `cause_added` (`issue`, `cause`) extends an open escalation, merging finding ids when the trigger already exists; `replay` also returns `blocked_removed_at`, the time `herd:blocked` was last removed, which starts the ceiling window; `apply_command` takes the escalation issue number as `issue` for `/herd answer`; an answer is `{actor, comment_id, pairs, at}` and is the first valid answer by a maintainer, validated against the causes present when the comment arrived. An event is a dict with `type` and `at` (ISO 8601 UTC string), plus the fields for its type: `label_added` and `label_removed` (`label`); `issue_opened` (`issue`, `kind` of `feature` or `escalation`; for an escalation also `causes` and `repeat_of`); `issue_closed` and `issue_reopened` (`issue`); `comment` (`issue`, `id`, `body`, `author`, `author_is_bot`, `author_is_maintainer`, `edited`). `replay` yields a state `{labels: set, escalations: list}`, each escalation `{number, causes, repeat_of, opened_at, closed_at, answer}` where `answer` is the first valid maintainer answer or none. An escalation is open while `answer` is none.
   * `replay(events: list[dict]) -> dict`.
   * `herd_status(state: dict) -> str`: the precedence in Overview.
-  * `parse_command(body: str, author_is_bot: bool, edited: bool) -> dict | None`: `{name: hold | resume | answer, pairs: dict[str, int]}`.
-  * `apply_command(state: dict, command: dict, is_maintainer: bool) -> dict`: `{action, reply}` as in the table; `action` is `add_label`, `remove_label`, `close_issue` or none.
+  * `parse_command(body: str, author_is_bot: bool, edited: bool) -> dict | None`: `{name: hold | resume | answer | risk, pairs: dict[str, int], level: str | None}`.
+  * `apply_command(state: dict, command: dict, is_maintainer: bool) -> dict`: `{action, reply}` as in the table; `action` is `add_label`, `remove_label`, `close_issue`, `set_risk` (the orchestrator then calls Triage's `apply_override`) or none.
   * `parse_answer(pairs: dict[str, int], causes: list[dict]) -> tuple[bool, str]`: valid only when the keys equal the triggers in `causes` and each value is an option number; otherwise the restating reply.
   * `build_issue_body(feature: int, causes: list[dict]) -> str`.
   * `next_escalation(state: dict, trigger: str, step: int) -> dict`: `{action: append | open | blocked, repeat_of: int | None}`. Order: if an escalation is open, `append`; else if 3 or more were opened since the last `herd:blocked` removal, `blocked`; else `open`, with `repeat_of` set when an answered one matches `(trigger, step)`.
@@ -254,7 +255,7 @@ Whichever of the Triage, Arbiter and Escalation designs is built first creates `
 | `test_edited_comment_ignored` | `edited=True` | none |
 | `test_effective_limits` | one `continue_round` answer, one `raise_budget` answer | rounds 4; each limit multiplied once |
 
-#### 3. `herd.toml` (Modify; Create if absent)
+#### 3. `herd.toml` (Modify; Create if absent; owns the `[budget]` table)
 
 * **Type / Scope**: Config.
 * **Proposed Changes**: Add a `[budget]` table with `tokens = 500000`, `minutes = 60`, `raise_by_pct = 50`. The values are placeholders for the owner to set, not a recommendation.

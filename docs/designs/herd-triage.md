@@ -8,7 +8,7 @@
 
 ## Overview
 
-Triage is step 1 of the Herd lifecycle (PRD section 5). When a maintainer applies the `herd` label to an issue, Triage computes a risk level (`low`, `medium`, `high`; order `low < medium < high`) from path rules in `herd.toml`, and writes it to `.herd/state/<feature>.json`. In M0 Triage is deterministic code with no LLM. The orchestrator and the Arbiter read the record, and the human sees the risk on the H1 Intent gate PR.
+Triage is step 1 of the Herd lifecycle (PRD section 5). When a maintainer applies the `herd` label to an issue, Triage computes a risk level (`low`, `medium`, `high`; order `low < medium < high`) from path rules in `herd.toml`, and writes it to `.herd/state/<feature>.json`. In M0 Triage is deterministic code with no LLM. The orchestrator reads the record (the Arbiter does not in M0), and the human sees the risk on the H1 Intent gate PR.
 
 **Terms** (all in the PRD): Arbiter, orchestrator, H1 (section 4); P6 (section 2); autonomy levels L0 to L3 (section 4); milestones M0 to M3 (section 7).
 
@@ -120,7 +120,7 @@ issue + label + herd.toml (base branch)
 
 * **Pros**: No second store.
 * **Cons**: The Arbiter must parse a PR body, and an override has no stable, structured home.
-* **Reason for Rejection**: Rejected by author: the Arbiter reads the state record by design (PRD section 5, State).
+* **Reason for Rejection**: Rejected by author: the orchestrator reads the state record by design (PRD section 5, State).
 
 --------------------------------------------------------------------------------
 
@@ -165,11 +165,11 @@ issue + label + herd.toml (base branch)
 #### 1. `scripts/herd_triage.py` (Create)
 
 * **Type / Scope**: Python module, Python 3.13 or later (3.13 for `PurePosixPath.full_match`), standard library only. `herd.toml` is read with `tomllib` and the record is read and written as JSON, so there is no dependency.
-* **Proposed Changes**: Four public functions.
+* **Proposed Changes**: Five public functions, plus `effective_of(record)` (a stored record's effective level; an out-of-range value is `high`). As built in `scripts/herd_triage.py`: `build_record(feature, issue, body, labels, herd_toml, prior=None)` takes the text of `herd.toml` or `None` when the file is missing, and an optional prior record. With a prior record it keeps any existing override and every key it does not own, and a prior whose `schema_version` is missing or not 1 gives a fallback with cause `schema`. `cause` values are `herd_toml`, `schema` and `error`.
   * `extract_paths(body: str, extensions: list[str]) -> list[str]`: returns normalised paths as described in Path extraction.
   * `floor(paths: list[str], labels: dict[str, str], rules: dict) -> tuple[str, list[str], str]`: `labels` maps a label name to its applier's role (`maintainer` or `other`). Returns level, matched rules and source (`issue_text`, `label` or `default`).
   * `build_record(feature: str, issue: int, body: str, labels: dict[str, str], herd_toml: str) -> dict`: calls the two functions above; on any exception returns the fallback record. Never raises.
-  * `apply_override(record: dict, level: str, actor: str, comment_id: int, now: str) -> dict`: sets `risk.override` and `risk.effective`; rejects a level outside the three.
+  * `apply_override(record: dict, level: str, actor: str, comment_id: int, now: str) -> dict`: sets `risk.override` and `risk.effective`; raises `ValueError` for a level outside the three. When reading a stored record, an out-of-range level is treated as `high` instead.
   * `write_record(path: str, record: dict) -> None`: writes JSON to a temporary file in the same directory, then renames it.
 
 #### 2. `scripts/test_herd_triage.py` (Create)
@@ -177,7 +177,7 @@ issue + label + herd.toml (base branch)
 * **Type / Scope**: `unittest` file, standard library only.
 * **Proposed Changes**: Tests `test_floor_hit`, `test_no_path`, `test_low_label`, `test_label_raises`, `test_override_recorded`, `test_fallback_cases` (missing file, invalid TOML, unknown key inside `floor`, exception in matching), plus `test_other_top_level_keys_ignored`, plus `test_path_normalisation` (`./a`, `a//b`, `..`, leading `/`, case) and `test_triage_keeps_override`. Inputs are inline literals with generic paths.
 
-#### 3. `herd.toml` (Create, repo root)
+#### 3. `herd.toml` (Create if absent, repo root; the Arbiter and Escalation designs add their own tables)
 
 * **Type / Scope**: Config.
 * **Proposed Changes**: Contents:

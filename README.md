@@ -21,8 +21,10 @@ You review evidence (command output, commit SHA, timestamp), not process.
 ```mermaid
 flowchart LR
     A[Goal] --> B[Intake and risk floor]
-    B --> C[Criteria with checks]
+    B -->|standard| C[Criteria with checks]
+    B -->|trivial: quick route| Q[One criterion, one check]
     C --> D[Build: plan, tests first, code]
+    Q --> D
     D --> E[Fresh-eyes review<br/>medium and high risk]
     E --> F[herd verify<br/>run every check]
     F -->|failing| D
@@ -30,11 +32,11 @@ flowchart LR
     G -.->|Stop hook| F
 ```
 
-1. **Intake.** The task gets a folder, `.herd/tasks/<slug>/task.toml`, and a risk floor computed from path rules in `herd.toml` (migrations, auth, billing, and so on). The agent can raise the risk, never lower it.
-2. **Criteria.** Every criterion is "Given, when, then" with a `check`: a shell command where exit 0 means pass. Criteria you write are authoritative. Criteria the agent adds are marked `agent-proposed`. A criterion with no check is `unchecked` and is never counted as met.
+1. **Intake.** The task gets a folder, `.herd/tasks/<slug>/task.toml`, and a risk floor computed from path rules in `herd.toml` (migrations, auth, billing, and so on). The agent can raise the risk, never lower it. A trivial change takes the **quick route**: one criterion and one check, no criteria interview, no approval question, no review. It is refused at a `high` risk floor and still ends in fresh passing evidence.
+2. **Criteria.** Every criterion is "Given, when, then" with a `check`: a shell command where exit 0 means pass. Criteria you write are authoritative. Criteria the agent adds are marked `agent-proposed`. A criterion with no check is `unchecked` and is never counted as met. `herd detect` proposes the project's real test command, and an optional `test_budget` line records what is tested at which level and what is deliberately not.
 3. **Build.** Tests first, small steps, on a branch. Herd reuses [Superpowers](https://github.com/obra/superpowers) for planning, TDD and subagents when it is installed.
 4. **Review.** For medium and high risk, a fresh-context reviewer looks at the diff: Superpowers code review, or the Goldfish agents from [EGM](https://github.com/google/elephant-goldfish-model) when installed.
-5. **Verify.** `herd verify` runs every check and stores evidence: status, exit code, output tail, commit SHA, a fingerprint of the workspace, a timestamp.
+5. **Verify.** `herd verify` runs every check and stores evidence: status, exit code, output tail, commit SHA, a fingerprint of the workspace, a timestamp, and how many checks failed on the first run (a check that was green before any work is visible).
 6. **Stop gate.** While a task is active, a Stop hook refuses to let the agent finish unless the evidence is fresh and passing. Edit a file after verifying and the evidence is stale. After 3 blocked attempts the gate lets the agent stop so it can ask you one question instead of looping.
 
 ## Quickstart
@@ -61,6 +63,8 @@ Then, inside your project:
 ```
 
 Herd creates the task, writes criteria with checks (and shows them to you), runs them once to see them fail, builds on a `herd/<slug>` branch, gets a fresh-context review, verifies, and ends with an evidence report. For high-risk changes it asks one approval question before building. If you want to approve the criteria first on every task, say so in the request.
+
+For a trivial change, ask for the quick route, or say "quick fix". To plan with Herd how to prove a change for your project type, run `/herd:evidence`.
 
 Try it without an agent, to see the harness itself:
 
@@ -89,7 +93,7 @@ source = "agent-proposed"
 check = "python3 -m unittest test_textutil.TestSlugify.test_empty"
 ```
 
-Before any work, both checks fail (that proves they test something). After the work:
+Optional top-level fields: `test_budget = "unit for parsing; the CLI wrapper is not tested"` and `route = "quick"` (set by `herd init --quick`). Before any work, both checks fail (that proves they test something). After the work:
 
 ```text
 $ python3 scripts/herd.py verify
@@ -100,9 +104,11 @@ $ python3 scripts/herd.py verify
 $ python3 scripts/herd.py done
 # Evidence: slugify
 Result: 2 passing, 0 failing, 0 unchecked
+First verify: 2 of 2 checks failed before the work
 | id | status | source | check |
 | C1 | passing | human | `python3 -m unittest test_textutil.TestSlugify.test_basic` |
 | C2 | passing | agent-proposed | `python3 -m unittest test_textutil.TestSlugify.test_empty` |
+done: evidence is fresh and passing
 ```
 
 If the agent tries to finish while a check is failing, the Stop hook answers instead:
@@ -166,12 +172,13 @@ Version 0.2. Working and covered by 131 unit tests: the evidence harness (`scrip
 Herd is built with its own method, using the [Elephant-Goldfish Model](https://github.com/google/elephant-goldfish-model): an Elephant agent with full context drafts, and Goldfish reviewers with no context check. The requirements and decisions are in the open:
 
 - [`PRD`](PRD%20%E2%80%94%20Autopilot%20SDLC%20plugin%20built%20on%20the%20Elephant-Goldfish%20Model.md): the product requirements, principles and roadmap.
-- [`docs/designs/`](docs/designs): specs for Triage, the Arbiter (an agent that rules on review findings) and Escalation (one issue to pause and ask a human). Each has a tested module in `scripts/` that will power the GitHub automation phase.
+- [`docs/designs/`](docs/designs): specs for Triage, the Arbiter (an agent that rules on review findings) and Escalation (one issue to pause and ask a human), each with a tested module in `scripts/` that will power the GitHub automation phase, plus the [v0.2 plan](docs/designs/herd-coco-ideas.md) (quick route, detection, lint hook, evidence skill) with its review log in `docs/spikes/s1-runs/coco-ideas/`.
+- [`docs/backlog.md`](docs/backlog.md): ideas not yet planned, such as an optional Trail Code integration.
 - [`docs/spikes/`](docs/spikes): spike S1 ran EGM unattended on these three features, with every review report and what broke.
 
 ## Roadmap
 
-- **Now (v0.1):** local autopilot with evidence and the Stop gate.
+- **Now (v0.2):** local autopilot with evidence and the Stop gate, a quick route, project-type detection, an opt-in lint hook and the evidence-planning skill.
 - **Next:** GitHub automation: a labelled issue becomes a reviewed spec, then a pull request, with the Arbiter and Escalation modules.
 - **Later:** a release gate for high-risk changes, and other agent harnesses.
 

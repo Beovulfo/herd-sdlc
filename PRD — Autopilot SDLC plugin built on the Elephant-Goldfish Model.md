@@ -2,6 +2,8 @@
 
 Status: Draft v2 (revised after the EGM review in `review/consolidated_review_report.md`; v1 kept in `review/prd_v1_before_revision.md`) · Date: 2026-11-22 · Author: Toni
 
+> **Implementation status (2026-11-22).** This PRD specifies the full product, including GitHub automation. What exists today is the local autopilot described in [`README.md`](README.md) (v0.2): evidence harness, Stop gate, quick route, detection and lint hook. The Triage, Arbiter and Escalation modules in `scripts/` implement the designs in `docs/designs/` and are not yet wired to GitHub. Where this PRD names `.herd/state/<feature>.json`, the local harness keeps `.herd/tasks/<slug>/` instead.
+
 ## 1. Problem
 
 The Elephant-Goldfish Model (EGM) is a spec-driven workflow: an **Elephant** agent with full project context drafts, and **Goldfish** reviewers with no prior context check the result ([README](https://github.com/google/elephant-goldfish-model)). It covers requirements, design and design review. It does not cover build, test or release, and it needs a person to answer interviews, approve each spec section, triage every finding and merge the spec PR.

@@ -17,6 +17,8 @@ Criteria live in `.herd/tasks/<slug>/task.toml`.
 5. **Include one edge or failure case.** Wrong input, empty state, or the thing that must not change.
 6. **The check must fail first.** Run `herd verify` before building (`herd` is `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/herd.py"`). A check that already passes proves nothing: tighten it.
 7. **Fast checks.** Each under a minute. For slow ones set `timeout_s`.
+8. **Say what you do not test.** For medium and high risk, add a top-level `test_budget = "..."` to `task.toml`: which behaviours are tested at which level (unit, integration, end to end) and what is deliberately left untested. A reviewer compares the diff to it. Pick the level by risk: logic is a unit test, a user flow is an end-to-end test.
+9. **Know your commands.** `herd detect` proposes the project's test and lint commands. `herd check` warns about checks that do not run project code (`true`, `echo`, `test -f`).
 
 ## Format
 

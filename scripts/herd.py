@@ -9,13 +9,15 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import tomllib
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import herd_detect  # noqa: E402
 import herd_triage  # noqa: E402
 
 SELF = os.path.abspath(__file__)
@@ -39,6 +41,24 @@ TEMPLATE = '''goal = {goal}
 '''
 
 
+QUICK = '''route = "quick"
+goal = {goal}
+
+[[criteria]]
+id = "C1"
+text = {goal}
+source = "agent-proposed"
+check = {check}
+'''
+
+VACUOUS = re.compile(r"(true|:|exit 0|echo\b.*|test -[fe] \S+)")
+PER_FILE_LINT = {
+    "python": ('ruff check {file}', '["**/*.py"]'),
+    "node": ('npx eslint {file}', '["**/*.js", "**/*.jsx", "**/*.ts", "**/*.tsx"]'),
+}
+LINT_TIMEOUT = 20
+
+
 def now():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -54,14 +74,25 @@ def active_slug(root):
 
 # ---- task -----------------------------------------------------------------
 
-def init_task(root, slug, goal):
+def init_task(root, slug, goal, quick_check=None):
+    """Create a task. quick_check makes a one-criterion `quick` task (refused at a high risk floor)."""
     if not SLUG.fullmatch(slug):
         raise ValueError("slug must be lower-case letters, digits and dashes (max 41 chars)")
     d = _dir(root, slug)
     if d.exists():
         raise ValueError(f"task {slug} already exists")
+    if quick_check is None:
+        text = TEMPLATE.format(goal=json.dumps(goal))
+    else:
+        if not quick_check.strip():
+            raise ValueError("--quick needs a non-empty check")
+        toml_path = Path(root) / "herd.toml"
+        rec = herd_triage.build_record("task", 0, goal, {}, toml_path.read_text() if toml_path.exists() else "")
+        if rec["risk"]["floor"] == "high":
+            raise ValueError("risk floor is high: use the full criteria flow, not --quick")
+        text = QUICK.format(goal=json.dumps(goal), check=json.dumps(quick_check))
     d.mkdir(parents=True)
-    (d / "task.toml").write_text(TEMPLATE.format(goal=json.dumps(goal)))
+    (d / "task.toml").write_text(text)
     (Path(root) / ".herd" / "active").write_text(slug + "\n")
 
 
@@ -76,6 +107,16 @@ def validate_task(task):
     crit = task.get("criteria", [])
     if not crit:
         errs.append("no criteria: add at least one [[criteria]] block")
+    route = task.get("route", "standard")
+    if route not in ("quick", "standard"):
+        errs.append("route must be quick or standard")
+    elif route == "quick":
+        if len(crit) != 1:
+            errs.append("quick route needs exactly one criterion")
+        elif not str(crit[0].get("check", "")).strip():
+            errs.append("quick route needs a runnable check")
+    if "test_budget" in task and not isinstance(task["test_budget"], str):
+        errs.append("test_budget: must be a string")
     for c in crit:
         cid = c.get("id", "?")
         if not c.get("id"):
@@ -90,6 +131,16 @@ def validate_task(task):
         if not isinstance(c.get("check"), str):
             errs.append(f"{cid}: check is missing (use an empty string for unchecked)")
     return errs
+
+
+def check_warnings(task):
+    """Advisory only: checks that cannot show the criterion holds (a denylist with known gaps)."""
+    out = []
+    for c in task.get("criteria", []):
+        check = c.get("check")
+        if isinstance(check, str) and check.strip() and VACUOUS.fullmatch(check.strip()):
+            out.append(f"{c.get('id', '?')}: check `{check.strip()}` does not run project code, so it proves little")
+    return out
 
 
 # ---- evidence -------------------------------------------------------------
@@ -142,7 +193,15 @@ def verify(root, slug):
     summary = {s: sum(r["status"] == s for r in results) for s in ("passing", "failing", "unchecked")}
     head = _git(root, "rev-parse", "HEAD").decode().strip() or "none"
     dirty = bool(_git(root, "status", "--porcelain", "--", ".", ":!.herd").strip())
+    red_path = _dir(root, slug) / "red.json"
+    checked = [r for r in results if r["status"] != "unchecked"]
+    if not red_path.exists() and checked:  # first verify with a runnable check: how many were red
+        red_path.write_text(json.dumps({"at": now(), "failed": sum(r["status"] == "failing" for r in checked),
+                                        "total": len(checked)}))
+    red = json.loads(red_path.read_text()) if red_path.exists() else None
     ev = {"task": slug, "goal": task["goal"], "at": now(), "head": head, "dirty": dirty,
+          "route": task.get("route", "standard"), "test_budget": task.get("test_budget"),
+          "red": {"failed": red["failed"], "total": red["total"]} if red else None,
           "fingerprint": fingerprint(root), "task_sha": _task_sha(root, slug),
           "results": results, "summary": summary}
     (_dir(root, slug) / "evidence.json").write_text(json.dumps(ev, indent=2))
@@ -158,8 +217,14 @@ def report(ev):
     s = ev["summary"]
     lines = [f"# Evidence: {ev['task']}", "", f"Goal: {ev['goal']}",
              f"Run at {ev['at']} on commit {ev['head'][:12]}" + (" plus uncommitted changes" if ev.get("dirty") else ""),
-             f"Result: {s['passing']} passing, {s['failing']} failing, {s['unchecked']} unchecked", "",
-             "| id | status | source | check |", "| --- | --- | --- | --- |"]
+             f"Result: {s['passing']} passing, {s['failing']} failing, {s['unchecked']} unchecked"]
+    if ev.get("route") == "quick":
+        lines.append("Route: quick")
+    if ev.get("red"):
+        lines.append(f"First verify: {ev['red']['failed']} of {ev['red']['total']} checks failed before the work")
+    if ev.get("test_budget"):
+        lines.append(f"Test budget: {ev['test_budget']}")
+    lines += ["", "| id | status | source | check |", "| --- | --- | --- | --- |"]
     for r in ev["results"]:
         lines.append(f"| {r['id']} | {r['status']} | {r['source']} | `{r['check'] or '-'}` |")
     for r in ev["results"]:
@@ -168,6 +233,47 @@ def report(ev):
     if s["unchecked"]:
         lines += ["", "Unchecked criteria have no runnable check and are never counted as met."]
     return "\n".join(lines) + "\n"
+
+
+# ---- lint hook ------------------------------------------------------------
+
+def lint(hook):
+    """PostToolUse hook: run the project's per-file lint after an edit.
+
+    Non-blocking: failures come back as additionalContext. Opt-in via [lint] in herd.toml,
+    and only while a Herd task is active.
+    """
+    cwd = Path(hook.get("cwd") or Path.cwd())
+    fp = (hook.get("tool_input") or {}).get("file_path")
+    if not fp or not active_slug(cwd):
+        return None
+    try:
+        rel = Path(fp).resolve().relative_to(cwd.resolve())
+        cfg = tomllib.loads((cwd / "herd.toml").read_text()).get("lint")
+    except (ValueError, OSError, tomllib.TOMLDecodeError):
+        return None
+    if not isinstance(cfg, dict) or not isinstance(cfg.get("command"), str):
+        return None
+    if not any(PurePosixPath(rel.as_posix()).full_match(g) for g in cfg.get("globs", ["**/*"])):
+        return None
+    cmd = cfg["command"].replace("{file}", shlex.quote(rel.as_posix()))
+    code, out = run_check(cwd, cmd, cfg.get("timeout_s", LINT_TIMEOUT))
+    if code == 0:
+        return None
+    head = f"Herd lint for {rel}: {out}" if code is None else f"Herd lint failed for {rel} (exit {code}):\n{out}"
+    return {"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": head}}
+
+
+def suggest_lint(root):
+    """A [lint] block for herd.toml from the detected project type, for the human to paste."""
+    found = [d["type"] for d in herd_detect.detect(root) if d["type"] in PER_FILE_LINT]
+    if not found:
+        return "no per-file lint command is known for this project; set one yourself in herd.toml"
+    cmd, globs = PER_FILE_LINT[found[0]]
+    lines = ["[lint]", f'command = "{cmd}"', f"globs = {globs}", f"timeout_s = {LINT_TIMEOUT}"]
+    for t in found[1:]:
+        lines.append(f'# also {t}: command = "{PER_FILE_LINT[t][0]}"  (one command per [lint]; pick by globs)')
+    return "\n".join(lines)
 
 
 # ---- gate -----------------------------------------------------------------
@@ -219,12 +325,37 @@ def main(argv):
     cmd, args = (argv[0], argv[1:]) if argv else ("status", [])
     try:
         if cmd == "init":
-            init_task(root, args[0], args[1])
-            print(f"created .herd/tasks/{args[0]}/task.toml (commented template): add criteria with checks, then run `herd check`")
+            quick = None
+            if "--quick" in args:
+                i = args.index("--quick")
+                quick = args[i + 1]
+                args = args[:i] + args[i + 2:]
+            init_task(root, args[0], args[1], quick_check=quick)
+            if quick is None:
+                print(f"created .herd/tasks/{args[0]}/task.toml (commented template): add criteria with checks, then run `herd check`")
+            else:
+                print(f"created quick task {args[0]} with one criterion: run `herd verify` and expect it to fail first")
         elif cmd == "check":
-            errs = validate_task(load_task(root, _slug_arg(root, args)))
+            task = load_task(root, _slug_arg(root, args))
+            errs = validate_task(task)
             print("\n".join(errs) if errs else "ok")
+            for w in check_warnings(task):
+                print(f"warning: {w}")
             return 1 if errs else 0
+        elif cmd == "detect":
+            print(json.dumps(herd_detect.detect(root), indent=2))
+        elif cmd == "lint":
+            if "--suggest" in args:
+                print(suggest_lint(root))
+            else:
+                raw = sys.stdin.read() if not sys.stdin.isatty() else ""
+                try:
+                    hook = json.loads(raw) if raw.strip() else {}
+                except ValueError:
+                    hook = {}
+                out = lint(hook)
+                if out:
+                    print(json.dumps(out))
         elif cmd == "verify":
             ev = verify(root, _slug_arg(root, args))
             s = ev["summary"]
@@ -262,7 +393,7 @@ def main(argv):
         else:
             print(__doc__)
             return 2
-    except (ValueError, FileNotFoundError) as e:
+    except (ValueError, FileNotFoundError, IndexError) as e:
         print(f"herd: {e}", file=sys.stderr)
         return 1
     return 0

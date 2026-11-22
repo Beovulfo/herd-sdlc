@@ -118,15 +118,36 @@ If the agent tries to finish while a check is failing, the Stop hook answers ins
 | --- | --- |
 | `/herd:run <task>` | The autopilot: intake, criteria, build, review, verify, evidence |
 | `/herd:criteria` | Write success criteria with runnable checks |
+| `/herd:evidence` | Interactive: decide with you how to prove the change works for your project type |
 | `herd init <slug> "<goal>"` | Create a task and make it active |
-| `herd check` | Validate `task.toml` |
+| `herd init <slug> "<goal>" --quick "<check>"` | Quick route for a trivial change: one criterion, one check. Refused at a `high` risk floor |
+| `herd check` | Validate `task.toml`; warns about checks that do not run project code |
+| `herd detect` | Propose test and lint commands for Python, Node, Rust, Go and `make test` |
 | `herd triage "<text>"` | Print the risk floor for a task description |
 | `herd verify` | Run all checks, store `evidence.json`; exit 1 if any fail |
 | `herd status` | Show evidence and whether the task is done |
 | `herd done` | Write `evidence.md`, close the task; refuses unless fresh and passing |
 | `herd gate` | The Stop hook (reads hook JSON on stdin) |
+| `herd lint` | The optional PostToolUse lint hook; `herd lint --suggest` prints a `[lint]` block for `herd.toml` |
 
 `herd` is `python3 scripts/herd.py`. Inside the plugin it is `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/herd.py"`.
+
+## Evidence that adapts to your project
+
+`/herd:evidence` detects your project type, proposes the real test and lint commands for you to confirm, asks at most five questions about what "working" looks like and what cannot be automated, and drafts criteria with checks. The report then shows how many checks failed before the work started (a check that was green from the start is visible), and an optional `test_budget` line in `task.toml` records what is tested at which level and what is deliberately not tested.
+
+## Lint feedback after each edit (opt-in)
+
+Add a `[lint]` table to your project's `herd.toml`:
+
+```toml
+[lint]
+command = "ruff check {file}"
+globs = ["**/*.py"]
+timeout_s = 20
+```
+
+While a Herd task is active, each `Edit` or `Write` runs the command on that file, and a failure is handed back to the agent as context (it does not block). Other editing tools such as `MultiEdit` and `NotebookEdit` are not covered. The command comes from the repository and runs with your permissions, the same trust as a `check` in `task.toml`.
 
 ## Autonomy rules
 
@@ -138,7 +159,7 @@ If the agent tries to finish while a check is failing, the Stop hook answers ins
 
 ## Status
 
-Version 0.1, an MVP. Working and covered by 85 unit tests: the evidence harness (`scripts/herd.py`), the Stop gate, and the risk-floor module. One trial run, where a fresh agent followed the `herd:run` skill text in a scratch repo, got a 5-criterion task to a passing `herd done`, and its notes on unclear wording were fixed. Not yet done: many live runs through the installed plugin, and issue-to-pull-request automation on GitHub, which is still design work.
+Version 0.2. Working and covered by 131 unit tests: the evidence harness (`scripts/herd.py`), the Stop gate, the quick route, project-type detection, the lint hook, and the risk-floor module. One trial run, where a fresh agent followed the `herd:run` skill text in a scratch repo, got a 5-criterion task to a passing `herd done`, and its notes on unclear wording were fixed. Not yet done: many live runs through the installed plugin, and issue-to-pull-request automation on GitHub, which is still design work.
 
 ## The design behind it
 
@@ -157,8 +178,8 @@ Herd is built with its own method, using the [Elephant-Goldfish Model](https://g
 ## Development
 
 ```bash
-python3 -m unittest scripts.test_herd_cli scripts.test_herd_triage \
-  scripts.test_herd_arbiter scripts.test_herd_escalation
+python3 -m unittest scripts.test_herd_cli scripts.test_herd_lint scripts.test_herd_detect \
+  scripts.test_herd_triage scripts.test_herd_arbiter scripts.test_herd_escalation
 claude plugin validate ./
 ```
 

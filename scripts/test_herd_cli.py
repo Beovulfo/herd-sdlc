@@ -120,6 +120,145 @@ class TestVerify(Base):
         self.assertIn("never counted as met", text)
 
 
+class TestHygiene(Base):
+    def warn(self, check):
+        return herd.check_warnings({"criteria": [{"id": "C1", "check": check}]})
+
+    def test_hygiene_flags_vacuous_checks(self):
+        for check in ("true", ":", "exit 0", "echo ok", "test -f greet.txt", "test -e greet.txt"):
+            self.assertEqual(len(self.warn(check)), 1, check)
+            self.assertIn("C1", self.warn(check)[0])
+
+    def test_hygiene_accepts_real_checks_and_empty(self):
+        for check in ("python3 -m unittest", "pytest -q", "grep -q hello out.txt && ./run", ""):
+            self.assertEqual(self.warn(check), [], check)
+
+    def test_hygiene_cli_prints_warning_and_exits_zero(self):
+        self.task(TASK.replace("test -f greet.txt", "true"))
+        p = subprocess.run(["python3", str(Path(herd.__file__)), "check"], cwd=self.root,
+                           capture_output=True, text=True)
+        self.assertEqual(p.returncode, 0)
+        self.assertIn("ok", p.stdout)
+        self.assertIn("warning: C1", p.stdout)
+
+
+class TestQuick(Base):
+    def test_quick_init_writes_one_criterion(self):
+        herd.init_task(self.root, "q1", "Fix a typo in README", quick_check="python3 -m unittest")
+        t = herd.load_task(self.root, "q1")
+        self.assertEqual(t["route"], "quick")
+        self.assertEqual(len(t["criteria"]), 1)
+        c = t["criteria"][0]
+        self.assertEqual((c["id"], c["source"], c["check"], c["text"]),
+                         ("C1", "agent-proposed", "python3 -m unittest", "Fix a typo in README"))
+        self.assertEqual(herd.validate_task(t), [])
+        self.assertEqual(herd.active_slug(self.root), "q1")
+
+    def test_quick_survives_quotes_in_goal_and_check(self):
+        herd.init_task(self.root, "q1", 'Say "hi" \\ there', quick_check="grep -q 'a\"b' f.txt")
+        c = herd.load_task(self.root, "q1")["criteria"][0]
+        self.assertEqual(c["text"], 'Say "hi" \\ there')
+
+    def test_quick_refuses_empty_check(self):
+        with self.assertRaises(ValueError) as cm:
+            herd.init_task(self.root, "q1", "goal", quick_check="  ")
+        self.assertIn("check", str(cm.exception))
+        self.assertFalse((self.root / ".herd/tasks/q1").exists())
+
+    def test_quick_refuses_high_risk_floor(self):
+        with self.assertRaises(ValueError) as cm:
+            herd.init_task(self.root, "q1", "Rotate tokens in auth/session.py", quick_check="true")
+        self.assertIn("high", str(cm.exception))
+        self.assertFalse((self.root / ".herd/tasks/q1").exists())
+        self.assertFalse((self.root / ".herd/active").exists())
+
+    def test_quick_uses_project_herd_toml(self):
+        (self.root / "herd.toml").write_text('[floor]\nhigh = ["docs/**"]\n')
+        with self.assertRaises(ValueError):
+            herd.init_task(self.root, "q1", "Edit docs/guide.md", quick_check="true")
+        herd.init_task(self.root, "q2", "Edit auth/x.py", quick_check="true")  # custom rules replace defaults
+
+    def test_validate_route(self):
+        ok = {"goal": "g", "criteria": [{"id": "C1", "text": "t", "source": "human", "check": "true"}]}
+        self.assertEqual(herd.validate_task(ok), [])
+        self.assertIn("route", " ".join(herd.validate_task({**ok, "route": "fast"})))
+        self.assertEqual(herd.validate_task({**ok, "route": "quick"}), [])
+        two = {**ok, "route": "quick", "criteria": ok["criteria"] + [dict(ok["criteria"][0], id="C2")]}
+        self.assertIn("exactly one", " ".join(herd.validate_task(two)))
+        empty = {**ok, "route": "quick", "criteria": [dict(ok["criteria"][0], check="")]}
+        self.assertIn("quick", " ".join(herd.validate_task(empty)))
+
+    def test_report_shows_route_and_flow_ends_in_evidence(self):
+        herd.init_task(self.root, "q1", "Add greet file", quick_check="test -f greet.txt")
+        ev = herd.verify(self.root, "q1")
+        self.assertEqual(ev["summary"]["failing"], 1)
+        (self.root / "greet.txt").write_text("hi")
+        text = herd.report(herd.verify(self.root, "q1"))
+        self.assertIn("Route: quick", text)
+        self.assertEqual(herd.problems(self.root, "q1"), [])
+
+    def test_cli_quick(self):
+        p = subprocess.run(["python3", str(Path(herd.__file__)), "init", "q1", "Fix typo", "--quick", "true"],
+                           cwd=self.root, capture_output=True, text=True)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        p = subprocess.run(["python3", str(Path(herd.__file__)), "init", "q2", "Fix auth/x.py", "--quick", "true"],
+                           cwd=self.root, capture_output=True, text=True)
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("high", p.stderr)
+
+
+class TestBudgetAndRed(Base):
+    def test_budget_note_in_report_and_validation(self):
+        self.task('test_budget = "unit for parsing; not testing the CLI wrapper"\n' + TASK)
+        (self.root / "greet.txt").write_text("hello")
+        text = herd.report(herd.verify(self.root, "t1"))
+        self.assertIn("Test budget: unit for parsing; not testing the CLI wrapper", text)
+        t = herd.load_task(self.root, "t1")
+        self.assertEqual(herd.validate_task(dict(t, test_budget=3))[0].split(":")[0], "test_budget")
+
+    def test_no_budget_line_when_absent(self):
+        self.task()
+        self.assertNotIn("Test budget", herd.report(herd.verify(self.root, "t1")))
+
+    def test_red_recorded_on_first_verify_only(self):
+        self.task()
+        ev = herd.verify(self.root, "t1")  # C1 fails, C2 unchecked
+        self.assertEqual(ev["red"], {"failed": 1, "total": 1})
+        self.assertTrue((self.root / ".herd/tasks/t1/red.json").exists())
+        (self.root / "greet.txt").write_text("hello")
+        ev = herd.verify(self.root, "t1")
+        self.assertEqual(ev["summary"]["passing"], 1)
+        self.assertEqual(ev["red"], {"failed": 1, "total": 1})  # still the first run
+        self.assertIn("First verify: 1 of 1 checks failed before the work", herd.report(ev))
+
+    def test_green_from_the_start_is_visible(self):
+        self.task()
+        (self.root / "greet.txt").write_text("hello")
+        ev = herd.verify(self.root, "t1")
+        self.assertEqual(ev["red"], {"failed": 0, "total": 1})
+        self.assertIn("First verify: 0 of 1 checks failed before the work", herd.report(ev))
+
+    def test_red_does_not_make_evidence_stale(self):
+        self.task()
+        (self.root / "greet.txt").write_text("hello")
+        herd.verify(self.root, "t1")
+        self.assertEqual(herd.problems(self.root, "t1"), [])
+
+
+class TestDetectCli(Base):
+    def test_detect_prints_json(self):
+        (self.root / "Cargo.toml").write_text("")
+        p = subprocess.run(["python3", str(Path(herd.__file__)), "detect"], cwd=self.root,
+                           capture_output=True, text=True)
+        self.assertEqual(p.returncode, 0)
+        self.assertEqual(json.loads(p.stdout)[0]["type"], "rust")
+
+    def test_detect_empty_repo(self):
+        p = subprocess.run(["python3", str(Path(herd.__file__)), "detect"], cwd=self.root,
+                           capture_output=True, text=True)
+        self.assertEqual(json.loads(p.stdout), [])
+
+
 class TestGate(Base):
     def gate(self, **hook):
         return herd.gate(self.root, hook)

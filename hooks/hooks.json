@@ -1,5 +1,5 @@
 {
-  "description": "Herd Stop gate: while a Herd task is active, the agent cannot finish without fresh, passing evidence.",
+  "description": "Herd hooks: the Stop gate blocks finishing without fresh passing evidence; the optional lint hook feeds lint errors back after edits.",
   "hooks": {
     "Stop": [
       {
@@ -7,6 +7,18 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/herd.py\" gate",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/herd.py\" lint",
             "timeout": 30
           }
         ]

@@ -1,0 +1,13 @@
+{
+  "name": "herd-sdlc",
+  "owner": { "name": "Beovulfo" },
+  "plugins": [
+    {
+      "name": "herd",
+      "source": "./",
+      "description": "Autopilot SDLC harness: success criteria with runnable checks, evidence, and a Stop gate.",
+      "category": "development",
+      "homepage": "https://github.com/Beovulfo/herd-sdlc"
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "description": "Herd Stop gate: while a Herd task is active, the agent cannot finish without fresh, passing evidence.",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/herd.py\" gate",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -25,7 +25,7 @@
 </p>
 
 <p align="center">
-  <img src="examples/supermarket-route/images/simulation.svg" alt="Animation: one basket walked in shopping-list order and on the optimized route, with time and distance bars running" width="860">
+  <img src="assets/demo.gif" alt="A real /herd:run session in Claude Code, with a panel above it lighting the current step: intake, criteria, red first, build, break it, review, verify, evidence" width="860">
 </p>
 
 Herd is a lightweight [Claude Code](https://claude.com/claude-code) plugin that runs a task end to end with as little human input as possible. You give it a goal and, if you like, success criteria. The agent plans, builds, tries to break its own work, reviews and verifies. It only stops when **runnable checks prove the criteria pass**, and it only asks you something when an action is irreversible or a real trade-off needs a human.
@@ -181,6 +181,10 @@ If the agent tries to finish while a check is failing, the Stop hook answers ins
 ```
 
 ## Benchmark: with and without Herd
+
+<p align="center">
+  <img src="examples/supermarket-route/images/simulation.svg" alt="Animation: one basket walked in shopping-list order and on the optimized route, with time and distance bars running" width="860">
+</p>
 
 One short prompt, a route optimizer for picking a shopping list in a supermarket that "works for any layout, even very big ones", was given to the same model (Sonnet) twice: once with Herd and once with no workflow. Then each solution was checked by a hidden verifier it had never seen: 48 generated stores from eight layout families, up to 600 by 400 cells with 200 items, with every walk validated step by step.
 

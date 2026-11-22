@@ -1,0 +1,90 @@
+{
+ "_masks": "[start_s, end_s, y_top, y_bottom]: hide Claude Code's grey prompt suggestions in the input line after the one human message",
+ "masks": [
+  [
+   11,
+   55.6,
+   634,
+   668
+  ],
+  [
+   55.6,
+   72.5,
+   576,
+   610
+  ],
+  [
+   72.5,
+   100,
+   634,
+   668
+  ]
+ ],
+ "phases": [
+  [
+   0,
+   "intake",
+   "The human sends one message: a goal and two examples."
+  ],
+  [
+   14.5,
+   "intake",
+   "Intake: herd init creates the task on a branch and stores the request verbatim. Risk: medium."
+  ],
+  [
+   18.5,
+   "criteria",
+   "Criteria: C1 quotes the human. C2 and C3 add edge cases and a scale run. Each is a test."
+  ],
+  [
+   30.5,
+   "red",
+   "Red first: herd verify runs the checks before any code. 3 of 3 fail, so they test something."
+  ],
+  [
+   36.5,
+   "build",
+   "Build: writes slugify. herd verify: 3 of 3 pass."
+  ],
+  [
+   38.5,
+   "break",
+   "Break it: 12 hostile titles and 1M characters. An em dash merged two words."
+  ],
+  [
+   47.5,
+   "break",
+   "Fixes it, adds a regression test, logs each step with herd note."
+  ],
+  [
+   52.5,
+   "review",
+   "Review: a fresh-context subagent reads only the goal, the criteria and the diff."
+  ],
+  [
+   73.5,
+   "review",
+   "Review finds letters like þ and ð dropped, and apostrophes splitting words."
+  ],
+  [
+   79.5,
+   "verify",
+   "Fixes the findings, adds regression tests. herd verify: 3 of 3 pass."
+  ],
+  [
+   83.5,
+   "evidence",
+   "herd done: evidence with the commit, red-first count, caveats and known limits."
+  ],
+  [
+   90.5,
+   "evidence",
+   "Final report: what changed, each decision, and where \"any title\" fails."
+  ],
+  [
+   100,
+   "evidence",
+   "end"
+  ]
+ ]
+}

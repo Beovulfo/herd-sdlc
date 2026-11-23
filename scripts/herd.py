@@ -459,7 +459,7 @@ def verify(root, slug):
             r["zero_tests"] = r["status"] == "passing" and ran_zero_tests(out)  # advisory, the gate ignores it
         results.append(r)
     summary = {s: sum(r["status"] == s for r in results) for s in ("passing", "failing", "unchecked")}
-    attacks = []  # each standard-attack note's command runs like a criterion check
+    attacks, ran = [], {}  # each standard-attack note's command runs like a criterion check, once per verify
     for n in load_notes(root, slug):
         if n["kind"] != "tried" or not n.get("attack"):
             continue
@@ -468,10 +468,14 @@ def verify(root, slug):
              # no command counts only as a stated n/a, never by default (old notes, hand-edited logs)
              "status": "na" if n["text"].strip().lower().startswith("n/a:") else "nocheck"}
         if a["check"]:
-            a["exit_code"], out = run_check(root, a["check"], DEFAULT_TIMEOUT, full=True)
+            key = (a["check"], n.get("timeout_s", DEFAULT_TIMEOUT))
+            if key not in ran:
+                ran[key] = run_check(root, a["check"], key[1], full=True)
+            a["exit_code"], out = ran[key]
             a["output_tail"] = out[-TAIL_CHARS:]
             a["status"] = "passing" if a["exit_code"] == 0 else "failing"
             a["zero_tests"] = a["status"] == "passing" and ran_zero_tests(out)
+            a["vacuous"] = bool(VACUOUS.fullmatch(a["check"]))  # runs no project code: proves nothing
         attacks.append(a)
     head = _git(root, "rev-parse", "HEAD").decode().strip() or "none"
     dirty = bool(_git(root, "status", "--porcelain", "--", *OWN_FILES).strip())
@@ -500,7 +504,7 @@ def verify(root, slug):
     return ev
 
 
-def add_note(root, slug, kind, text, attack=None, check=None):
+def add_note(root, slug, kind, text, attack=None, check=None, timeout=None):
     """Append a caveat to the task's log: found, fixed, open (a known limit) or tried (adversarial attempt).
 
     attack names which standard attack a tried note covers (one of ATTACKS); check is the command that
@@ -511,6 +515,8 @@ def add_note(root, slug, kind, text, attack=None, check=None):
         raise ValueError(f"--attack goes with --tried and is one of: {', '.join(ATTACKS)}")
     if check is not None and (attack is None or not check.strip()):
         raise ValueError("--check goes with --attack and needs a command")
+    if timeout is not None and (check is None or timeout <= 0):
+        raise ValueError("--timeout goes with --check and is a positive number of seconds")
     if not text.strip():
         raise ValueError("note text is empty")
     if attack and check is None and not text.strip().lower().startswith("n/a:"):
@@ -524,6 +530,8 @@ def add_note(root, slug, kind, text, attack=None, check=None):
         rec["attack"] = attack
     if check is not None:
         rec["check"] = check.strip()
+    if timeout is not None:
+        rec["timeout_s"] = timeout
     with open(d / "notes.jsonl", "a") as f:
         f.write(json.dumps(rec) + "\n")
 
@@ -551,17 +559,21 @@ def _largest_batch(notes):
     return best
 
 
+def _attack_state(a):
+    return "vacuous" if a.get("vacuous") else "zero" if a.get("zero_tests") else a["status"]
+
+
 def _attack_states(attacks):
-    """Verified state per standard attack: (state, command). Commands rerun at every verify, so one failing
-    command means the attack still breaks the work: it decides, however many others pass. A zero-test or
-    missing command proves nothing, so it counts only when nothing better exists."""
-    rank = {"failing": 5, "passing": 4, "na": 3, "zero": 2, "nocheck": 1}
-    best = {}
-    for a in attacks or []:
-        state = "zero" if a.get("zero_tests") else a["status"]
-        if a["attack"] not in best or rank[state] >= rank[best[a["attack"]][0]]:
-            best[a["attack"]] = (state, a.get("check"))
-    return best
+    """State per standard attack from its latest note: (state, command or n/a text). A later note replaces an
+    earlier one, so a mistyped or renamed command never blocks for good; earlier commands that now fail
+    stay visible through _superseded_failing."""
+    return {a["attack"]: (_attack_state(a), a.get("check") or a["text"]) for a in attacks or []}
+
+
+def _superseded_failing(attacks):
+    """Earlier commands, replaced by a later note for the same attack, that fail at this verify."""
+    latest = {a["attack"]: i for i, a in enumerate(attacks or [])}
+    return [a for i, a in enumerate(attacks or []) if a["status"] == "failing" and latest[a["attack"]] != i]
 
 
 def _attack_line(notes, attacks):
@@ -569,8 +581,9 @@ def _attack_line(notes, attacks):
     tried = [n for n in notes if n["kind"] == "tried"]
     if not tried:
         return None
-    best, words = _attack_states(attacks), {"passing": "passing", "failing": "failing", "zero": "ran zero tests"}
-    parts = [f"{a} n/a" if best[a][0] == "na" else f"{a} has no command" if best[a][0] == "nocheck"
+    best = _attack_states(attacks)
+    words = {"passing": "passing", "failing": "failing", "zero": "ran zero tests", "vacuous": "runs no project code"}
+    parts = [f"{a} {best[a][1]}" if best[a][0] == "na" else f"{a} has no command" if best[a][0] == "nocheck"
              else f"{a} {words[best[a][0]]} (`{best[a][1]}`)" for a in ATTACKS if a in best]
     missing = [a for a in ATTACKS if a not in best]
     return (f"Adversarial pass: {len(tried)} attempt{'s' if len(tried) != 1 else ''} recorded"
@@ -701,8 +714,11 @@ def pr_body(root, slug):
         gaps.append("- No adversarial pass was recorded")
     elif ev.get("route") != "quick":
         best = _attack_states(ev.get("attacks"))
+        gaps += [f"- Attack {a} marked {best[a][1]}" for a in ATTACKS if best.get(a, ("",))[0] == "na"]
+        gaps += [f"- Earlier {s['attack']} command now fails: `{s['check']}`" for s in _superseded_failing(ev.get("attacks"))]
         bad = [a + ("" if a not in best else {"failing": " (command fails)", "zero": " (command ran zero tests)",
-                                              "nocheck": " (no command)"}.get(best[a][0], "")) for a in ATTACKS if best.get(a, ("none",))[0] not in ("passing", "na")]
+                                              "nocheck": " (no command)", "vacuous": " (command runs no project code)"}
+                    .get(best[a][0], "")) for a in ATTACKS if best.get(a, ("none",))[0] not in ("passing", "na")]
         if bad:
             gaps.append("- Standard attacks without a passing command: " + ", ".join(bad))
     lines += ["", "## What is not proven", ""] + (gaps or ["- Nothing recorded, which is unusual: ask what the checks miss"])
@@ -837,12 +853,13 @@ def problems(root, slug):
     if not ev["summary"]["passing"] and not out:
         out.append("no passing criterion: give at least one criterion a runnable check")
     if ev.get("route") != "quick":
-        ran = {(a["at"], a["text"]) for a in ev.get("attacks") or []}
-        if any(n["kind"] == "tried" and n.get("attack") and (n["at"], n["text"]) not in ran
+        ran = {(a["at"], a["text"], a.get("check")) for a in ev.get("attacks") or []}
+        if any(n["kind"] == "tried" and n.get("attack") and (n["at"], n["text"], n.get("check")) not in ran
                for n in load_notes(root, slug)):
             out.append("attack commands were logged after the last verify and have not run: run `herd verify`")
         best = _attack_states(ev.get("attacks"))
-        why = {"failing": "its command fails", "zero": "its command ran zero tests", "nocheck": "logged without a command"}
+        why = {"failing": "its command fails", "zero": "its command ran zero tests", "nocheck": "logged without a command",
+               "vacuous": "its command runs no project code"}
         missing = [a for a in ATTACKS if best.get(a, ("none",))[0] not in ("passing", "na")]
         if missing:
             out.append("adversarial pass incomplete (skills/run/adversarial.md): "
@@ -900,7 +917,7 @@ def _slug_arg(root, args):
 USAGE = {
     "init": 'herd init <slug> "<goal>" [--request "<message>"] [--quick "<check>"] [--worktree]',
     "check": "herd check [slug]",
-    "note": 'herd note --found|--fixed|--open|--tried [--attack bad-input|collision|one-bad-part|recount --check "<command>"] "text"',
+    "note": 'herd note --found|--fixed|--open|--tried [--attack bad-input|collision|one-bad-part|recount --check "<command>" [--timeout S]] "text"',
     "detect": "herd detect",
     "lint": "herd lint [--suggest]   (without --suggest: the PostToolUse hook, reads hook JSON on stdin)",
     "verify": "herd verify [slug] [--verbose]",
@@ -976,11 +993,19 @@ def main(argv):
             kinds = {"--found": "found", "--fixed": "fixed", "--open": "open", "--tried": "tried"}
             attack, args = _opt(args, "--attack")
             check, args = _opt(args, "--check")
+            timeout, args = _opt(args, "--timeout")
+            try:
+                timeout = None if timeout is None else float(timeout)
+            except ValueError:
+                raise UsageError
             flags = [a for a in args if a.startswith("--")]
             rest = [a for a in args if not a.startswith("--")]
             if len(flags) != 1 or flags[0] not in kinds or len(rest) != 1:
                 raise UsageError
-            add_note(root, _slug_arg(root, []), kinds[flags[0]], rest[0], attack=attack, check=check)
+            add_note(root, _slug_arg(root, []), kinds[flags[0]], rest[0], attack=attack, check=check, timeout=timeout)
+            if check and VACUOUS.fullmatch(check.strip()):
+                print(f"warning: `{check.strip()}` runs no project code, so it does not count for {attack}",
+                      file=sys.stderr)
             print(f"noted ({kinds[flags[0]]}): {rest[0]}")
         elif cmd == "detect":
             print(json.dumps(herd_detect.detect(root), indent=2))
@@ -1005,7 +1030,13 @@ def main(argv):
                 zero = " (ran zero tests)" if r.get("zero_tests") else ""
                 if verbose or r["status"] != "passing" or zero:
                     print(f"  {r['id']} {r['status']}{zero}: {r['text']}")
-            return 1 if s["failing"] else 0
+            words = {"failing": "failing", "zero": "passing (ran zero tests)", "vacuous": "runs no project code",
+                     "nocheck": "has no command", "na": "n/a", "passing": "passing"}
+            states = _attack_states(ev.get("attacks"))
+            for name, (state, what) in states.items():  # attacks like criteria: only what needs attention
+                if verbose or state != "passing":
+                    print(f"  attack {name} {words[state]}: {what}")
+            return 1 if s["failing"] or any(st == "failing" for st, _ in states.values()) else 0
         elif cmd == "status":
             slug = _slug_arg(root, args)
             ev = load_evidence(root, slug)

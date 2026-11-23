@@ -306,7 +306,7 @@ python3 examples/supermarket-route/verifier/verify_general.py with_herd examples
 | `herd detect` | Propose test and lint commands for Python, Node, Rust, Go and `make test` |
 | `herd note --found\|--fixed\|--open\|--tried [--attack <name> --check "<command>"] "text"` | Log a caveat or an adversarial attempt with a timestamp; the report lists them. `--attack` names a standard attack (`bad-input`, `collision`, `one-bad-part`, `recount`) and needs `--check`, a command `herd verify` runs, or text starting `n/a:` |
 | `herd triage "<text>" [--json]` | Print the risk floor for a task description in one line (`risk: high (auth/**)`); `--json` prints the full record |
-| `herd verify [--verbose]` | Run all checks, store `evidence.json`; exit 1 if any fail. Prints one summary line plus only the criteria that need attention (failing, unchecked, ran zero tests); `--verbose` lists all |
+| `herd verify [--verbose]` | Run all checks, including each standard attack's command, store `evidence.json`; exit 1 if any fail. Prints one summary line plus only the criteria that need attention (failing, unchecked, ran zero tests); `--verbose` lists all |
 | `herd status` | Show evidence and whether the task is done |
 | `herd done [--verbose]` | Write `evidence.md`, close the task; refuses unless fresh and passing and, on the standard route, until each standard attack has a passing command (or an `n/a:` reason). Updates the task's PR description if `herd pr` opened one. Prints two lines; `--verbose` prints the report too |
 | `herd cancel --reason "text"` | Abandon the task: keep its files, stop the Stop gate from blocking |
@@ -350,7 +350,7 @@ While a Herd task is active, each `Edit` or `Write` runs the command on that fil
 
 ## Status
 
-Version 0.3.2 (see the [changelog](CHANGELOG.md)). Working and covered by 264 unit tests on Python 3.11 to 3.13: the evidence harness (`scripts/herd.py`), the Stop gate, the quick route, project-type detection, the lint hook, the caveat log, zero-test flagging, the opt-in `herd pr` step, the opt-in worktree start for parallel tasks, short output by default, and the risk-floor module. Releases 0.2.7 to 0.3.0 were each built with Herd itself; 0.2.8 to 0.3.0 were opened as pull requests by `herd pr`. Benchmarked on one task with Sonnet (above). Not yet done: many live runs through the installed plugin across different project types, and issue-to-pull-request automation on GitHub (labelled issue to reviewed spec), which is still design work. `herd pr` covers only the last step: a finished local task opens a pull request with its evidence.
+Version 0.3.2 (see the [changelog](CHANGELOG.md)). Working and covered by 273 unit tests on Python 3.11 to 3.13: the evidence harness (`scripts/herd.py`), the Stop gate, the quick route, project-type detection, the lint hook, the caveat log, zero-test flagging, the opt-in `herd pr` step, the opt-in worktree start for parallel tasks, short output by default, and the risk-floor module. Releases 0.2.7 to 0.3.0 were each built with Herd itself; 0.2.8 to 0.3.0 were opened as pull requests by `herd pr`. Benchmarked on one task with Sonnet (above). Not yet done: many live runs through the installed plugin across different project types, and issue-to-pull-request automation on GitHub (labelled issue to reviewed spec), which is still design work. `herd pr` covers only the last step: a finished local task opens a pull request with its evidence.
 
 ## The design behind it
 

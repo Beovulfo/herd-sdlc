@@ -28,6 +28,9 @@ check = ""
 '''
 
 
+OK = "python3 -c \"import json\""  # an attack command that passes and is not vacuous
+
+
 def git(root, *args):
     subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
 
@@ -55,7 +58,7 @@ class Base(unittest.TestCase):
     def attacks(self, slug="t1", root=None):
         """Record the standard adversarial attacks, which `herd done` needs on the standard route."""
         for a in herd.ATTACKS:
-            herd.add_note(root or self.root, slug, "tried", f"{a} attack", attack=a, check="true")
+            herd.add_note(root or self.root, slug, "tried", f"{a} attack", attack=a, check=OK)
 
 
 class TestTask(Base):
@@ -179,7 +182,7 @@ class TestQuick(Base):
 
     def test_quick_refuses_high_risk_floor(self):
         with self.assertRaises(ValueError) as cm:
-            herd.init_task(self.root, "q1", "Rotate tokens in auth/session.py", quick_check="true")
+            herd.init_task(self.root, "q1", "Rotate tokens in auth/session.py", quick_check=OK)
         self.assertIn("high", str(cm.exception))
         self.assertFalse((self.root / ".herd/tasks/q1").exists())
         self.assertFalse((self.root / ".herd/active").exists())
@@ -187,8 +190,8 @@ class TestQuick(Base):
     def test_quick_uses_project_herd_toml(self):
         (self.root / "herd.toml").write_text('[floor]\nhigh = ["docs/**"]\n')
         with self.assertRaises(ValueError):
-            herd.init_task(self.root, "q1", "Edit docs/guide.md", quick_check="true")
-        herd.init_task(self.root, "q2", "Edit auth/x.py", quick_check="true")  # custom rules replace defaults
+            herd.init_task(self.root, "q1", "Edit docs/guide.md", quick_check=OK)
+        herd.init_task(self.root, "q2", "Edit auth/x.py", quick_check=OK)  # custom rules replace defaults
 
     def test_validate_route(self):
         ok = {"goal": "g", "criteria": [{"id": "C1", "text": "t", "source": "human", "check": "true"}]}
@@ -496,7 +499,8 @@ class TestNotes(Base):
         self.assertNotIn("not recorded", text)
         self.attacks()
         text = herd.report(herd.verify(self.root, "t1"))
-        self.assertIn("Adversarial pass: 5 attempts recorded; bad-input passing (`true`); collision passing", text)
+        self.assertIn("Adversarial pass: 5 attempts recorded; bad-input passing (`", text)
+        self.assertIn("; collision passing (`", text)
         self.assertNotIn("missing", text)
 
     def test_quick_route_has_no_adversarial_line(self):
@@ -638,7 +642,7 @@ class TestTiming(Base):
         self.assertEqual((self.root / ".herd/tasks/t1/started").read_text().strip(), "2026-11-22T10:00:00Z")
         herd.cancel_task(self.root, "t1")
         with self.at("10:00:05"):
-            herd.init_task(self.root, "q1", "g", quick_check="true")
+            herd.init_task(self.root, "q1", "g", quick_check=OK)
         self.assertTrue((self.root / ".herd/tasks/q1/started").exists())
 
     def test_evidence_carries_elapsed_and_first_verify_time(self):
@@ -758,7 +762,7 @@ class TestCli(Base):
         (self.root / ".herd/tasks/t1/task.toml").write_text(TASK)
         self.assertEqual(self.run_cli("check")[0], 0)
         for a in herd.ATTACKS:
-            self.assertEqual(self.run_cli("note", "--tried", "--attack", a, "--check", "true", f"{a} attack")[0], 0)
+            self.assertEqual(self.run_cli("note", "--tried", "--attack", a, "--check", OK, f"{a} attack")[0], 0)
         self.assertEqual(self.run_cli("verify")[0], 1)  # C1 failing
         (self.root / "greet.txt").write_text("hello")
         rc, out, _ = self.run_cli("verify")
@@ -945,7 +949,7 @@ class TestAttacks(Base):
         self.assertIn("never a traceback", probs)  # the gate itself teaches the attacks
         self.assertEqual(herd.gate(self.root, {})["decision"], "block")
         self.assertEqual(self.run_cli("done").returncode, 1)
-        herd.add_note(self.root, "t1", "tried", "fed it a malformed map", attack="bad-input", check="true")
+        herd.add_note(self.root, "t1", "tried", "fed it a malformed map", attack="bad-input", check=OK)
         herd.add_note(self.root, "t1", "tried", "an unscoped attempt")  # no --attack: counts for none
         herd.verify(self.root, "t1")
         probs = " ".join(herd.problems(self.root, "t1"))
@@ -958,7 +962,7 @@ class TestAttacks(Base):
         self.assertEqual(self.run_cli("done").returncode, 0)
 
     def test_quick_route_needs_no_attacks(self):
-        herd.init_task(self.root, "q1", "Fix typo", quick_check="true")
+        herd.init_task(self.root, "q1", "Fix typo", quick_check=OK)
         herd.verify(self.root, "q1")
         self.assertEqual(herd.problems(self.root, "q1"), [])
 
@@ -1113,7 +1117,7 @@ class TestAttackChecks(Base):
         p = self.cli("note", "--tried", "--attack", "bad-input", "--check", "test -f greet.txt", "malformed map")
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(herd.load_notes(self.root, "t1")[0]["check"], "test -f greet.txt")
-        self.assertEqual(self.cli("note", "--found", "--check", "true", "x").returncode, 1)  # only with --attack
+        self.assertEqual(self.cli("note", "--found", "--check", OK, "x").returncode, 1)  # only with --attack
         self.assertEqual(self.cli("note", "--tried", "--attack", "recount", "--check", " ", "x").returncode, 1)
 
     def test_verify_runs_attack_commands(self):
@@ -1131,9 +1135,10 @@ class TestAttackChecks(Base):
 
     def test_gate_needs_a_passing_command(self):
         self.ready()
-        herd.add_note(self.root, "t1", "tried", "a", attack="bad-input", check="test -f fixed.txt")
+        fixed = "python3 -c \"import os, sys; sys.exit(not os.path.exists('fixed.txt'))\""
+        herd.add_note(self.root, "t1", "tried", "a", attack="bad-input", check=fixed)
         for a in ("collision", "one-bad-part"):
-            herd.add_note(self.root, "t1", "tried", a, attack=a, check="true")
+            herd.add_note(self.root, "t1", "tried", a, attack=a, check=OK)
         herd.add_note(self.root, "t1", "tried", "zero", attack="recount", check="python3 -c \"print('Ran 0 tests')\"")
         herd.verify(self.root, "t1")
         probs = " ".join(herd.problems(self.root, "t1"))
@@ -1142,14 +1147,27 @@ class TestAttackChecks(Base):
         self.assertNotIn("collision", probs)
         self.assertEqual(herd.gate(self.root, {})["decision"], "block")
         self.assertEqual(self.cli("done").returncode, 1)
-        herd.add_note(self.root, "t1", "tried", "also passes", attack="bad-input", check="test -f greet.txt")
-        herd.add_note(self.root, "t1", "tried", "real recount", attack="recount", check="true")
+        herd.add_note(self.root, "t1", "tried", "real recount", attack="recount", check=OK)
         self.assertIn("herd verify", " ".join(herd.problems(self.root, "t1")))  # new commands not run yet
         herd.verify(self.root, "t1")
-        self.assertIn("bad-input (its command fails)", " ".join(herd.problems(self.root, "t1")))  # one failing decides
-        (self.root / "fixed.txt").write_text("fixed")  # the fix makes the first command pass at the next verify
+        self.assertIn("bad-input (its command fails)", " ".join(herd.problems(self.root, "t1")))
+        (self.root / "fixed.txt").write_text("fixed")  # the fix makes the same command pass at the next verify
         herd.verify(self.root, "t1")
         self.assertEqual(herd.problems(self.root, "t1"), [])
+        self.assertEqual(self.cli("done").returncode, 0)
+
+    def test_a_later_note_replaces_a_wrong_command_but_it_stays_visible(self):
+        self.ready()
+        herd.add_note(self.root, "t1", "tried", "typo", attack="bad-input", check="python3 -m unittest tests.test_nope")
+        for a in ("collision", "one-bad-part", "recount"):
+            herd.add_note(self.root, "t1", "tried", a, attack=a, check=OK)
+        herd.verify(self.root, "t1")
+        self.assertIn("bad-input", " ".join(herd.problems(self.root, "t1")))
+        herd.add_note(self.root, "t1", "tried", "right test", attack="bad-input", check=OK)
+        herd.verify(self.root, "t1")
+        self.assertEqual(herd.problems(self.root, "t1"), [])  # not stuck on the typo
+        self.assertIn("Earlier bad-input command now fails: `python3 -m unittest tests.test_nope`",
+                      herd.pr_body(self.root, "t1"))
         self.assertEqual(self.cli("done").returncode, 0)
 
     def test_commandless_attack_note_does_not_count(self):
@@ -1169,7 +1187,7 @@ class TestAttackChecks(Base):
         self.ready()
         herd.add_note(self.root, "t1", "tried", "no such tool", attack="bad-input", check="no-such-binary-xyz")
         herd.add_note(self.root, "t1", "tried", "hangs", attack="collision", check="sleep 5")
-        herd.add_note(self.root, "t1", "tried", "fine", attack="one-bad-part", check="true")
+        herd.add_note(self.root, "t1", "tried", "fine", attack="one-bad-part", check=OK)
         with mock.patch.object(herd, "DEFAULT_TIMEOUT", 1):
             ev = herd.verify(self.root, "t1")
         by = {a["attack"]: a for a in ev["attacks"]}
@@ -1181,7 +1199,7 @@ class TestAttackChecks(Base):
 
     def test_report_matches_an_independent_recount(self):
         self.ready()
-        cmds = {"bad-input": ["true", "false"], "collision": ["true"], "recount": ["python3 -c \"print('Ran 0 tests')\""]}
+        cmds = {"bad-input": [OK, "false"], "collision": [OK], "recount": ["python3 -c \"print('Ran 0 tests')\""]}
         for a, cs in cmds.items():
             for c in cs:
                 herd.add_note(self.root, "t1", "tried", f"{a} {c}", attack=a, check=c)
@@ -1190,17 +1208,62 @@ class TestAttackChecks(Base):
         line = [x for x in herd.report(herd.verify(self.root, "t1")).splitlines() if x.startswith("Adversarial")][0]
         raw = [json.loads(x) for x in (self.root / ".herd/tasks/t1/notes.jsonl").read_text().splitlines()]
         self.assertIn(f"{sum(n['kind'] == 'tried' for n in raw)} attempts recorded", line)
-        # recount by hand: any failing command decides; else passing; else n/a; else zero tests
+        # recount by hand: the latest note per attack decides
         self.assertIn("bad-input failing", line)
         self.assertIn("collision passing", line)
         self.assertIn("one-bad-part n/a", line)
         self.assertIn("recount ran zero tests", line)
         self.assertNotIn("missing", line)
 
+    def test_cli_verify_shows_attacks_and_fails_on_a_failing_one(self):
+        self.ready()
+        herd.add_note(self.root, "t1", "tried", "breaks", attack="bad-input", check="false")
+        herd.add_note(self.root, "t1", "tried", "fine", attack="collision", check=OK)
+        p = self.cli("verify")
+        self.assertEqual(p.returncode, 1)  # a failing attack fails verify, like a failing criterion
+        self.assertIn("attack bad-input failing: false", p.stdout)
+        self.assertNotIn("attack collision", p.stdout)  # only what needs attention
+        self.assertIn("attack collision passing", self.cli("verify", "--verbose").stdout)
+
+    def test_vacuous_command_warns_and_does_not_count(self):
+        self.ready()
+        p = self.cli("note", "--tried", "--attack", "recount", "--check", "true", "x")
+        self.assertEqual(p.returncode, 0)
+        self.assertIn("runs no project code", p.stderr)
+        herd.verify(self.root, "t1")
+        self.assertIn("recount (its command runs no project code)", " ".join(herd.problems(self.root, "t1")))
+
+    def test_na_needs_the_colon_and_a_check_still_runs(self):
+        self.ready()
+        with self.assertRaises(ValueError):
+            herd.add_note(self.root, "t1", "tried", "n/a the tool takes one value", attack="collision")
+        herd.add_note(self.root, "t1", "tried", "n/a: but checked", attack="collision", check="false")
+        ev = herd.verify(self.root, "t1")
+        self.assertEqual(ev["attacks"][0]["status"], "failing")  # a command always runs and decides
+
+    def test_timeout_per_attack(self):
+        self.ready()
+        self.assertEqual(self.cli("note", "--tried", "--attack", "recount", "--timeout", "1", "x").returncode, 1)
+        self.assertEqual(self.cli("note", "--tried", "--attack", "recount", "--check", OK, "--timeout", "0", "x")
+                         .returncode, 1)
+        herd.add_note(self.root, "t1", "tried", "slow", attack="recount", check="sleep 3", timeout=1)
+        a = herd.verify(self.root, "t1")["attacks"][0]
+        self.assertEqual((a["status"], a["exit_code"]), ("failing", None))
+
+    def test_pr_shows_na_and_attacks_without_a_passing_command(self):
+        self.ready()
+        herd.add_note(self.root, "t1", "tried", "n/a: one value only", attack="collision")
+        herd.add_note(self.root, "t1", "tried", "b", attack="bad-input", check="false")
+        herd.verify(self.root, "t1")
+        visible = re.sub(r"<details>.*?</details>", "", herd.pr_body(self.root, "t1"), flags=re.S)
+        self.assertIn("Attack collision marked n/a: one value only", visible)
+        self.assertIn("Standard attacks without a passing command: bad-input (command fails), one-bad-part, recount",
+                      visible)
+
     def test_na_attack_counts_and_is_labelled(self):
         self.ready()
         for a in ("bad-input", "collision", "one-bad-part"):
-            herd.add_note(self.root, "t1", "tried", a, attack=a, check="true")
+            herd.add_note(self.root, "t1", "tried", a, attack=a, check=OK)
         herd.add_note(self.root, "t1", "tried", "n/a: the tool takes one value", attack="recount")
         with self.assertRaises(ValueError):
             herd.add_note(self.root, "t1", "tried", "skipped it", attack="recount")

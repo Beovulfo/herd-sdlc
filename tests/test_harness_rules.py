@@ -274,7 +274,7 @@ class TestWarningsAndEscalation(Base):
         self.assertIn("C1 failed 3 times in a row: ask the human one question", out)
         (self.root / "app.py").write_text("def f():\n    return 1\n")
         self.assertNotIn("in a row", self.cli("verify").stdout)
-        (self.root / "app.py").write_text("def f():\n    return 2\n")
+        (self.root / "app.py").write_text("def f():\n    return 1 + 1\n")  # another size, so no stale .pyc
         self.assertNotIn("in a row", self.cli("verify").stdout)  # the count starts again after a pass
 
 
@@ -613,9 +613,9 @@ class TestThirdReview(Base):
         for _ in range(herd.MAX_BLOCKS):
             herd.gate(self.root, {})
         self.assertIsNone(herd.gate(self.root, {}))
-        (self.root / "app.py").write_text("def f():\n    return 2\n")
-        herd.verify(self.root, "t1")
-        self.assertEqual(herd.gate(self.root, {})["decision"], "block")  # failing
+        (self.root / "app.py").write_text("def f():\n    return 1 + 1\n")  # another size: a same-size edit in the
+        self.assertEqual(herd.verify(self.root, "t1")["summary"]["failing"], 1)  # same second can reuse the old .pyc
+        self.assertIn("C1 is failing", herd.gate(self.root, {})["reason"])
         (self.root / "app.py").write_text("def f():\n    return 1\n")
         herd.verify(self.root, "t1")
         self.assertIn("evidence passes", herd.gate(self.root, {})["reason"])

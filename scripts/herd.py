@@ -940,8 +940,7 @@ def _codex_hooks(path):
         handlers = [h for h in group.get("hooks", []) if not HERD_GATE.search(str(h.get("command", "")) if isinstance(h, dict) else "")]
         if handlers or not group.get("hooks"):
             keep.append(dict(group, hooks=handlers) if "hooks" in group else group)
-    gate_cmd = f"{shlex.quote(sys.executable)} {shlex.quote(SELF)} gate"  # an interpreter known to be 3.11+
-    keep.append({"hooks": [{"type": "command", "command": gate_cmd, "timeout": 30}]})
+    keep.append({"hooks": [{"type": "command", "command": f"python3 {shlex.quote(SELF)} gate", "timeout": 30}]})
     hooks["Stop"] = keep
     data["hooks"] = hooks
     return json.dumps(data, indent=2) + "\n"
@@ -974,8 +973,10 @@ def setup(user):
     hooks_text, agents_text = _codex_hooks(hooks), _agents_md(agents, skills)  # read both before writing anything
     for name in SKILL_NAMES:  # replace only folders Herd wrote, never a user's own skill of the same name
         own = skills / f"herd-{name}" / "SKILL.md"
-        text = _read(own) if (skills / f"herd-{name}").exists() else ""
-        if (skills / f"herd-{name}").exists() and not (f"name: herd-{name}" in text and "/scripts/herd.py" in text):
+        folder, text = own.parent, _read(own)
+        ours = {f.name for f in (PLUGIN / "skills" / name).glob("*.md")}
+        unfinished = not own.exists() and folder.is_dir() and {f.name for f in folder.iterdir()} <= ours
+        if folder.exists() and not unfinished and not (f"name: herd-{name}" in text and "/scripts/herd.py" in text):
             raise ValueError(f"{own.parent}: not written by `herd setup`; move it, then run `herd setup` again")
     try:
         for name in SKILL_NAMES:

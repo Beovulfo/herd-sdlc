@@ -292,9 +292,12 @@ class TestAttacks(Base):
         self.assertIn("herd-run", self.refused())
         self.assertIn("my own", (skills / "herd-run" / "SKILL.md").read_text())
 
-    def test_hook_uses_the_interpreter_that_ran_setup(self):
-        _, _, hooks = self.run_setup("user")
-        self.assertTrue(self.gate_command(hooks).startswith(shlex.quote(sys.executable) + " "))
+    def test_a_setup_that_stopped_part_way_can_run_again(self):
+        skills, _, _ = self.places("project")
+        (skills / "herd-run").mkdir(parents=True)  # created, SKILL.md not written yet
+        (skills / "herd-run" / "quick.md").write_text("partial")
+        self.run_setup("project")
+        self.assertIn("name: herd-run", (skills / "herd-run" / "SKILL.md").read_text())
 
     def test_one_bad_part_elsewhere_in_hooks_json_is_kept(self):
         _, _, hooks = self.places("project")

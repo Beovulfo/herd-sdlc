@@ -14,6 +14,8 @@ Seven rules of the run skill move from text into the CLI, so an agent that skips
 - **Added:** `herd verify` counts consecutive failures per criterion and says to ask the human after 3 in a row.
 - **Added:** `herd done` refuses uncommitted work when pull requests are on (`[pr] open = true`, or a PR opened by `herd pr`) and warns otherwise.
 - **Changed:** the run and criteria skills say less where the CLI now enforces the rule.
+- **Added:** after a fresh-context review of this release: files already uncommitted at `herd init` are not counted as the agent's code; code moved aside for the first verify is flagged too; config files, dotfiles and files without an extension are not code; a review counts only when recorded after all checks first passed and at the current risk or higher, and code changed after it is reported; `herd note --human-change "C1: <the human's words>"` accepts the human's own change to a frozen criterion and shows it; human criteria are frozen even when no check can run yet; an unreadable `red.json` or `frozen.json` blocks instead of switching the rules off; the red run does not count toward the 3 failures in a row.
+- **Changed:** the Stop gate blocks a passing task until `herd done` runs, so the commit check and the final report are never skipped.
 
 ## 0.3.2
 

@@ -35,6 +35,19 @@ def git(root, *args):
     subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
 
 
+
+def late_review(root, slug="t1"):
+    """A review that counts whatever comes next: for tests that are not about when the review happens.
+
+    A real review counts only after all checks first passed and at the risk it saw (see TestReviewFindings);
+    this one is placed as if the checks had passed before it, at the highest risk."""
+    d = herd._dir(root, slug)
+    (d / "green.json").write_text(json.dumps({"at": herd.now(), "notes": 0}))
+    with (d / "notes.jsonl").open("a") as f:
+        f.write(json.dumps({"at": herd.now(), "kind": "review", "text": "no Blocker or Major",
+                            "by": "a fresh subagent", "risk": "high"}) + "\n")
+
+
 class Base(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -59,7 +72,7 @@ class Base(unittest.TestCase):
         """Record the standard attacks and a review, which `herd done` needs on the standard route."""
         for a in herd.ATTACKS:
             herd.add_note(root or self.root, slug, "tried", f"{a} attack", attack=a, check=OK)
-        herd.add_review(root or self.root, slug, by="a fresh subagent", text="no Blocker or Major")
+        late_review(root or self.root, slug)
 
 
 class TestTask(Base):
@@ -718,13 +731,13 @@ class TestGate(Base):
         self.assertIn("C1", self.gate()["reason"])
         (self.root / "greet.txt").write_text("hello")
         herd.verify(self.root, "t1")
-        self.assertIsNone(self.gate())
+        self.assertIn("herd.py done", self.gate()["reason"])  # passing: only `herd done` ends the task
 
     def test_blocks_stale_evidence(self):
         self.task(attacks=True)
         (self.root / "greet.txt").write_text("hello")
         herd.verify(self.root, "t1")
-        self.assertIsNone(self.gate())
+        self.assertIn("evidence passes", self.gate()["reason"])
         (self.root / "greet.txt").write_text("changed")  # workspace changed after verify
         self.assertIn("stale", self.gate()["reason"])
         herd.verify(self.root, "t1")
@@ -747,8 +760,16 @@ class TestGate(Base):
         self.gate()
         (self.root / "greet.txt").write_text("hello")
         herd.verify(self.root, "t1")
-        self.assertIsNone(self.gate())
+        self.assertIn("evidence passes", self.gate()["reason"])
         self.assertFalse((self.root / ".herd/tasks/t1/gate_blocks").exists())
+        for _ in range(herd.MAX_BLOCKS + 1):  # it never gives up: `herd done` is one command away
+            self.assertEqual(self.gate()["decision"], "block")
+        self.assertEqual(self.run_done(), 0)
+        self.assertIsNone(self.gate())
+
+    def run_done(self):
+        return subprocess.run(["python3", str(Path(herd.__file__)), "done"], cwd=self.root,
+                              capture_output=True, text=True).returncode
 
 
 class TestCli(Base):
@@ -764,12 +785,12 @@ class TestCli(Base):
         self.assertEqual(self.run_cli("check")[0], 0)
         for a in herd.ATTACKS:
             self.assertEqual(self.run_cli("note", "--tried", "--attack", a, "--check", OK, f"{a} attack")[0], 0)
-        self.assertEqual(self.run_cli("review", "--by", "a fresh subagent", "no Blocker or Major")[0], 0)
         self.assertEqual(self.run_cli("verify")[0], 1)  # C1 failing
         (self.root / "greet.txt").write_text("hello")
         rc, out, _ = self.run_cli("verify")
         self.assertEqual(rc, 0)
         self.assertIn("1 passing", out)
+        self.assertEqual(self.run_cli("review", "--by", "a fresh subagent", "no Blocker or Major")[0], 0)
         rc, out, _ = self.run_cli("done")
         self.assertEqual(rc, 0)
         self.assertFalse((self.root / ".herd/active").exists())
@@ -1108,7 +1129,7 @@ class TestAttackChecks(Base):
 
     def ready(self):
         self.task()
-        herd.add_review(self.root, "t1", by="a fresh subagent", text="no Blocker or Major")  # these tests are about attacks
+        late_review(self.root)  # these tests are about attacks
         (self.root / "greet.txt").write_text("hello")
 
     def test_attack_needs_a_command(self):
@@ -1680,7 +1701,6 @@ class TestWorktree(Base):
             self.assertFalse([o for o in slugs if o != s and o in block["reason"]])
         self.assertEqual((self.root / ".herd/active").read_text().strip(), "home")
         self.assertEqual(herd.problems(self.root, "home"), [])  # not made stale by the new worktrees
-        self.assertIsNone(herd.gate(self.root, {}))
         dup = self.herd("init", slugs[0], "Again", "--worktree")
         self.assertEqual(dup.returncode, 1)
         self.assertEqual((self.wt(slugs[0]) / ".herd/active").read_text().strip(), slugs[0])
@@ -1816,19 +1836,18 @@ class TestBudgets(Base):
         rc, out = self.cli("triage", "Change auth/session.py", "--json")
         self.assertEqual(json.loads("\n".join(out))["risk"]["floor"], "high")
 
-    # (2) capped final report
-    def test_report_template_is_at_most_120_words(self):
+    # (2) the final report is written by `herd done`, not by the agent from memory (0.4.0)
+    def test_final_report_comes_from_herd_done(self):
         text = (SKILLS / "run/SKILL.md").read_text()
-        template = text.split("## Final report", 1)[1].split("```text", 1)[1].split("```", 1)[0]
-        self.assertLessEqual(words(template), 120)
-        for part in ("\nProven:", "Not proven:", "Caveats:", "Decisions:", "Limits:", "Review:"):
-            self.assertIn(part, template)
-        self.assertIn("`herd done`. It prints the final report, filled from the evidence", text.split("## Final report")[0])  # 0.4.0: written by the CLI, not from memory
+        section = text.split("## Final report", 1)[1].split("## Writing", 1)[0]
+        self.assertIn("Paste the report `herd done` prints", section)
+        self.assertIn("herd note --decision", section)
+        self.assertNotIn("```text", section)  # no template left to fill by hand
 
     # (3) short skills, rare parts in reference files read only when needed
     def test_skill_word_budgets(self):
         # quality first: 0.3.1 raised run from 800 when the break-it attacks moved back into it
-        budget = {"run": 900, "criteria": 450, "evidence": 450}
+        budget = {"run": 820, "criteria": 450, "evidence": 450}  # 0.4.0: rules the CLI enforces left the skill
         for name, limit in budget.items():
             self.assertLessEqual(words((SKILLS / name / "SKILL.md").read_text()), limit, name)
 

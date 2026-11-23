@@ -1,5 +1,6 @@
 """Rules the run skill used to state only in text, now enforced or recorded by the CLI (0.4.0)."""
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -7,6 +8,7 @@ import unittest
 from pathlib import Path
 
 from scripts import herd
+from tests.test_herd_cli import late_review
 
 OK = "python3 -c \"import json\""  # an attack command that passes and is not vacuous
 REQUEST = "Add f() to app.py. It must return 1 for any call."
@@ -66,7 +68,7 @@ class Base(unittest.TestCase):
     def attacks_and_review(self):
         for a in herd.ATTACKS:
             herd.add_note(self.root, "t1", "tried", f"{a} attack", attack=a, check=OK)
-        herd.add_review(self.root, "t1", by="a fresh subagent", text="no Blocker or Major")
+        late_review(self.root)
 
 
 class TestRedFirst(Base):
@@ -263,7 +265,7 @@ class TestWarningsAndEscalation(Base):
 
     def test_three_failures_in_a_row_say_escalate(self):
         self.start()
-        for i in range(3):
+        for i in range(4):  # the first is the red run, which is not a failed attempt
             out = self.cli("verify").stdout
         self.assertIn("C1 failed 3 times in a row: ask the human one question", out)
         (self.root / "app.py").write_text("def f():\n    return 1\n")
@@ -301,3 +303,99 @@ class TestCommitBeforeDone(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestReviewFindings(Base):
+    """The holes a fresh-context review found in the first version of these rules."""
+
+    def test_files_dirty_before_init_are_not_the_agents_code(self):
+        (self.root / "app.py").write_text("x = 1\n")  # the human's uncommitted work
+        self.start()
+        self.assertEqual(herd.verify(self.root, "t1")["red"]["code_before"], [])
+
+    def test_config_dotfiles_and_extensionless_files_are_not_code(self):
+        for f in ("pyproject.toml", "package.json", ".gitignore", "Makefile", "tests/test_x.py", ".herd/x.py"):
+            self.assertFalse(herd.is_code(f), f)
+        self.assertTrue(herd.is_code("src/app.py"))
+
+    def test_code_moved_aside_for_the_first_verify_is_flagged(self):
+        self.start()
+        (self.root / "app.py").write_text("def f():\n    return 1\n")
+        old = herd.datetime.now().timestamp() - 3600
+        os.utime(self.root / "app.py", (old, old))
+        (self.root / "app.py").rename(self.root / "aside.txt")  # hidden from the red run
+        herd.verify(self.root, "t1")
+        (self.root / "aside.txt").rename(self.root / "app.py")  # mv keeps the old mtime
+        ev = herd.verify(self.root, "t1")
+        self.assertEqual(ev["red"]["code_hidden"], ["app.py"])
+        self.assertIn("red first not proven", " ".join(herd.problems(self.root, "t1")))
+
+    def test_a_review_before_all_checks_pass_does_not_count(self):
+        self.start()
+        self.red_then_build()
+        for a in herd.ATTACKS:
+            herd.add_note(self.root, "t1", "tried", f"{a} attack", attack=a, check=OK)
+        herd.add_review(self.root, "t1", by="a fresh subagent", text="looked at the plan")
+        herd.verify(self.root, "t1")  # all checks pass for the first time, after the review
+        self.assertIn("recorded before all checks first passed", " ".join(herd.problems(self.root, "t1")))
+        herd.add_review(self.root, "t1", by="a fresh subagent", text="no Blocker or Major")
+        self.assertEqual(herd.problems(self.root, "t1"), [])
+
+    def test_a_review_at_a_lower_risk_does_not_count_once_the_risk_rises(self):
+        self.start()
+        self.red_then_build()
+        for a in herd.ATTACKS:
+            herd.add_note(self.root, "t1", "tried", f"{a} attack", attack=a, check=OK)
+        herd.verify(self.root, "t1")
+        herd.add_review(self.root, "t1", by="a fresh subagent", text="no Blocker or Major")
+        self.assertEqual(herd.problems(self.root, "t1"), [])
+        (self.root / "auth").mkdir()
+        (self.root / "auth/session.py").write_text("x = 1\n")  # a high-risk path
+        herd.verify(self.root, "t1")
+        self.assertIn("the risk rose to high after the review", " ".join(herd.problems(self.root, "t1")))
+
+    def test_code_changed_after_the_review_is_reported(self):
+        self.start()
+        self.red_then_build()
+        herd.verify(self.root, "t1")
+        herd.add_review(self.root, "t1", by="a fresh subagent", text="no Blocker or Major")
+        (self.root / "app.py").write_text("def f():\n    return 1  # tweak\n")
+        self.assertIn("The code changed after the review", herd.report(herd.verify(self.root, "t1")))
+
+    def test_the_humans_own_change_is_accepted_with_their_words_and_shown(self):
+        self.start()
+        self.red_then_build()
+        self.attacks_and_review()
+        narrowed = TASK.replace('text = "It must return 1 for any call"', 'text = "It must return 1 for one call"')
+        (self.root / ".herd/tasks/t1/task.toml").write_text(narrowed)
+        herd.verify(self.root, "t1")
+        self.assertIn("--human-change", " ".join(herd.problems(self.root, "t1")))
+        self.assertEqual(self.cli("note", "--human-change", "C1: one call is enough, said the human").returncode, 0)
+        ev = herd.verify(self.root, "t1")
+        self.assertEqual(herd.problems(self.root, "t1"), [])
+        self.assertIn("one call is enough, said the human", herd.report(ev))
+        self.assertIn("one call is enough, said the human", herd.pr_body(self.root, "t1"))
+
+    def test_human_criteria_are_frozen_even_before_any_check_runs(self):
+        self.start(TASK.replace(f"check = {json.dumps(APP_CHECK)}", 'check = ""'))
+        herd.verify(self.root, "t1")  # nothing runnable yet, so no red run, but the human's words are frozen
+        self.assertTrue((self.root / ".herd/tasks/t1/frozen.json").exists())
+        narrowed = TASK.replace('text = "It must return 1 for any call"', 'text = "It must return 1 for one call"')
+        (self.root / ".herd/tasks/t1/task.toml").write_text(narrowed)
+        herd.verify(self.root, "t1")
+        self.assertIn("C1 changed after the first verify", " ".join(herd.problems(self.root, "t1")))
+
+    def test_an_unreadable_red_file_blocks_instead_of_switching_the_rules_off(self):
+        self.start()
+        self.red_then_build()
+        self.attacks_and_review()
+        (self.root / ".herd/tasks/t1/red.json").write_text("{broken")
+        ev = herd.verify(self.root, "t1")
+        self.assertTrue(ev["red_unreadable"])
+        self.assertIn("is unreadable", " ".join(herd.problems(self.root, "t1")))
+
+    def test_the_red_run_does_not_count_toward_escalation(self):
+        self.start()
+        for _ in range(3):
+            out = self.cli("verify").stdout
+        self.assertNotIn("in a row", out)  # the red run plus two failed attempts

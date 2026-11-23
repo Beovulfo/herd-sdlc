@@ -77,9 +77,10 @@ VARIES = re.compile(r"\b(vary|varies|varied|varying|variation|generated?|random\
                     r"parametri[sz]ed|families|several|multiple|across|sizes?)\b", re.I)
 SCALED = re.compile(r"\b(scales?|sizes?|largest?|big|biggest|huge|time limit|timed|timing|seconds|performance|"
                     r"runtime|latency|up to \d+)\b", re.I)
-NOTE_KINDS = ("found", "fixed", "open", "tried", "decision", "late-red", "review")
+NOTE_KINDS = ("found", "fixed", "open", "tried", "decision", "late-red", "review", "human-change")
 # red first: files that do not count as code written before the first verify
-DOC_EXT = (".md", ".rst", ".txt")
+DOC_EXT = (".md", ".rst", ".txt",  # docs, and setup and config files
+           ".toml", ".json", ".yaml", ".yml", ".cfg", ".ini", ".lock")
 TEST_DIRS = {"test", "tests", "spec", "specs", "__tests__", "testdata", "fixtures"}
 TEST_FILE = re.compile(r"^test_.*|.*_test\.[^.]+$|.*\.(test|spec)\.[^.]+$|.*_spec\.[^.]+$|^conftest\.py$")
 LEVELS = ("low", "medium", "high")
@@ -165,7 +166,8 @@ def init_task(root, slug, goal, quick_check=None, request=None):
     risk = herd_triage.build_record("task", 0, goal + "\n" + (request or ""), {},
                                     toml_path.read_text() if toml_path.exists() else "")["risk"]["effective"]
     head = _git(root, "rev-parse", "HEAD").decode().strip() or None  # red first: what changed since here
-    (d / "start.json").write_text(json.dumps({"head": head, "risk": risk}) + "\n")
+    (d / "start.json").write_text(json.dumps({"head": head, "risk": risk,  # changes already there are not the agent's
+                                              "dirty": changed_since(root, head) or []}) + "\n")
     if request is not None:
         (d / "request.md").write_text(request)
     (Path(root) / ".herd" / "active").write_text(slug + "\n")
@@ -449,7 +451,7 @@ def _state(path, default):
         data = json.loads(path.read_text())
     except (OSError, ValueError):
         return default
-    return data if isinstance(data, type(default)) else default
+    return data if isinstance(data, dict if default is None else type(default)) else default
 
 
 def is_code(path):
@@ -457,14 +459,18 @@ def is_code(path):
     parts = Path(path).parts
     if not parts or parts[0] == ".herd" or path.lower().endswith(DOC_EXT):
         return False
-    return not (TEST_DIRS & {s.lower() for s in parts[:-1]} or TEST_FILE.match(parts[-1]))
+    name = parts[-1]
+    if name.startswith(".") or "." not in name:  # .gitignore, README, LICENSE, Makefile: setup, not code
+        return False
+    return not (TEST_DIRS & {s.lower() for s in parts[:-1]} or TEST_FILE.match(name))
 
 
 def changed_since(root, head):
     """Paths (relative to root) changed since commit head, tracked or new; None when that cannot be told."""
     if not head:
         return None
-    p = subprocess.run(["git", "diff", "--name-only", "--relative", head], cwd=root, capture_output=True, text=True)
+    p = subprocess.run(["git", "diff", "--name-only", "--relative", "--diff-filter=d", head], cwd=root,
+                       capture_output=True, text=True)
     if p.returncode:
         return None
     new = _git(root, "ls-files", "--others", "--exclude-standard").decode().splitlines()
@@ -537,16 +543,39 @@ def verify(root, slug):
     d = _dir(root, slug)
     start = _state(d / "start.json", {})  # missing or corrupt: red first and the stored risk are unknown
     changed = changed_since(root, start.get("head"))
-    red_path = d / "red.json"
+    red_path, frozen_path = d / "red.json", d / "frozen.json"
     checked = [r for r in results if r["status"] != "unchecked"]
-    if not red_path.exists() and checked:  # first verify with a runnable check: how many were red
+    mine = None if changed is None else [f for f in changed if f not in set(start.get("dirty") or [])]
+    snapshot = {c["id"]: {"text": c["text"], "source": c["source"], "check": c["check"]} for c in task["criteria"]}
+    if not frozen_path.exists():  # the human criteria are frozen at the first verify, checked or not
+        frozen_path.write_text(json.dumps(snapshot))
+    first = not red_path.exists() and bool(checked)
+    if first:  # first verify with a runnable check: how many were red, and what code already existed
+        fz = _state(frozen_path, {})  # the checks the red run saw are the baseline for "check changed"
+        frozen_path.write_text(json.dumps({cid: dict(fz.get(cid, s), check=s["check"]) for cid, s in snapshot.items()}
+                                          | {cid: c for cid, c in fz.items() if cid not in snapshot}))
         red_path.write_text(json.dumps({
-            "at": now(), "failed": sum(r["status"] == "failing" for r in checked), "total": len(checked),
-            "code_before": None if changed is None else [f for f in changed if is_code(f)],
-            "criteria": {c["id"]: {"text": c["text"], "source": c["source"], "check": c["check"]}
-                         for c in task["criteria"]}}))
-    red = _state(red_path, {}) or None  # a corrupt red.json counts as no first run on record
-    frozen = (red or {}).get("criteria") or {}
+            "at": now(), "at_epoch": datetime.now(timezone.utc).timestamp(),
+            "failed": sum(r["status"] == "failing" for r in checked), "total": len(checked),
+            "code_before": None if mine is None else [f for f in mine if is_code(f)], "seen": mine or []}))
+    red = _state(red_path, {}) or None
+    red_unreadable = any(f.exists() and _state(f, None) is None for f in (red_path, frozen_path))
+    hidden = []  # code that existed before the first verify but was moved aside for it (mv keeps the mtime)
+    if red and mine is not None and red.get("at_epoch"):
+        for f in mine:
+            try:
+                old = (Path(root) / f).stat().st_mtime < red["at_epoch"] - 1
+            except OSError:
+                old = False
+            if is_code(f) and f not in set(red.get("seen") or []) and old:
+                hidden.append(f)
+    frozen = _state(frozen_path, {})
+    for n in load_notes(root, slug):  # the human changed their own criterion: `herd note --human-change "C1: ..."`
+        cid = n["text"].split(":", 1)[0].strip() if n["kind"] == "human-change" else None
+        if cid in snapshot and frozen.get(cid) != snapshot[cid] and frozen.get(cid, {}).get("by_note") != n["at"]:
+            frozen[cid] = dict(snapshot[cid], by_note=n["at"])
+            frozen_path.write_text(json.dumps(frozen))
+    frozen = {cid: {k: v for k, v in c.items() if k != "by_note"} for cid, c in frozen.items()}
     now_by_id = {c["id"]: c for c in task["criteria"]}
     human_changed = [(cid, "removed" if cid not in now_by_id else "changed") for cid, c in frozen.items()
                      if c["source"] == "human" and (cid not in now_by_id or now_by_id[cid]["text"] != c["text"]
@@ -559,8 +588,11 @@ def verify(root, slug):
     warnings = check_warnings(task, request_text) + coverage_warnings(task) + length_warnings(task)
     fails_path = d / "fails.json"  # consecutive failing verifies per criterion, for the escalation rule
     fails = _state(fails_path, {})
-    fails = {r["id"]: fails.get(r["id"], 0) + 1 if r["status"] == "failing" else 0 for r in results}
-    fails_path.write_text(json.dumps(fails))
+    fails = {r["id"]: fails.get(r["id"], 0) + 1 if r["status"] == "failing" and not first else 0 for r in results}
+    fails_path.write_text(json.dumps(fails))  # the intended red run is not a failed attempt
+    if summary["passing"] and not summary["failing"] and not (d / "green.json").exists():
+        # all checks passed for the first time; "notes" orders it among the notes (timestamps are to the second)
+        (d / "green.json").write_text(json.dumps({"at": now(), "notes": len(load_notes(root, slug))}))
     timing, started_path = None, _dir(root, slug) / "started"
     if started_path.exists():  # wall clock from `herd init`, so it includes any waiting on the human
         started = started_path.read_text().strip()
@@ -570,8 +602,8 @@ def verify(root, slug):
     ev = {"task": slug, "goal": task["goal"], "at": now(), "head": head, "dirty": dirty,
           "route": task.get("route", "standard"), "test_budget": task.get("test_budget"),
           "known_limits": task.get("known_limits"), "notes": load_notes(root, slug),
-          "red": {"failed": red["failed"], "total": red["total"], "code_before": red.get("code_before")}
-          if red else None, "timing": timing,
+          "red": {"failed": red["failed"], "total": red["total"], "code_before": red.get("code_before"),
+                  "code_hidden": hidden} if red else None, "red_unreadable": red_unreadable, "timing": timing,
           "human_not_verbatim": human_not_verbatim, "risk": risk_of(root, start, changed),
           "human_changed": human_changed, "checks_changed": checks_changed, "added_after_red": added,
           "warnings": warnings, "escalate": [cid for cid, n in fails.items() if n >= ESCALATE_AFTER],
@@ -581,7 +613,7 @@ def verify(root, slug):
     return ev
 
 
-def add_note(root, slug, kind, text, attack=None, check=None, timeout=None):
+def add_note(root, slug, kind, text, attack=None, check=None, timeout=None, extra=None):
     """Append a caveat to the task's log: found, fixed, open (a known limit) or tried (adversarial attempt).
 
     attack names which standard attack a tried note covers (one of ATTACKS); check is the command that
@@ -609,6 +641,7 @@ def add_note(root, slug, kind, text, attack=None, check=None, timeout=None):
         rec["check"] = check.strip()
     if timeout is not None:
         rec["timeout_s"] = timeout
+    rec.update(extra or {})
     with open(d / "notes.jsonl", "a") as f:
         f.write(json.dumps(rec) + "\n")
 
@@ -617,12 +650,24 @@ def add_review(root, slug, by=None, text="", skipped=False):
     """Record the fresh-context review: who reviewed and what they found, or why it was skipped."""
     if not text.strip() or bool(by and by.strip()) == bool(skipped):
         raise ValueError('use `herd review --by "<reviewer>" "<what they found>"` or `herd review --skipped "<why>"`')
-    add_note(root, slug, "review", text)
-    p = _dir(root, slug) / "notes.jsonl"
-    lines = p.read_text().splitlines()
-    rec = json.loads(lines[-1])
-    rec.update({"skipped": True} if skipped else {"by": by.strip()})
-    p.write_text("\n".join(lines[:-1] + [json.dumps(rec)]) + "\n")
+    ev = load_evidence(root, slug) or {}  # the code state the review saw: it counts only for that state and risk
+    extra = {"skipped": True} if skipped else {"by": by.strip()}
+    extra.update({"fingerprint": ev.get("fingerprint"), "risk": (ev.get("risk") or {}).get("effective")})
+    add_note(root, slug, "review", text, extra=extra)
+
+
+def review_state(root, slug, ev, notes):
+    """(counts, why not): the latest review counts only after all checks first passed, at the current risk or above."""
+    rv = [n for n in notes if n["kind"] == "review"]
+    if not rv:
+        return False, "no review recorded"
+    n, green = rv[-1], _state(_dir(root, slug) / "green.json", {})
+    if not green or notes.index(n) < green.get("notes", len(notes)):
+        return False, "the review was recorded before all checks first passed: review the finished change"
+    risk = (ev.get("risk") or {}).get("effective", "medium")
+    if LEVELS.index(n.get("risk") if n.get("risk") in LEVELS else "low") < LEVELS.index(risk):
+        return False, f"the risk rose to {risk} after the review: review again"
+    return True, None
 
 
 def final_report(root, slug, ev, notes):
@@ -648,7 +693,7 @@ def final_report(root, slug, ev, notes):
             f"Not proven: {'; '.join(gaps) if gaps else 'nothing open'}.",
             f"Caveats: {'; '.join(caveats) if caveats else 'none'}.",
             f"Decisions: {' | '.join(decisions) if decisions else 'none recorded'}.",
-            f"Limits: {ev.get('known_limits') or 'none stated'}",
+            f"Limits: {(ev.get('known_limits') or 'none stated').rstrip('.')}.",
             f"Review: {review or ('not needed (quick route)' if ev.get('route') == 'quick' else 'none recorded')}."]
 
 
@@ -715,10 +760,20 @@ def _review(notes):
     return f"skipped: {n['text']}" if n.get("skipped") else f"{n.get('by', 'reviewer')}: {n['text']}"
 
 
+def _early_code(ev):
+    """Code files that existed before the first verify: changed before it, or moved aside for it."""
+    red = ev.get("red") or {}
+    return sorted(set(red.get("code_before") or []) | set(red.get("code_hidden") or []))
+
+
 def _rule_lines(ev, notes):
     """What the run-rule checks found, one line each: red first, criteria changes, review, warnings."""
     out = []
-    code = (ev.get("red") or {}).get("code_before")
+    code = _early_code(ev)
+    if ev.get("red") and ev["red"].get("code_before") is None:
+        out.append("Red first not checked: no git commit when the task started")
+    if ev.get("red_unreadable"):
+        out.append("Red first and the criteria freeze are unknown: red.json or frozen.json is unreadable")
     if code:
         why = [n["text"] for n in notes if n["kind"] == "late-red"]
         out.append(f"Red first not proven: {', '.join(code[:5])}{' and more' if len(code) > 5 else ''} changed "
@@ -728,6 +783,11 @@ def _rule_lines(ev, notes):
     out += [f"{cid}: check changed after the first verify, so it was never seen failing"
             for cid in ev.get("checks_changed") or []]
     out += [f"{cid}: added after the first verify, so it was never seen failing" for cid in ev.get("added_after_red") or []]
+    out += [f"Human criterion changed with the human's words, for you to confirm: {n['text']}"
+            for n in notes if n["kind"] == "human-change"]
+    rv = [n for n in notes if n["kind"] == "review" and not n.get("skipped")]
+    if rv and rv[-1].get("fingerprint") and rv[-1]["fingerprint"] != ev.get("fingerprint"):
+        out.append("The code changed after the review")
     return out
 
 
@@ -1019,16 +1079,22 @@ def problems(root, slug):
     if not ev["summary"]["passing"] and not out:
         out.append("no passing criterion: give at least one criterion a runnable check")
     notes = load_notes(root, slug)
-    code = (ev.get("red") or {}).get("code_before")
+    code = _early_code(ev)
+    if ev.get("red_unreadable"):
+        out.append(f"red.json or frozen.json in {_dir(root, slug)} is unreadable, so red first and the criteria "
+                   "freeze are lost: restore it, or cancel and start a new task")
     if code and not any(n["kind"] == "late-red" for n in notes):
         out.append(f"red first not proven: {', '.join(code[:5])} changed before the first verify. If that was "
                    "deliberate, say why with `herd note --late-red \"<why>\"`; it shows in the report and the PR")
     out += [f"human criterion {cid} {'was removed' if how == 'removed' else 'changed'} after the first verify: "
-            "restore it exactly as the human wrote it (only the human may change it)" for cid, how in ev.get("human_changed") or []]
+            "restore it exactly as the human wrote it; if the human changed it, record their words with "
+            f"`herd note --human-change \"{cid}: <the human's words>\"`" for cid, how in ev.get("human_changed") or []]
     risk = (ev.get("risk") or {}).get("effective")
-    if ev.get("route") != "quick" and risk in ("medium", "high") and not any(n["kind"] == "review" for n in notes):
-        out.append(f"review missing: risk is {risk}. Get a fresh-context review, then record it with "
-                   "`herd review --by \"<reviewer>\" \"<what they found>\"`, or `herd review --skipped \"<why>\"`")
+    ok, why = review_state(root, slug, ev, notes)
+    if ev.get("route") != "quick" and risk in ("medium", "high") and not ok:
+        out.append(f"review missing ({why}): risk is {risk}. Get a fresh-context review of the finished change, "
+                   "then record it with `herd review --by \"<reviewer>\" \"<what they found>\"`, "
+                   "or `herd review --skipped \"<why>\"`")
     if ev.get("route") != "quick":
         ran = {(a["at"], a["text"], a.get("check")) for a in ev.get("attacks") or []}
         if any(n["kind"] == "tried" and n.get("attack") and (n["at"], n["text"], n.get("check")) not in ran
@@ -1054,9 +1120,10 @@ def gate(root, hook):
         return None
     counter = _dir(root, slug) / "gate_blocks"
     probs = problems(root, slug)
-    if not probs:
+    if not probs:  # everything passes, but only `herd done` checks the commit and prints the final report
         counter.unlink(missing_ok=True)
-        return None
+        return {"decision": "block", "reason": f"Herd task `{slug}`: the evidence passes. Run `python3 {SELF} done` "
+                "to close the task and print the final report, then paste that report."}
     n = int(counter.read_text()) if counter.exists() else 0
     if n >= MAX_BLOCKS:
         return None
@@ -1094,7 +1161,7 @@ def _slug_arg(root, args):
 USAGE = {
     "init": 'herd init <slug> "<goal>" [--request "<message>"] [--quick "<check>"] [--worktree]',
     "check": "herd check [slug]",
-    "note": 'herd note --found|--fixed|--open|--decision|--late-red|--tried [--attack bad-input|collision|one-bad-part|recount --check "<command>" [--timeout S]] "text"',
+    "note": 'herd note --found|--fixed|--open|--decision|--late-red|--human-change|--tried [--attack bad-input|collision|one-bad-part|recount --check "<command>" [--timeout S]] "text"',
     "review": 'herd review --by "<reviewer>" "<what they found>"  |  herd review --skipped "<why>"',
     "detect": "herd detect",
     "lint": "herd lint [--suggest]   (without --suggest: the PostToolUse hook, reads hook JSON on stdin)",
@@ -1169,7 +1236,7 @@ def main(argv):
             return 1 if errs else 0
         elif cmd == "note":
             kinds = {"--found": "found", "--fixed": "fixed", "--open": "open", "--tried": "tried",
-                     "--decision": "decision", "--late-red": "late-red"}
+                     "--decision": "decision", "--late-red": "late-red", "--human-change": "human-change"}
             attack, args = _opt(args, "--attack")
             check, args = _opt(args, "--check")
             timeout, args = _opt(args, "--timeout")

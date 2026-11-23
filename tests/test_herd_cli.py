@@ -49,6 +49,12 @@ class Base(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
+    def allow_plain_init(self):
+        """Opt out of the default worktree, for tests of a plain `herd init` in this checkout."""
+        (self.root / "herd.toml").write_text("[worktree]\nrequired = false\n")
+        git(self.root, "add", "herd.toml")
+        git(self.root, "commit", "-q", "-m", "plain inits")
+
     def task(self, text=TASK, attacks=False):
         herd.init_task(self.root, "t1", "Add a greeting")
         (self.root / ".herd/tasks/t1/task.toml").write_text(text)
@@ -158,6 +164,10 @@ class TestHygiene(Base):
 
 
 class TestQuick(Base):
+    def setUp(self):
+        super().setUp()
+        self.allow_plain_init()
+
     def test_quick_init_writes_one_criterion(self):
         herd.init_task(self.root, "q1", "Fix a typo in README", quick_check="python3 -m unittest")
         t = herd.load_task(self.root, "q1")
@@ -261,6 +271,10 @@ class TestBudgetAndRed(Base):
 
 
 class TestVerbatim(Base):
+    def setUp(self):
+        super().setUp()
+        self.allow_plain_init()
+
     REQUEST = "Build a thing.\n\nSuccess: the optimized route saves MORE than 20 percent of the time   vs a random walk."
 
     def human(self, text, source="human"):
@@ -751,6 +765,10 @@ class TestGate(Base):
 
 
 class TestCli(Base):
+    def setUp(self):
+        super().setUp()
+        self.allow_plain_init()
+
     def run_cli(self, *args):
         p = subprocess.run(["python3", str(Path(herd.__file__)), *args], cwd=self.root,
                            capture_output=True, text=True)
@@ -812,6 +830,10 @@ class TestCli(Base):
 
 
 class TestCancel(Base):
+    def setUp(self):
+        super().setUp()
+        self.allow_plain_init()
+
     def test_cancel_stops_the_gate_and_keeps_the_record(self):
         self.task()
         self.assertEqual(herd.gate(self.root, {})["decision"], "block")
@@ -1036,6 +1058,10 @@ class TestSimplifiedAdversarial(Base):
 
 class TestTaskBranch(Base):
     """A plain `herd init` puts the work on its own branch herd/<slug>, cut from the current one."""
+    def setUp(self):
+        super().setUp()
+        self.allow_plain_init()
+
 
     def cli(self, *args, cwd=None):
         return subprocess.run([sys.executable, str(Path(herd.__file__)), *args], cwd=cwd or self.root,
@@ -1077,8 +1103,9 @@ class TestTaskBranch(Base):
     def test_no_commit_yet_or_no_git_warns_or_does_nothing(self):
         fresh = Path(tempfile.mkdtemp())
         try:
-            p = self.cli("init", "t1", "g", cwd=fresh)  # not a git repository
-            self.assertEqual((p.returncode, p.stderr), (0, ""))
+            p = self.cli("init", "t1", "g", cwd=fresh)  # not a git repository: no worktree, no branch
+            self.assertEqual(p.returncode, 0)
+            self.assertIn("no worktree", p.stderr)
             git(fresh, "init", "-q")
             herd.cancel_task(fresh, "t1")
             p = self.cli("init", "t2", "g", cwd=fresh)  # no commit yet
@@ -1348,11 +1375,59 @@ class TestPr(Base):
         log = self.gh / "log"
         return log.read_text().splitlines() if log.exists() else []
 
-    def test_refuses_without_opt_in(self):
+    def opt_out(self):
+        (self.root / "herd.toml").write_text("[pr]\nopen = false\n[worktree]\nrequired = false\n")
+        git(self.root, "add", "herd.toml")
+        git(self.root, "commit", "-qm", "opt out")
+
+    def test_creates_a_draft_and_never_marks_it_ready(self):
+        herd.verify(self.root, "t1")
+        self.assertEqual(self.herd("pr", "t1").returncode, 0)
+        create = [c for c in self.calls() if c.startswith("ARGS pr create")]
+        self.assertEqual(len(create), 1)
+        self.assertIn(" --draft", create[0])
+        self.assertIn("draft", (self.gh / "body").read_text().lower())  # the footer says why, and who marks it ready
+        self.herd("pr", "t1")  # the PR exists now: an update only edits the body
+        edits = [c for c in self.calls() if c.startswith("ARGS pr edit")]
+        self.assertEqual(len(edits), 1)
+        self.assertNotIn("draft", edits[0])
+        self.assertFalse([c for c in self.calls() if c.startswith("ARGS pr ready")])
+
+    def test_opens_without_yes_by_default(self):
+        herd.verify(self.root, "t1")
+        p = self.herd("pr", "t1")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("https://github.com/o/r/pull/7", p.stdout)
+        self.assertEqual(len([c for c in self.calls() if c.startswith("ARGS pr create")]), 1)
+
+    def test_open_false_needs_yes(self):
+        self.opt_out()
         p = self.herd("pr", "t1")
         self.assertEqual(p.returncode, 1)
-        self.assertIn("opt-in", p.stderr)
+        self.assertIn("open = false", p.stderr)
         self.assertEqual(self.calls(), [])
+        herd.verify(self.root, "t1")
+        self.assertEqual(self.herd("pr", "t1", "--yes").returncode, 0)
+
+    def test_no_origin_remote_fails_clearly_and_done_still_works(self):
+        git(self.root, "remote", "remove", "origin")
+        herd.verify(self.root, "t1")
+        p = self.herd("pr", "t1")
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("origin", p.stderr)
+        self.assertNotIn("Traceback", p.stderr)
+        self.assertEqual(self.calls(), [])
+        self.attacks()
+        herd.verify(self.root, "t1")
+        d = self.herd("done", "t1")
+        self.assertEqual(d.returncode, 0, d.stderr)  # a pull request that cannot open never blocks the task
+
+    def test_no_gh_fails_clearly_by_default(self):
+        herd.verify(self.root, "t1")
+        p = self.herd("pr", "t1", path=False)
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("gh", p.stderr)
+        self.assertNotIn("Traceback", p.stderr)
 
     def test_refuses_off_a_herd_branch(self):
         git(self.root, "switch", "-q", "-c", "feature")
@@ -1597,7 +1672,8 @@ class TestWorktree(Base):
             shutil.rmtree(origin, ignore_errors=True)
             shutil.rmtree(gh, ignore_errors=True)
 
-    def test_opt_in_off_plain_init_is_unchanged(self):
+    def test_required_false_plain_init_is_unchanged(self):
+        self.allow_plain_init()
         p = self.herd("init", "t1", "Write out.txt")
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertTrue((self.root / ".herd/tasks/t1/task.toml").exists())
@@ -1704,7 +1780,7 @@ class TestWorktree(Base):
     def test_subproject_in_a_subfolder_keeps_its_own_herd(self):
         pkg = self.root / "packages" / "app"
         pkg.mkdir(parents=True)
-        (pkg / "herd.toml").write_text("# app config\n")
+        (pkg / "herd.toml").write_text("# app config\n[worktree]\nrequired = false\n")
         git(self.root, "add", "-A")
         git(self.root, "commit", "-q", "-m", "app package")
         p = self.herd("init", "t1", "Write out.txt", cwd=pkg)

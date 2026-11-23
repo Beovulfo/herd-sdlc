@@ -14,7 +14,7 @@ Reference files hold the detail of a step. When a step names one, open it and re
 
 ## Steps
 
-1. **Intake.** Pick a short slug. Trivial change (one file, no new behaviour, an existing check can fail first)? Take the quick route: [quick.md](quick.md). Otherwise run `herd init <slug> "<goal>" --request "<the user's message, verbatim>"`. Add `--worktree` when `herd.toml` has `[worktree] required = true`, the user asks for it, or other agents work in this repository: [worktree.md](worktree.md). Then run `herd triage "<goal text>"`. It prints the risk floor. You may raise it, never lower it. Do not ask clarifying questions: state assumptions.
+1. **Intake.** Pick a short slug. Trivial change (one file, no new behaviour, an existing check can fail first)? Take the quick route: [quick.md](quick.md). Otherwise run `herd init <slug> "<goal>" --request "<the user's message, verbatim>" --worktree`, then move into the worktree: [worktree.md](worktree.md). Leave out `--worktree` only when `herd.toml` has `[worktree] required = false`. Then run `herd triage "<goal text>"`. It prints the risk floor. You may raise it, never lower it. Do not ask clarifying questions: state assumptions.
 2. **Criteria.** Follow the `herd:criteria` skill, then run `herd check` and fix its warnings. Use `herd detect` for the real test command. To plan evidence with the user, point them to `/herd:evidence`.
 3. **Red.** Run `herd verify` before building. Checks must fail. A check that already passes proves nothing: tighten it. A check marked `(ran zero tests)` found no tests: fix its command.
 4. **Gate.** Risk `high`: show the criteria table and assumptions, ask one approval question, wait. Otherwise show them and continue. Always ask if the user said to confirm criteria first.
@@ -23,7 +23,7 @@ Reference files hold the detail of a step. When a step names one, open it and re
 7. **Review** (medium and high risk). Get a fresh-context review, never your own: `superpowers:requesting-code-review`, EGM Goldfish agents, or a plain subagent given only the goal, criteria, `test_budget` and diff. Ask for bugs, missed criteria, and test gaps or low-value tests against `test_budget`. Fix Blocker and Major findings; decline Nits in one line. At most 3 rounds. No reviewer available? Do not ask the human: say so in the report and treat the change as unreviewed.
 8. **Verify.** Run `herd verify` after every change. It prints one line, plus any criterion that needs attention. After 3 failed attempts on one criterion, escalate.
 9. **Escalate only when needed:** an irreversible action, a real trade-off, or stuck after the caps. Ask **one** question with 2 or 3 numbered options. Never stop for missing detail. If the human drops the task, run `herd cancel --reason "<their words>"`. Never cancel to get past the gate.
-10. **Finish.** Commit on the task branch if the project allows it; otherwise say it is uncommitted. If the request asked for a pull request or `herd.toml` has `[pr] open = true`, follow [pr.md](pr.md): it opens the PR before the final verify. Run `herd verify`, then `herd done`. Fill the final report from `evidence.md` (or `herd done --verbose`), not from memory.
+10. **Finish.** Commit on the task branch if the project allows it; otherwise say it is uncommitted. Unless `herd.toml` has `[pr] open = false`, follow [pr.md](pr.md): it opens a draft PR before the final verify. Run `herd verify`, then `herd done`. Fill the final report from `evidence.md` (or `herd done --verbose`), not from memory.
 
 ## Final report
 

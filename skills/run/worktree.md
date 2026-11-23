@@ -2,7 +2,7 @@
 
 `herd init <slug> "<goal>" --worktree` creates branch `herd/<slug>` in a worktree at `.claude/worktrees/herd-<slug>`, cut from the current branch, and prints the path.
 
-1. Move in before anything else. Claude Code: call EnterWorktree with that path. Otherwise: `cd` into it.
+1. Move in before anything else. Claude Code: call EnterWorktree with that path. Codex: its Stop gate stays where the session started, so ask the human to start a new session there (`codex -C <path>`), or keep to the AGENTS.md rule. Otherwise: `cd` into it.
 2. Run every later edit and command from there.
 3. A `herd` command that says "lives in its worktree" means you are in the wrong place: move there.
 4. Never start a second task in a checkout that already has an active one. A plain `herd init` refuses while another task there is active.

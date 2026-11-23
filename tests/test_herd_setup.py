@@ -135,6 +135,7 @@ class TestCodexHook(Base):
         self.assertIsInstance(handler["timeout"], int)
         herd = f"{shlex.quote(sys.executable)} {shlex.quote(str(HERD))}"
         check = "python3 -c \"import pathlib,sys; sys.exit(not pathlib.Path('ok.txt').exists())\""
+        (self.project / "herd.toml").write_text("[worktree]\nrequired = false\n")  # a plain quick init here
         p = self.sh(f"{herd} init q 'Write ok.txt' --quick {shlex.quote(check)}", cwd=self.project)
         self.assertEqual(p.returncode, 0, p.stderr)
         self.sh(f"{herd} verify", cwd=self.project)
@@ -363,7 +364,7 @@ class TestRoot(Base):
     def test_project_in_a_subfolder(self):
         sub = self.project / "packages" / "app[1]*"  # gitignore wildcards in the name must be escaped
         (sub / "src").mkdir(parents=True)
-        (sub / "herd.toml").write_text("")
+        (sub / "herd.toml").write_text("[worktree]\nrequired = false\n")
         p = self.setup_cmd(cwd=sub / "src")
         self.assertEqual(p.returncode, 0, p.stderr)
         for f in ("AGENTS.md", ".codex/hooks.json", ".agents/skills/herd-run/SKILL.md"):
@@ -391,12 +392,7 @@ class TestEndToEnd(Base):
     """A whole Herd task through the rendered instructions only, the way Codex or an open model would run it."""
 
     def flow(self, mode):
-        skills, agents, hooks = self.run_setup(mode)
-        guide = agents.read_text()
-        self.assertIn("herd done", guide)
-        self.assertIn(str(skills / "herd-run" / "SKILL.md"), guide)  # agents without skill support read it by path
-        herd = HERD_CMD.search((skills / "herd-run" / "SKILL.md").read_text()).group(0)
-        self.assertIn(herd, guide)
+        """By default the task runs in its own worktree; Codex is started there (`codex -C <worktree>`)."""
         (self.project / "greet.py").write_text("def greet(name):\n    return ''\n")
         (self.project / "test_greet.py").write_text(
             "import unittest\nfrom greet import greet\n\n"
@@ -405,32 +401,48 @@ class TestEndToEnd(Base):
             "    def test_bad(self):\n        self.assertRaises(TypeError, greet, None)\n")
         git(self.project, "add", "-A")
         git(self.project, "commit", "-q", "-m", "greet stub")
+        skills, agents, hooks = self.run_setup(mode)
+        herd = HERD_CMD.search((skills / "herd-run" / "SKILL.md").read_text()).group(0)
         p = self.sh(f"{herd} init greet 'Greet by name' --request 'greet people by name'", cwd=self.project)
+        self.assertEqual(p.returncode, 1)  # a plain init is refused: the default is a worktree
+        p = self.sh(f"{herd} init greet 'Greet by name' --request 'greet people by name' --worktree", self.project)
         self.assertEqual(p.returncode, 0, p.stderr)
-        task = self.project / ".herd/tasks/greet/task.toml"
+        work = self.project / ".claude/worktrees/herd-greet"
+        if mode == "project":  # project files are never committed, so the new worktree needs its own setup
+            self.assertFalse((work / "AGENTS.md").exists())
+            p = self.setup_cmd(cwd=work)
+            self.assertEqual(p.returncode, 0, p.stderr)
+            skills, agents, hooks = work / ".agents/skills", work / "AGENTS.md", work / ".codex/hooks.json"
+        guide = agents.read_text()
+        self.assertIn("herd done", guide)
+        self.assertIn(str(skills / "herd-run" / "SKILL.md"), guide)  # agents without skill support read it by path
+        self.assertIn(herd, guide)
+        task = work / ".herd/tasks/greet/task.toml"
         task.write_text('goal = "Greet by name"\n\n[[criteria]]\nid = "C1"\ntext = "greet people by name"\n'
                         'source = "human"\ncoverage = "one name; not unicode names"\n'
                         'check = "python3 -m unittest test_greet"\n')
-        self.assertEqual(self.sh(f"{herd} check", cwd=self.project).returncode, 0)
-        self.assertEqual(self.sh(f"{herd} verify", cwd=self.project).returncode, 1)  # red first
-        self.assertEqual(json.loads(self.stop(hooks, self.project).stdout)["decision"], "block")
-        (self.project / "greet.py").write_text(
+        self.assertEqual(self.sh(f"{herd} check", cwd=work).returncode, 0)
+        self.assertEqual(self.sh(f"{herd} verify", cwd=work).returncode, 1)  # red first
+        self.assertEqual(json.loads(self.stop(hooks, work).stdout)["decision"], "block")
+        self.assertEqual(self.stop(hooks, self.project).stdout.strip(), "")  # the caveat: blind from the main checkout
+        (work / "greet.py").write_text(
             "def greet(name):\n    if not isinstance(name, str):\n        raise TypeError('name')\n"
             "    return 'hello ' + name\n")
         test = "python3 -m unittest test_greet"
         for attack in ("bad-input", "recount"):
-            p = self.sh(f"{herd} note --tried --attack {attack} --check {shlex.quote(test)} 'covered'", self.project)
+            p = self.sh(f"{herd} note --tried --attack {attack} --check {shlex.quote(test)} 'covered'", work)
             self.assertEqual(p.returncode, 0, p.stderr)
         for attack in ("collision", "one-bad-part"):
-            self.sh(f"{herd} note --tried --attack {attack} 'n/a: one value'", cwd=self.project)
-        self.assertEqual(self.sh(f"{herd} done", cwd=self.project).returncode, 1)  # no fresh evidence yet
-        p = self.sh(f"{herd} verify", cwd=self.project)
+            self.sh(f"{herd} note --tried --attack {attack} 'n/a: one value'", cwd=work)
+        self.assertEqual(self.sh(f"{herd} done", cwd=work).returncode, 1)  # no fresh evidence yet
+        p = self.sh(f"{herd} verify", cwd=work)
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        p = self.sh(f"{herd} done", cwd=self.project)
+        p = self.sh(f"{herd} done", cwd=work)
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertIn("1 of 1 criteria proven", p.stdout)
-        self.assertTrue((self.project / ".herd/tasks/greet/evidence.md").exists())
-        self.assertEqual(self.stop(hooks, self.project).stdout.strip(), "")
+        self.assertTrue((work / ".herd/tasks/greet/evidence.md").exists())
+        self.assertEqual(self.stop(hooks, work).stdout.strip(), "")
+        subprocess.run(["git", "worktree", "remove", "--force", str(work)], cwd=self.project, capture_output=True)
 
     def test_codex_user_install(self):
         self.flow("user")

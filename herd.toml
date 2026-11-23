@@ -22,17 +22,18 @@ tokens = 500000
 minutes = 60
 raise_by_pct = 50
 
-# Optional: let `herd pr` push the task's herd/* branch and open or update a pull request whose
-# description is the evidence. Off by default. Without it, `herd pr --yes` still works when the
-# request itself asks for a pull request. `herd pr` never merges.
+# On by default: `herd pr` pushes the task's herd/* branch and opens a draft pull request whose
+# description is the evidence, or updates it. It never marks it ready and never merges. To turn it
+# off, uncomment this; `herd pr --yes` then still works when the request asks for a pull request.
 # [pr]
-# open = true
+# open = false
 
-# Optional: start every task on its own herd/<slug> branch in its own git worktree, so several
-# agents can work in this repository at once. With it, a plain `herd init` refuses outside a
-# matching worktree; `herd init <slug> "<goal>" --worktree` creates one, cut from the current branch.
+# On by default: every task starts on its own herd/<slug> branch in its own git worktree, so several
+# agents can work in this repository at once. A plain `herd init` refuses outside a matching
+# worktree; `herd init <slug> "<goal>" --worktree` creates one, cut from the current branch. To allow
+# a plain init in the current checkout, uncomment this.
 # [worktree]
-# required = true
+# required = false
 
 # Optional per-file lint after each edit while a task is active. Print a block for your
 # project with `herd lint --suggest`. Example:

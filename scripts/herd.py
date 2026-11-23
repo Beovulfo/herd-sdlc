@@ -239,22 +239,34 @@ def task_branch(root, slug):
     return base, None
 
 
-def worktree_required(root):
+def setting(root, table, key):
+    """A value from herd.toml; None when it is unset or the file cannot be read (the default then applies)."""
     try:
-        cfg = tomllib.loads((Path(root) / "herd.toml").read_text()).get("worktree")
+        cfg = tomllib.loads((Path(root) / "herd.toml").read_text()).get(table)
     except (OSError, tomllib.TOMLDecodeError):
-        return False
-    return isinstance(cfg, dict) and cfg.get("required") is True
+        return None
+    value = cfg.get(key) if isinstance(cfg, dict) else None
+    if value is not None and not isinstance(value, bool):  # "false" or 0 must never quietly mean on
+        raise ValueError(f"herd.toml: `[{table}] {key}` must be true or false, not {value!r}")
+    return value
 
 
 def check_worktree_rule(root, slug):
-    """With `[worktree] required = true`, a plain init must run in a linked worktree on herd/<slug>."""
-    if not worktree_required(root):
-        return
+    """Each task in its own linked worktree on herd/<slug>, unless `[worktree] required = false`.
+
+    Returns a note when the default steps aside because a worktree is impossible: no git, or no commit.
+    An explicit `required = true` never steps aside.
+    """
+    required = setting(root, "worktree", "required")
+    if required is False:
+        return None
+    if required is not True and not _git(root, "rev-parse", "--verify", "-q", "HEAD").strip():
+        return "no worktree: this is not a git repository or it has no commit yet, so the task starts in this folder"
     linked = _gitpath(root, "--git-dir") != _gitpath(root, "--git-common-dir")
     if not linked or _branch(root) != f"herd/{slug}":
-        raise ValueError(f"herd.toml requires each task in its own worktree on herd/{slug}: "
-                         f"run `herd init {slug} \"<goal>\" --worktree` instead")
+        raise ValueError(f"each task runs in its own worktree on herd/{slug} by default: run "
+                         f"`herd init {slug} \"<goal>\" --worktree`, or set `[worktree] required = false` in herd.toml")
+    return None
 
 
 def init_worktree(root, slug, goal, quick_check=None, request=None):
@@ -675,7 +687,8 @@ def pr_body(root, slug):
     """The PR description, evidence first: what is proven and by which check, then what is not, then how to re-run."""
     task, ev, notes = load_task(root, slug), load_evidence(root, slug), load_notes(root, slug)
     head = [f"# Evidence: {slug}", "", f"**Goal:** {task['goal']}", ""]
-    foot = ["", "---", "Opened by Herd with `herd pr`. Herd never merges: review the evidence above, then merge."]
+    foot = ["", "---", "Opened by Herd with `herd pr` as a draft. Herd never marks it ready and never merges: review the "
+            "evidence above, then mark it ready and merge."]
     if ev is None:
         return "\n".join(head + ["No evidence yet: `herd verify` has not run. The next `herd pr` replaces this."]
                          + foot) + "\n"
@@ -762,20 +775,18 @@ def pr_title(goal, slug, limit=72):
 
 
 def open_pr(root, slug, yes=False):
-    """Push the task's herd/* branch and open or update its PR with the evidence. Opt-in; no other branch."""
-    try:
-        cfg = tomllib.loads((Path(root) / "herd.toml").read_text()).get("pr")
-    except (OSError, tomllib.TOMLDecodeError):
-        cfg = None
-    if not (yes or (isinstance(cfg, dict) and cfg.get("open") is True)):
-        raise ValueError("herd pr is opt-in: set `[pr] open = true` in herd.toml, or pass --yes when the request "
-                         "asks for a pull request")
+    """Push the task's herd/* branch and open (as a draft) or update its PR with the evidence; no other branch."""
+    if not yes and setting(root, "pr", "open") is False:
+        raise ValueError("herd.toml has `[pr] open = false`: pass --yes when the request asks for a pull request")
     branch = _git(root, "rev-parse", "--abbrev-ref", "HEAD").decode().strip()
     if branch != f"herd/{slug}":
         raise ValueError(f"herd pr pushes only the task's branch herd/{slug}; this is `{branch or 'no branch'}`")
     if _git(root, "status", "--porcelain", "--", *OWN_FILES).strip():
         raise ValueError("herd pr needs a clean working tree: commit the work, run `herd verify`, then `herd pr`, "
                          "so the pull request contains exactly the code the evidence is about")
+    if not _git(root, "remote", "get-url", "origin").strip():
+        raise ValueError("herd pr pushes to the `origin` remote, and this repository has none: add one, "
+                         "or open the pull request yourself")
     if not shutil.which("gh"):
         raise ValueError("herd pr needs the GitHub CLI `gh` on PATH")
     body = pr_body(root, slug)
@@ -790,7 +801,7 @@ def open_pr(root, slug, yes=False):
     else:
         base_file = _dir(root, slug) / "base"
         base = ["--base", base_file.read_text().strip()] if base_file.exists() else []
-        cmd = ["gh", "pr", "create", "--head", branch, *base, "--title", pr_title(load_task(root, slug)["goal"], slug), "--body-file", "-"]
+        cmd = ["gh", "pr", "create", "--draft", "--head", branch, *base, "--title", pr_title(load_task(root, slug)["goal"], slug), "--body-file", "-"]
     p = subprocess.run(cmd, cwd=root, input=body, capture_output=True, text=True)
     if p.returncode:
         raise ValueError(f"`{' '.join(cmd[:3])}` failed: {(p.stderr or p.stdout).strip()[-500:]}")
@@ -1072,6 +1083,8 @@ def main(argv):
             args = [a for a in args if a != "--worktree"]
             if len(args) != 2:
                 raise UsageError
+            setting(root, "pr", "open")  # a bad value fails now, not at the end of the task
+            setting(root, "worktree", "required")
             if worktree:
                 path, base, left = init_worktree(root, args[0], args[1], quick_check=quick, request=request)
                 print(f"created worktree {path} on branch herd/{args[0]}, cut from {base}. Work from there: in Claude "
@@ -1079,7 +1092,9 @@ def main(argv):
                 if left:
                     print(f"warning: uncommitted changes in {base} were not carried into the worktree", file=sys.stderr)
                 return 0
-            check_worktree_rule(root, args[0])
+            note = check_worktree_rule(root, args[0])
+            if note:
+                print(f"note: {note}", file=sys.stderr)
             init_task(root, args[0], args[1], quick_check=quick, request=request)
             base, warn = task_branch(root, args[0])
             if base:

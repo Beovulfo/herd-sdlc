@@ -1,6 +1,7 @@
 """Rules the run skill used to state only in text, now enforced or recorded by the CLI (0.4.0)."""
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -14,7 +15,7 @@ OK = "python3 -c \"import json\""  # an attack command that passes and is not va
 REQUEST = "Add f() to app.py. It must return 1 for any call."
 APP_CHECK = "python3 -c \"import app; assert app.f() == 1\""
 TASK = f'''goal = "Add f() to app.py"
-known_limits = "Only the return value is checked."
+known_limits = "Repeated calls are not timed."
 
 [[criteria]]
 id = "C1"
@@ -232,7 +233,7 @@ class TestFinalReport(Base):
         self.assertIn("Proven: 2 of 2 criteria", out)
         self.assertIn("f takes no arguments; the request named none; add parameters in app.py", out)
         self.assertIn("f() returned None for no arguments", out)
-        self.assertIn("Limits: Only the return value is checked.", out)
+        self.assertIn("Limits: Repeated calls are not timed.", out)
         self.assertIn("Review: a fresh subagent: no Blocker or Major", out)
         self.assertIn("Not proven: nothing open", out)
         self.assertIn(".herd/tasks/t1/evidence.md", out)
@@ -624,6 +625,201 @@ class TestThirdReview(Base):
         (self.root / "tests").mkdir()
         (self.root / "tests/run").write_text("#!/bin/sh\n")
         self.assertFalse(herd.is_code("tests/run", self.root))
+
+
+
+class TestNarrowedClaims(Base):
+    """Lesson from 12 Haiku runs: a limit that narrows the human's any/every claim reaches the human."""
+
+    def test_a_limit_that_narrows_an_any_claim_is_not_proven_and_warned(self):
+        narrowed = TASK.replace('known_limits = "Repeated calls are not timed."',
+                                'known_limits = "Repeated calls are not timed. Calls with arguments are rejected."')
+        self.start(narrowed)
+        self.red_then_build()
+        self.attacks_and_review()
+        herd.add_note(self.root, "t1", "open", "only the first call is cached")
+        ev = herd.verify(self.root, "t1")
+        line = "C1 says 'any'; narrowed by: Calls with arguments are rejected."
+        self.assertIn(line, herd.report(ev))
+        self.assertIn(line, herd.pr_body(self.root, "t1"))
+        self.assertNotIn("narrowed by: only the first call", herd.report(ev))  # open notes are listed already
+        self.assertIn("only the first call is cached", herd.report(ev))
+        self.assertNotIn("narrowed by: Repeated calls are not timed", herd.report(ev))
+        self.assertTrue(any("narrows it" in w for w in ev["warnings"]), ev["warnings"])
+        self.assertEqual(herd.problems(self.root, "t1"), [])  # shown to the human, not blocked
+        self.assertIn("narrowed by: Calls with arguments are rejected", self.cli("done").stdout)
+
+    def test_an_any_claim_without_random_inputs_in_its_coverage_is_warned(self):
+        task = {"criteria": [{"id": "C1", "source": "human", "text": "works whatever its layout",
+                              "coverage": "Proves valid routes on generated aisle, hall and maze layouts"}],
+                "known_limits": "x"}
+        self.assertTrue(any("names no random inputs" in w for w in herd.coverage_warnings(task)))
+        task["criteria"][0]["coverage"] += ", plus 50 random-obstacle stores from fixed seeds"
+        self.assertFalse(any("names no random inputs" in w for w in herd.coverage_warnings(task)))
+        task["criteria"][0].update(source="agent-proposed", coverage="Proves aisle layouts")
+        self.assertFalse(any("random" in w for w in herd.coverage_warnings(task)))  # only the human's claim
+
+    def test_empty_or_odd_evidence_gives_no_lines_and_no_error(self):
+        human_any = [{"id": "C1", "source": "human", "text": "works for any layout"}]
+        for ev in ({}, {"results": []}, {"results": human_any, "known_limits": None},
+                   {"results": human_any, "known_limits": ""}, {"results": [{"id": "C1"}], "known_limits": "only x"}):
+            self.assertEqual(herd.narrowed_claims(ev, []), [], ev)
+        self.assertEqual(herd.narrowed_claims({"results": human_any, "known_limits": "Only small maps."}, []),
+                         ["C1 says 'any'; narrowed by: Only small maps."])
+
+    def test_sentences_split_only_at_sentence_ends(self):
+        human_any = [{"id": "C1", "source": "human", "text": "works whatever its layout"}]
+        lim = ("Random-wall layouts can cut products off; they are rejected. Speed is 1.5 cells per s. "
+               "Uses e.g. BFS. Unreachable products are dropped.")
+        self.assertEqual(herd.narrowed_claims({"results": human_any, "known_limits": lim}),
+                         ["C1 says 'whatever'; narrowed by: Random-wall layouts can cut products off; they are rejected.",
+                          "C1 says 'whatever'; narrowed by: Unreachable products are dropped."])
+
+    def test_several_claims_share_one_line_per_limit_and_the_list_is_capped(self):
+        claims = [{"id": f"C{i}", "source": "human", "text": "for all stores"} for i in (1, 2)]
+        lim = " ".join(f"Layout {i} is skipped." for i in range(7)) + " Layout 0 is skipped."
+        out = herd.narrowed_claims({"results": claims, "known_limits": lim})
+        self.assertEqual(out[0], "C1 says 'all', C2 says 'all'; narrowed by: Layout 0 is skipped.")
+        self.assertEqual(len(out), herd.MAX_NARROWED + 1)  # duplicates once, five lines, then the count
+        self.assertEqual(out[-1], "and 2 more narrowing limits in known_limits")
+        warn = [w for w in herd.coverage_warnings({"criteria": claims, "known_limits": lim}) if "narrow" in w]
+        self.assertEqual(len(warn), 1)
+        self.assertIn("C1 says 'all', C2 says 'all', but 7 known limits narrow it", warn[0])
+
+    def test_no_narrowing_lines_without_a_human_any_claim(self):
+        text = TASK.replace('"It must return 1 for any call"', '"It must return 1"').replace(
+            'known_limits = "Repeated calls are not timed."', 'known_limits = "Only one call is checked."').replace(
+            'text = "Given the module', 'text = "Given any module')  # an agent's "any" does not count
+        self.start(text)
+        self.red_then_build()
+        ev = herd.verify(self.root, "t1")
+        self.assertNotIn("narrowed by", herd.report(ev))
+        self.assertFalse(any("narrows it" in w for w in ev["warnings"]))
+
+
+
+class TestPreInitEdits(Base):
+    """An agent that edits code and only then runs `herd init` is flagged: the PreToolUse hook reads the session log."""
+
+    def session_log(self, *paths, tools=("Edit", "Write"), log=None):
+        """A Claude Code session log (JSONL) in which the agent edited these files with these tools, in turn."""
+        log = log or self.root.parent / f"{self.root.name}-session.jsonl"
+        lines = [{"type": "user", "message": {"role": "user", "content": "build it"}}]
+        for i, path in enumerate(paths):
+            tool = tools[i % len(tools)]
+            key = "notebook_path" if tool == "NotebookEdit" else "file_path"
+            lines.append({"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "text", "text": "editing"},
+                {"type": "tool_use", "id": f"t{i}", "name": tool, "input": {key: str(path)}}]}})
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text("\n".join(json.dumps(x) for x in lines) + "\n", encoding="utf-8")
+        return log
+
+    def hook(self, command, log=None, raw=None):
+        """Run the hook the way Claude Code does: hook JSON on stdin, from the project folder."""
+        data = raw if raw is not None else json.dumps({
+            "hook_event_name": "PreToolUse", "tool_name": "Bash", "cwd": str(self.root),
+            "transcript_path": str(log) if log else "", "tool_input": {"command": command}})
+        return subprocess.run([sys.executable, str(Path(herd.__file__)), "preinit"], cwd=self.root, input=data,
+                              capture_output=True, text=True)
+
+    INIT = f'python3 "{Path(herd.__file__)}" init t1 "Add f() to app.py" --request "{REQUEST}"'
+
+    def test_code_the_session_edited_before_init_is_flagged(self):
+        (self.root / "app.py").write_text("def f():\n    return 1\n")  # written by the agent with Write
+        p = self.hook(self.INIT, self.session_log(self.root / "app.py", "app.py"))  # Edit, then Write by relative path
+        self.assertEqual((p.returncode, p.stdout), (0, ""), p.stderr)
+        self.start()
+        self.assertEqual(json.loads((self.root / ".herd/tasks/t1/start.json").read_text())["agent_edits"], ["app.py"])
+        ev = herd.verify(self.root, "t1")
+        self.assertEqual(ev["red"]["code_before"], ["app.py"])
+        self.assertIn("red first not proven", " ".join(herd.problems(self.root, "t1")))
+
+    def test_the_humans_own_uncommitted_file_stays_theirs(self):
+        (self.root / "notes.py").write_text("x = 1\n")  # the human's, never touched by the session
+        (self.root / "app.py").write_text("def f():\n    return 1\n")
+        outside = self.root.parent / "elsewhere.py"  # an edit outside the project does not count
+        self.hook(self.INIT, self.session_log(self.root / "app.py", outside))
+        self.start()
+        self.assertEqual(herd.verify(self.root, "t1")["red"]["code_before"], ["app.py"])
+
+    def test_other_commands_and_bad_input_do_nothing(self):
+        (self.root / "app.py").write_text("x = 1\n")
+        log = self.session_log(self.root / "app.py")
+        for p in (self.hook("ls -la", log), self.hook("echo herd init is great", log), self.hook(self.INIT, None),
+                  self.hook(self.INIT, self.root / "missing.jsonl"), self.hook("", raw="{not json"),
+                  self.hook("", raw=""), self.hook("", raw='["a list"]')):
+            self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "", ""))
+        self.start()  # nothing was recorded, so the uncommitted file counts as the human's, as before
+        self.assertNotIn("agent_edits", json.loads((self.root / ".herd/tasks/t1/start.json").read_text()))
+        self.assertEqual(herd.verify(self.root, "t1")["red"]["code_before"], [])
+
+    def test_a_record_from_another_checkout_or_an_old_one_is_not_used(self):
+        (self.root / "app.py").write_text("def f():\n    return 1\n")
+        self.hook(self.INIT, self.session_log(self.root / "app.py"))
+        rec = herd._preinit_path(self.root, "t1")
+        data = json.loads(rec.read_text())
+        rec.write_text(json.dumps(dict(data, at=data["at"] - herd.PREINIT_MAX_AGE - 60)))  # another run's
+        self.start()
+        self.assertFalse(rec.exists())  # init always consumes it
+        self.assertEqual(herd.verify(self.root, "t1")["red"]["code_before"], [])
+
+    def test_a_refused_or_mentioned_init_never_leaks_into_another_task(self):
+        (self.root / "human.py").write_text("x = 1\n")  # the human's
+        log = self.session_log(self.root / "human.py")  # session A touched it, then its init for task a is refused
+        self.hook(f'python3 "{Path(herd.__file__)}" init a "goal"', log)
+        self.hook('grep "herd.py init" README.md', log)  # only mentions it
+        self.start()  # task t1, by the human or another session with no record of its own
+        self.assertNotIn("agent_edits", json.loads((self.root / ".herd/tasks/t1/start.json").read_text()))
+        self.assertTrue(herd._preinit_path(self.root, "a").exists())  # left for task a alone, and it expires
+
+    def test_an_init_with_no_edits_overwrites_an_older_record(self):
+        (self.root / "app.py").write_text("x = 1\n")
+        self.hook(self.INIT, self.session_log(self.root / "app.py"))
+        self.hook(self.INIT, self.session_log())  # a later session for the same task edited nothing
+        self.start()
+        self.assertNotIn("agent_edits", json.loads((self.root / ".herd/tasks/t1/start.json").read_text()))
+
+    def test_subagent_edits_and_every_edit_tool_count(self):
+        for f in ("a.py", "b.py", "c.ipynb", "d.py"):
+            (self.root / f).write_text("x = 1\n")
+        log = self.session_log(self.root / "a.py", self.root / "b.py", self.root / "c.ipynb",
+                               tools=("MultiEdit", "Edit", "NotebookEdit"))
+        self.session_log(self.root / "d.py", log=log.parent / log.stem / "subagents" / "agent-1.jsonl")
+        self.hook(self.INIT, log)
+        self.start()
+        edits = json.loads((self.root / ".herd/tasks/t1/start.json").read_text())["agent_edits"]
+        self.assertEqual(edits, ["a.py", "b.py", "c.ipynb", "d.py"])
+
+    def test_cd_before_init_is_followed(self):
+        sub = self.root / "proj"
+        sub.mkdir()
+        (sub / "app.py").write_text("x = 1\n")
+        elsewhere = self.root.parent / f"{self.root.name}-cwd"
+        elsewhere.mkdir()
+        hook = json.dumps({"cwd": str(elsewhere), "transcript_path": str(self.session_log(sub / "app.py")),
+                           "tool_input": {"command": f'cd {self.root} && python3 "{Path(herd.__file__)}" init t1 "g"'}})
+        p = subprocess.run([sys.executable, str(Path(herd.__file__)), "preinit"], cwd=elsewhere, input=hook,
+                           capture_output=True, text=True)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(herd._preinit_path(self.root, "t1").exists())
+
+    def test_a_corrupt_record_never_stops_init(self):
+        (self.root / "app.py").write_text("x = 1\n")
+        for bad in ('["a list"]', '{"at": "soon", "files": ["app.py"]}', '{"at": 1e12, "files": [3, null]}', "{x"):
+            herd._preinit_path(self.root, "t1").write_text(bad)
+            herd.init_task(self.root, "t1", "g")
+            self.assertFalse(herd._preinit_path(self.root, "t1").exists(), bad)
+            herd.cancel_task(self.root, "t1")
+            shutil.rmtree(self.root / ".herd/tasks/t1")
+
+    def test_the_hook_is_registered_and_safe_on_old_python(self):
+        hooks = json.loads((Path(herd.__file__).parent.parent / "hooks/hooks.json").read_text())["hooks"]
+        pre = [h for g in hooks["PreToolUse"] if g.get("matcher") == "Bash" for h in g["hooks"]]
+        self.assertEqual(len(pre), 1)
+        self.assertIn('herd.py\" preinit', pre[0]["command"])
+        src = Path(herd.__file__).read_text()
+        self.assertIn('sys.argv[1:2] in (["gate"], ["lint"], ["preinit"])', src)  # exits 0 before 3.11 code runs
 
 
 if __name__ == "__main__":

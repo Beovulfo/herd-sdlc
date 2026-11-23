@@ -9,9 +9,13 @@ red first, the standard attacks, frozen human criteria and, at medium and high r
 import sys
 
 if sys.version_info < (3, 11):  # keep this block parseable by old Pythons: it runs before tomllib is imported
-    if sys.argv[1:2] in (["gate"], ["lint"]):
+    if sys.argv[1:2] in (["gate"], ["lint"], ["preinit"]):
         sys.exit(0)  # a hook must never break the session; the CLI says why below
     sys.exit("herd needs Python 3.11 or newer, found " + sys.version.split()[0])
+if sys.argv[1:2] == ["preinit"]:  # the PreToolUse hook runs before every Bash command: leave before the imports
+    PREINIT_RAW = sys.stdin.read() if not sys.stdin.isatty() else ""
+    if "herd.py" not in PREINIT_RAW or "init" not in PREINIT_RAW:
+        sys.exit(0)
 
 import hashlib
 import json
@@ -91,7 +95,33 @@ ESCALATE_AFTER = 3  # consecutive failing verifies of one criterion before the a
 ATTACKS = {"bad-input": "bad input at every entry point ends in a clear message, never a traceback",
            "collision": "two inputs on the same key or position each still count",
            "one-bad-part": "one broken entry the request does not ask for does not reject the whole input, while a broken requested one still fails clearly",
-           "recount": "every reported number recomputed from the output with separate code"}
+           "recount": "every reported number recomputed from the output with separate code, on the generated and "
+                      "collision inputs too"}
+RANDOM = re.compile(r"\b(random\w*|seed(s|ed)?|fuzz\w*|property[- ]based|property tests?|hypothesis)\b", re.I)
+UNIVERSAL = re.compile(r"\b(any|every|all|whatever|whichever|arbitrary)\b", re.I)  # a human claim over all inputs
+# ponytail: a word list, so it misses limits worded otherwise and flags some harmless ones; it never blocks
+NARROWS = re.compile(r"\b(only|first|rejected|rejects?|refused|refuses?|cannot|can't|unsupported|not supported|"
+                     r"not handled|assumes?|assumed|ignored|ignores?|limited to|skipped|skips?|dropped|drops?|"
+                     r"excluded|excludes?|omitted|omits?|unreachable|not reached)\b", re.I)
+MAX_NARROWED = 5
+
+
+def narrowing(criteria, known_limits):
+    """(human any/every claims as 'C1 says "any"', known-limit sentences that narrow them). Open notes are left
+    out: the report already lists them under Not proven."""
+    claims = [f"{c.get('id', '?')} says '{m.group(0)}'" for c in criteria
+              if c.get("source") == "human" and (m := UNIVERSAL.search(str(c.get("text", ""))))]
+    sentences = re.split(r"(?<=[.!?])\s+(?=[A-Z])", str(known_limits or ""))  # not at ';', 'e.g.' or decimals
+    hits = list(dict.fromkeys(s.strip() for s in sentences if s.strip() and NARROWS.search(s)))
+    return (claims, hits) if claims else ([], [])
+
+
+def narrowed_claims(ev, notes=()):
+    """One line per known limit that narrows a human any/every claim: shown as not proven, for the human."""
+    claims, hits = narrowing(ev.get("results", []), ev.get("known_limits"))
+    out = [f"{', '.join(claims)}; narrowed by: {s}" for s in hits[:MAX_NARROWED]]
+    return out + ([f"and {len(hits) - MAX_NARROWED} more narrowing limits in known_limits"]
+                  if len(hits) > MAX_NARROWED else [])
 MAX_TEXT_WORDS, MAX_COVERAGE_WORDS = 40, 50  # advisory limits, see length_warnings
 WORKTREES = ".claude/worktrees"  # where `herd init --worktree` puts tasks; Claude Code's EnterWorktree can enter it
 OWN_FILES = (".", ":!.herd")  # pathspec: this checkout's work, not Herd's own state
@@ -169,9 +199,12 @@ def init_task(root, slug, goal, quick_check=None, request=None):
                                     toml_path.read_text() if toml_path.exists() else "")["risk"]["effective"]
     head = _git(root, "rev-parse", "HEAD").decode().strip() or None  # red first: what changed since here
     # ponytail: hashes every uncommitted file once at init (about 1 s per 20k small files); a git stat cache if slower
-    dirty = {f: _file_sha(root, f) for f in changed_since(root, head) or []}  # already there: not the agent's,
+    changed = changed_since(root, head) or []
+    edits = _take_preinit(root, slug, changed)  # what this session edited before init is the agent's, uncommitted or not
+    dirty = {f: _file_sha(root, f) for f in changed if f not in edits}  # already there: not the agent's,
     (d / "start.json").write_text(json.dumps({"head": head, "risk": risk, "dirty": dirty,  # while unchanged
-                                              "stashes": _stash_shas(root)}) + "\n")
+                                              "stashes": _stash_shas(root)} | ({"agent_edits": edits} if edits else {}))
+                                  + "\n")
     if request is not None:
         (d / "request.md").write_text(request)
     (Path(root) / ".herd" / "active").write_text(slug + "\n")
@@ -416,15 +449,107 @@ def coverage_warnings(task):
         if q and not VARIES.search(cov):
             out.append(f"{cid}: human criterion says '{q.group(0)}' but its `coverage` does not say what varies "
                        "(generated inputs, seeds, families, sizes)")
+        u = UNIVERSAL.search(str(c.get("text", "")))
+        if u and VARIES.search(cov) and not RANDOM.search(cov):  # shapes the agent designs share the code's blind spots
+            out.append(f"{cid}: human criterion says '{u.group(0)}' but its `coverage` names no random inputs "
+                       "(random, seeded or fuzzed cases the agent did not design)")
         if sc and not SCALED.search(cov):
             out.append(f"{cid}: human criterion says '{sc.group(0)}' but its `coverage` has no scale statement "
                        "(largest size tried, time limit)")
+    claims, hits = narrowing(task.get("criteria", []), task.get("known_limits"))
+    if hits:
+        out.append(f"{', '.join(claims)}, but {len(hits)} known limit{'s' if len(hits) > 1 else ''} narrow"
+                   f"{'' if len(hits) > 1 else 's'} it (\"{hits[0]}\"): test the claim under each limit, or lift it; "
+                   "each is shown to the human as not proven")
     if task.get("route", "standard") != "quick" and not str(task.get("known_limits", "")).strip():
         out.append("no `known_limits`: say under what conditions the claim may fail or has not been shown")
     return out
 
 
 # ---- evidence -------------------------------------------------------------
+
+PREINIT_MAX_AGE = 600  # seconds: the hook runs right before `herd init`; an older record is another run's
+EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
+
+
+def _preinit_path(root, slug):
+    """The hook's record for one task, inside .git (shared by worktrees, never committed)."""
+    common = _git(root, "rev-parse", "--git-common-dir").decode().strip()
+    return (Path(root) / common).resolve() / f"herd-preinit-{slug}.json" if common and SLUG.fullmatch(slug) else None
+
+
+def _init_target(command, cwd):
+    """(folder, slug) when a Bash command runs `herd.py init <slug>`, else None. Follows a leading `cd <dir> &&`."""
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return None
+    where = Path(cwd)
+    if len(words) > 2 and words[0] == "cd" and words[2] in ("&&", ";"):
+        where = (where / words[1]).resolve()
+    for i, w in enumerate(words[:-2]):
+        if w.endswith("herd.py") and words[i + 1] == "init":
+            slug = next((x for x in words[i + 2:] if not x.startswith("-")), "")
+            return (where, slug) if SLUG.fullmatch(slug) else None
+    return None
+
+
+def _edited_files(log):
+    """Absolute paths the session (and its subagents) edited with Edit, Write, MultiEdit or NotebookEdit."""
+    logs = [log] + sorted((log.parent / log.stem / "subagents").glob("*.jsonl"))
+    files = set()
+    for f in logs:
+        for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                content = json.loads(line).get("message", {}).get("content", [])
+            except (ValueError, AttributeError):
+                continue
+            for c in content if isinstance(content, list) else []:
+                inp = c.get("input") if isinstance(c, dict) and c.get("type") == "tool_use" else None
+                if c.get("name") in EDIT_TOOLS and isinstance(inp, dict):
+                    path = inp.get("file_path") or inp.get("notebook_path")
+                    if isinstance(path, str) and path:
+                        files.add(path)
+    return files
+
+
+def preinit(hook):
+    """PreToolUse hook on Bash. Right before `herd init <slug>`, record the files this session (and its subagents)
+    edited, from the session log, so red first counts them as the agent's even if they are uncommitted at init.
+    The record is per task and always written, so another task's init never reads it. Never blocks, prints
+    nothing; other commands return at once. ponytail: edits made through Bash (sed, cat >) are not seen."""
+    if not isinstance(hook, dict):
+        return
+    cwd = Path(str(hook.get("cwd") or "."))
+    target = _init_target(str((hook.get("tool_input") or {}).get("command", "")), cwd)
+    if not target:
+        return
+    where, slug = target
+    log = Path(str(hook.get("transcript_path") or ""))
+    files = _edited_files(log) if log.is_file() else set()
+    record = _preinit_path(where, slug)
+    if record:
+        record.write_text(json.dumps({"at": datetime.now(timezone.utc).timestamp(),
+                                      "files": sorted(str((cwd / f).resolve()) for f in files)}))
+
+
+def _take_preinit(root, slug, changed):
+    """The hook's record for this task, consumed: changed paths (relative to root) the session edited before init."""
+    target = _preinit_path(root, slug)
+    if not target or not target.exists():
+        return []
+    rec = _state(target, {})
+    target.unlink(missing_ok=True)
+    try:
+        if datetime.now(timezone.utc).timestamp() - float(rec.get("at") or 0) > PREINIT_MAX_AGE:
+            return []
+        base = Path(root).resolve()
+        edited = {str(Path(f).relative_to(base)) for f in rec.get("files") or []
+                  if isinstance(f, str) and Path(f).is_relative_to(base)}
+    except (TypeError, ValueError):  # a hand-edited record never stops `herd init`
+        return []
+    return sorted(f for f in changed if f in edited)
+
 
 def _git(root, *args):
     p = subprocess.run(["git", *args], cwd=root, capture_output=True)
@@ -871,6 +996,7 @@ def _rule_lines(ev, notes):
     out += [f"{cid}: check changed after the first verify, so it was never seen failing"
             for cid in ev.get("checks_changed") or []]
     out += [f"{cid}: added after the first verify, so it was never seen failing" for cid in ev.get("added_after_red") or []]
+    out += narrowed_claims(ev, notes)
     if (ev.get("red") or {}).get("stashed"):
         out.append("Red first not proven: a git stash was made on this branch before the first verify")
     out += [f"Human criterion changed with the human's words, for you to confirm: {n['text']}"
@@ -1282,6 +1408,7 @@ USAGE = {
     "cancel": 'herd cancel [slug] [--reason "text"]',
     "pr": "herd pr [slug] [--yes]   (push the herd/* branch, open or update its PR with the evidence)",
     "gate": "herd gate   (the Stop hook, reads hook JSON on stdin)",
+    "preinit": "herd preinit   (PreToolUse hook on Bash: before `herd init`, records files the session already edited)",
     "triage": 'herd triage "<text>" [--json]',
 }
 
@@ -1461,6 +1588,13 @@ def main(argv):
             slug = _slug_arg(root, args)
             cancel_task(root, slug, reason or "")
             print(f"cancelled {slug}: its files stay in .herd/tasks/{slug}/ and the Stop gate no longer blocks")
+        elif cmd == "preinit":  # PreToolUse hook on Bash: must never break or slow the session
+            try:
+                raw = globals().get("PREINIT_RAW")  # read by the fast path at the top of this file
+                raw = raw if raw is not None else (sys.stdin.read() if not sys.stdin.isatty() else "")
+                preinit(json.loads(raw) if raw.strip() else {})
+            except Exception:  # noqa: BLE001 - a hook that fails must not stop the agent's command
+                pass
         elif cmd == "gate":
             raw = sys.stdin.read() if not sys.stdin.isatty() else ""
             hook = json.loads(raw) if raw.strip() else {}

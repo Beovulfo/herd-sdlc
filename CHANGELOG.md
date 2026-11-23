@@ -2,6 +2,10 @@
 
 All notable changes to Herd. Versions follow `.claude-plugin/plugin.json`.
 
+## 0.3.1
+
+- **Changed:** the adversarial pass (`skills/run/adversarial.md`) always tries four attacks, whatever the request says: bad input at every entry point (missing, malformed, wrong type, unknown id, empty) must end in one clear message and a non-zero exit, never a traceback; collisions (two inputs on the same key or position) must each still count; one broken entry the request does not use must not reject the whole input; and every reported number is recomputed from the output with separate code. A benchmark rerun with 0.3.0 missed all four kinds of bug. A test keeps these attacks in the file.
+
 ## 0.3.0
 
 Herd is short by default. Measured on this repository: the three skills went from 2,592 to 1,662 words (run: 1,286 to 777), a passing `herd verify` from one line per criterion to one line, and `herd done` from the full report (about 1,000 words) to two lines.

@@ -1418,6 +1418,11 @@ class TestBudgets(Base):
         for name in refs:
             self.assertIn(name, run)
 
+    def test_adversarial_pass_keeps_the_standard_attacks(self):
+        text = (SKILLS / "run/adversarial.md").read_text()
+        for attack in ("Bad input at every entry point", "never a traceback", "Collisions", "One bad part", "Recount"):
+            self.assertIn(attack, text)
+
     # (4) PR description: visible part short, the rest collapsed but kept
     def test_pr_body_visible_part_is_short_and_nothing_is_dropped(self):
         herd.add_note(self.root, "t1", "tried", "fed it an empty name")

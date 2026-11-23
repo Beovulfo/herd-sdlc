@@ -17,4 +17,4 @@ Risks: machine-wide hooks and context noise; a Node 22 install and an anonymous 
 
 ## Deferred from v0.2 (see `docs/designs/herd-coco-ideas.md`)
 
-Per-criterion `level` and `kind` (`proxy`, `attested`), per-type evidence guidance files, mutation testing, flaky-check reruns, zero-test detection, project-wide typecheck at verify, detection beyond Python, Node, Rust and Go.
+Per-criterion `level` and `kind` (`proxy`, `attested`), per-type evidence guidance files, mutation testing, flaky-check reruns, project-wide typecheck at verify, detection beyond Python, Node, Rust and Go.

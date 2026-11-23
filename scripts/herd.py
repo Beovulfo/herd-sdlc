@@ -72,6 +72,18 @@ VARIES = re.compile(r"\b(vary|varies|varied|varying|variation|generated?|random\
 SCALED = re.compile(r"\b(scales?|sizes?|largest?|big|biggest|huge|time limit|timed|timing|seconds|performance|"
                     r"runtime|latency|up to \d+)\b", re.I)
 NOTE_KINDS = ("found", "fixed", "open", "tried")
+# Test runners' own words for an empty run, and for a run that executed tests. Advisory, so the list
+# only has to catch the common cases: unittest, pytest, cargo, go, jest, mocha.
+ZERO_TESTS = re.compile(r"\bRan 0 tests?\b|\bcollected 0 items\b|\bno tests ran\b|\brunning 0 tests\b"
+                        r"|\[no test files\]|\[no tests to run\]|\bNo tests found\b|^[ \t]*0 passing\b", re.M)
+SOME_TESTS = re.compile(r"\bRan [1-9]\d* tests?\b|\b[1-9]\d* passed\b|\brunning [1-9]\d* tests?\b"
+                        r"|^ok\s+\S+\s+(?:\(cached\)|[\d.]+s)(?!.*\[no tests to run\])"  # go's per-package line
+                        r"|^[ \t]*[1-9]\d* passing\b", re.M)
+
+
+def ran_zero_tests(output):
+    """The output says a test runner ran no tests, and nothing in it says any suite ran some."""
+    return bool(ZERO_TESTS.search(output)) and not SOME_TESTS.search(output)
 
 
 def now():
@@ -265,11 +277,12 @@ def _task_sha(root, slug):
     return hashlib.sha1((_dir(root, slug) / "task.toml").read_bytes()).hexdigest()
 
 
-def run_check(root, check, timeout):
+def run_check(root, check, timeout, full=False):
+    """Exit code (None on timeout) and the output tail; with full=True, the whole output instead."""
     try:
         p = subprocess.run(check, shell=True, cwd=root, capture_output=True, text=True, timeout=timeout)
         out = (p.stdout or "") + (p.stderr or "")
-        return p.returncode, out[-TAIL_CHARS:]
+        return p.returncode, out if full else out[-TAIL_CHARS:]
     except subprocess.TimeoutExpired:
         return None, f"timeout after {timeout}s"
 
@@ -282,10 +295,13 @@ def verify(root, slug):
     results = []
     for c in task["criteria"]:
         r = {"id": c["id"], "text": c["text"], "source": c["source"], "check": c["check"],
-             "coverage": c.get("coverage"), "exit_code": None, "output_tail": "", "status": "unchecked"}
+             "coverage": c.get("coverage"), "exit_code": None, "output_tail": "", "status": "unchecked",
+             "zero_tests": False}
         if c["check"].strip():
-            r["exit_code"], r["output_tail"] = run_check(root, c["check"], c.get("timeout_s", DEFAULT_TIMEOUT))
+            r["exit_code"], out = run_check(root, c["check"], c.get("timeout_s", DEFAULT_TIMEOUT), full=True)
+            r["output_tail"] = out[-TAIL_CHARS:]
             r["status"] = "passing" if r["exit_code"] == 0 else "failing"
+            r["zero_tests"] = r["status"] == "passing" and ran_zero_tests(out)  # advisory, the gate ignores it
         results.append(r)
     summary = {s: sum(r["status"] == s for r in results) for s in ("passing", "failing", "unchecked")}
     head = _git(root, "rev-parse", "HEAD").decode().strip() or "none"
@@ -380,6 +396,10 @@ def report(ev, notes=None):
     lines += ["", "| id | status | source | check |", "| --- | --- | --- | --- |"]
     for r in ev["results"]:
         lines.append(f"| {r['id']} | {r['status']} | {r['source']} | `{r['check'] or '-'}` |")
+    zero = [r["id"] for r in ev["results"] if r.get("zero_tests")]
+    if zero:
+        lines += [""] + [f"Warning: {cid} passed but ran zero tests (its output says no tests ran), so it proves "
+                         "nothing yet: point its check at real tests" for cid in zero]
     covered = [r for r in ev["results"] if r["source"] == "human" and str(r.get("coverage") or "").strip()]
     if covered:
         lines += ["", "Coverage of human criteria (what each check proves and does not):"]
@@ -582,7 +602,8 @@ def main(argv):
             s = ev["summary"]
             print(f"{s['passing']} passing, {s['failing']} failing, {s['unchecked']} unchecked")
             for r in ev["results"]:
-                print(f"  {r['id']} {r['status']}: {r['text']}")
+                zero = " (ran zero tests)" if r.get("zero_tests") else ""
+                print(f"  {r['id']} {r['status']}{zero}: {r['text']}")
             return 1 if s["failing"] else 0
         elif cmd == "status":
             slug = _slug_arg(root, args)

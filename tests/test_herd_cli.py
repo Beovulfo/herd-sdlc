@@ -1,6 +1,8 @@
 import json
+import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -817,6 +819,94 @@ class TestCancel(Base):
         p = run("status")
         self.assertIn("cancelled at", p.stdout)
         self.assertIn("superseded", p.stdout)
+
+
+class TestZeroTests(Base):
+    ZERO = {
+        "unittest": "\n----------------------------------------------------------------------\nRan 0 tests in 0.000s\n\nOK\n",
+        "pytest": "============ no tests ran in 0.01s ============\n",
+        "pytest collect": "collected 0 items\n",
+        "cargo": "   Compiling x v0.1.0\n    Finished\n     Running unittests\n\nrunning 0 tests\n\n"
+                 "test result: ok. 0 passed; 0 failed; 0 ignored\n",
+        "go": "?   \texample.com/x\t[no test files]\n?   \texample.com/x/y\t[no test files]\n",
+        "go with a -run filter matching nothing": "?   \texample.com/x\t[no test files]\n"
+                                                  "ok  \texample.com/x/y\t0.221s [no tests to run]\n",
+        "jest": "No tests found, exiting with code 0\n",
+        "mocha": "\n\n  0 passing (2ms)\n\n",
+    }
+    SOME = {
+        "unittest": "....\n----------------------------------------------------------------------\nRan 4 tests in 0.01s\n\nOK\n",
+        "pytest": "collected 3 items\n\ntest_x.py ...\n============ 3 passed in 0.02s ============\n",
+        "cargo with empty doc-tests": "running 12 tests\n............\ntest result: ok. 12 passed; 0 failed\n\n"
+                                      "   Doc-tests x\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed\n",
+        "go with some empty packages": "?   \texample.com/x\t[no test files]\nok  \texample.com/x/y\t0.012s\n",
+        "jest": "Tests:       5 passed, 5 total\n",
+        "mocha": "\n  7 passing (40ms)\n",
+        "no runner output": "built ok\n",
+        "go cached": "ok  \texample.com/x/y\t(cached)\n?   \texample.com/x\t[no test files]\n",
+    }
+
+    def test_a_stray_ok_line_does_not_hide_an_empty_run(self):
+        self.assertTrue(herd.ran_zero_tests("ok\nRan 0 tests in 0.0s\nOK\n"))
+        self.assertTrue(herd.ran_zero_tests("ok 1 - lint clean\nNo tests found, exiting with code 0\n"))
+
+    def test_real_unittest_with_no_tests(self):
+        # Python 3.11 exits 0 on an empty run, so Herd must flag it; 3.12+ exits 5, so the check fails instead
+        (self.root / "empty").mkdir()
+        self.task(f"{shlex.quote(sys.executable)} -m unittest discover -s empty")
+        r = herd.verify(self.root, "t1")["results"][0]
+        if sys.version_info < (3, 12):
+            self.assertEqual((r["status"], r["zero_tests"]), ("passing", True))
+        else:
+            self.assertEqual((r["status"], r["zero_tests"]), ("failing", False))
+
+    def test_zero_test_output_is_detected_for_each_runner(self):
+        for name, out in self.ZERO.items():
+            self.assertTrue(herd.ran_zero_tests(out), name)
+
+    def test_normal_and_mixed_output_is_not_flagged(self):
+        for name, out in self.SOME.items():
+            self.assertFalse(herd.ran_zero_tests(out), name)
+
+    def task(self, check):
+        herd.init_task(self.root, "t1", "Add a greeting")
+        (self.root / ".herd/tasks/t1/task.toml").write_text(
+            TASK.replace('check = "test -f greet.txt"', f"check = {json.dumps(check)}"))
+
+    def test_verify_flags_a_passing_check_that_ran_zero_tests(self):
+        self.task("python3 -c \"print('Ran 0 tests in 0.000s'); print('OK')\"")
+        ev = herd.verify(self.root, "t1")
+        r = ev["results"][0]
+        self.assertEqual((r["status"], r["zero_tests"]), ("passing", True))
+        self.assertIn("C1 passed but ran zero tests", herd.report(ev))
+
+    def test_a_failing_check_is_not_flagged(self):
+        self.task("python3 -c \"print('Ran 0 tests'); raise SystemExit(5)\"")
+        r = herd.verify(self.root, "t1")["results"][0]
+        self.assertEqual((r["status"], r["zero_tests"]), ("failing", False))
+
+    def test_the_full_output_is_scanned_not_only_the_tail(self):
+        # tests ran early on; only the tail shows an empty suite: not a zero-test run
+        self.task(f"python3 -c \"print('Ran 5 tests'); print({herd.TAIL_CHARS * 2}*'x'); print('running 0 tests')\"")
+        r = herd.verify(self.root, "t1")["results"][0]
+        self.assertNotIn("Ran 5", r["output_tail"])
+        self.assertFalse(r["zero_tests"])
+
+    def test_done_is_unchanged_and_report_is_quiet_without_it(self):
+        self.task("python3 -c \"print('Ran 0 tests'); print('OK')\"")
+        herd.verify(self.root, "t1")
+        self.assertEqual(herd.problems(self.root, "t1"), [])  # advisory: the gate does not block on it
+        p = subprocess.run(["python3", str(Path(herd.__file__)), "done"], cwd=self.root, capture_output=True, text=True)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        (self.root / ".herd/tasks/t1/task.toml").write_text(TASK.replace("test -f greet.txt", "test -n x"))
+        self.assertNotIn("zero tests", herd.report(herd.verify(self.root, "t1")))
+
+    def test_cli_verify_marks_the_line(self):
+        self.task("python3 -c \"print('collected 0 items')\"")
+        p = subprocess.run(["python3", str(Path(herd.__file__)), "verify"], cwd=self.root,
+                           capture_output=True, text=True)
+        self.assertEqual(p.returncode, 0)
+        self.assertIn("C1 passing (ran zero tests)", p.stdout)
 
 
 def _old_python():

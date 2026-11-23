@@ -97,7 +97,7 @@ flowchart LR
 2. **Criteria.** Every criterion has a `check`: a shell command where exit 0 means pass. Criteria you write are authoritative: the agent quotes your words, adds a `coverage` note saying what the check proves and what it does not, and the report flags any `human` criterion that is not a verbatim quote. A criterion with no check is `unchecked` and is never counted as met. `herd detect` proposes the project's real test command.
 3. **Build.** Tests first, small steps, on a branch. Superpowers is used for planning, TDD and subagents when installed.
 4. **Break it, then review.** The agent tries to break its own work on exactly what the request promises: the words `any`, `every`, `very big` become generated cases of different shapes and a scale run. Each attempt, failure and fix is logged with `herd note`. For medium and high risk, a fresh-context reviewer then looks at the diff.
-5. **Verify.** `herd verify` runs every check and stores evidence: status, exit code, output tail, commit SHA, a fingerprint of the workspace, a timestamp, how many checks failed on the first run (a check that was green before any work is visible), and the wall-clock time since `herd init`.
+5. **Verify.** `herd verify` runs every check and stores evidence: status, exit code, output tail, commit SHA, a fingerprint of the workspace, a timestamp, how many checks failed on the first run (a check that was green before any work is visible), and the wall-clock time since `herd init`. A check that exits 0 but whose output says it ran zero tests (`Ran 0 tests`, `no tests ran`, `[no test files]` and the like) is marked in the evidence and the report warns about it. The warning is advisory: the Stop gate does not change.
 6. **Stop gate.** While a task is active, a Stop hook refuses to let the agent finish unless the evidence is fresh and passing. Edit a file after verifying and the evidence is stale. After 3 blocked attempts the gate lets the agent stop so it can ask you one question instead of looping. To drop a task, `herd cancel` closes it and keeps its files as a record.
 
 ## Architecture
@@ -231,7 +231,7 @@ python3 examples/supermarket-route/verifier/verify_general.py with_herd examples
 | `herd detect` | Propose test and lint commands for Python, Node, Rust, Go and `make test` |
 | `herd note --found\|--fixed\|--open\|--tried "text"` | Log a caveat or an adversarial attempt with a timestamp; the report lists them |
 | `herd triage "<text>"` | Print the risk floor for a task description |
-| `herd verify` | Run all checks, store `evidence.json`; exit 1 if any fail |
+| `herd verify` | Run all checks, store `evidence.json`; exit 1 if any fail; mark a passing check that ran zero tests |
 | `herd status` | Show evidence and whether the task is done |
 | `herd done` | Write `evidence.md`, close the task; refuses unless fresh and passing |
 | `herd cancel --reason "text"` | Abandon the task: keep its files, stop the Stop gate from blocking |

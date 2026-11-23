@@ -11,7 +11,7 @@ Help the human choose what proves their goal works, for their kind of project. T
 
 ## Steps
 
-1. **Detect.** Run `herd detect`. It lists likely test and lint commands for Python, Node, Rust, Go and `make test`. These are conventions, not facts. Show them and ask the human to confirm or correct each. If the list is empty, ask what command runs the tests. Never assume a command runs real tests: a command that runs zero tests still exits 0.
+1. **Detect.** Run `herd detect`. It lists likely test and lint commands for Python, Node, Rust, Go and `make test`. These are conventions, not facts. Show them and ask the human to confirm or correct each. If the list is empty, ask what command runs the tests. Never assume a command runs real tests: a command that runs zero tests still exits 0. `herd verify` marks such a check `(ran zero tests)` when the runner's output says so, but it only knows common runners, so check the command yourself.
 2. **Ask the gaps, at most 5.** Skip anything you can already answer from the repository or the request:
    - What does "working" look like from the outside, for a user or caller?
    - What can you run yourself to see it?

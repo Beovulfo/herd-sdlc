@@ -544,8 +544,8 @@ class TestNotes(Base):
 
     def test_skill_tells_agents_to_log_each_note_when_found(self):
         text = (Path(herd.__file__).parent.parent / "skills" / "run" / "SKILL.md").read_text()
-        self.assertIn("the moment you find", text)
-        self.assertIn("never in a batch", text)
+        self.assertIn("the moment it happens", text)
+        self.assertIn("Notes logged together are flagged", text)
 
     def test_notes_are_in_evidence_and_do_not_make_it_stale(self):
         self.task(attacks=True)
@@ -970,6 +970,55 @@ class TestAttacks(Base):
         text = (Path(herd.__file__).parent.parent / "skills/run/adversarial.md").read_text()
         for a in herd.ATTACKS:
             self.assertIn(f"--attack {a}", text)
+
+
+class TestSimplifiedAdversarial(Base):
+    """Each rule of the adversarial pass is written once; the gate keeps all four attacks."""
+    def setUp(self):
+        super().setUp()
+        self.skill = (SKILLS / "run/SKILL.md").read_text()
+        self.adv = (SKILLS / "run/adversarial.md").read_text()
+
+    def step6(self):
+        return self.skill.split("6. **Break it**", 1)[1].split("\n7. ", 1)[0]
+
+    def test_step6_points_to_the_file_without_an_inline_list(self):
+        s = self.step6()
+        self.assertIn("[adversarial.md](adversarial.md)", s)
+        self.assertIn("herd done", s)
+        self.assertIn("four standard attacks", s)
+        for inline in ("bad input at every entry point", "collision", "one bad part", "recount"):
+            self.assertNotIn(inline, s.lower())
+        self.assertNotIn("regression test", s)  # written once, in adversarial.md step 5
+        self.assertIn("regression test", self.adv)
+
+    def test_logging_rule_is_written_once(self):
+        # it applies to every step, so its one home is the run skill's Rules
+        rules = self.skill.split("## Rules", 1)[1]
+        self.assertIn("the moment it happens, in any step", rules)
+        self.assertIn("Notes logged together are flagged", rules)
+        texts = [p.read_text() for p in SKILLS.glob("*/*.md")]
+        for phrase in ("the moment it happens", "the moment you find", "Notes logged together", "never in a batch",
+                       "one call at a time"):
+            self.assertLessEqual(sum(x.count(phrase) for x in texts), 1, phrase)
+        self.assertIn("as the run skill's Rules say", self.adv)
+
+    def test_extremes_do_not_repeat_bad_input(self):
+        step1, rest = self.adv.split("\n1. ", 1)[1].split("\n2. ", 1)
+        self.assertNotIn("empty", step1)
+        self.assertNotIn("malformed", step1)
+        for kept in ("huge", "degenerate", "disconnected", "scale run"):
+            self.assertIn(kept, step1)
+        bad = rest.split("--attack bad-input", 1)[1].split("\n", 1)[0]
+        self.assertIn("malformed", bad)
+        self.assertIn("empty", bad)
+
+    def test_existing_test_counts_only_if_it_meets_the_attack_rule(self):
+        self.assertIn("counts for an attack only if it meets that attack's rule above", self.adv)
+        self.assertIn("separate code for recount", self.adv)
+        self.assertIn("every entry point for bad-input", self.adv)
+        self.assertIn("Log the test's name and what it covers", self.adv)
+        self.assertNotIn("instead of probing again", self.adv)
 
 
 class TestOneActiveTask(Base):

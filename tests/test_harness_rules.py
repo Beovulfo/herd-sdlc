@@ -316,9 +316,10 @@ class TestReviewFindings(Base):
 
     def test_config_dotfiles_and_extensionless_files_are_not_code(self):
         for f in ("pyproject.toml", "package.json", ".gitignore", "Makefile", "tests/test_x.py", ".herd/x.py",
-                  "__pycache__/app.cpython-312.pyc", "node_modules/x/index.js", "dist/app.js"):
+                  "__pycache__/app.cpython-312.pyc", "node_modules/x/index.js"):
             self.assertFalse(herd.is_code(f), f)
-        self.assertTrue(herd.is_code("src/app.py"))
+        for f in ("src/app.py", "cmd/dist/main.go", "src/mypkg/build/core.py", "src/target/x86.rs"):
+            self.assertTrue(herd.is_code(f), f)  # build/, dist/, target/ can hold source
 
     def test_code_moved_aside_for_the_first_verify_is_flagged(self):
         self.start()
@@ -503,6 +504,9 @@ class TestSecondReview(Base):
         (d / "evidence.json").write_text(json.dumps({"task": "t1", "results": []}))
         (self.root / "app.py").write_text("def f():\n    return 1\n")
         self.attacks_and_review()
+        herd.verify(self.root, "t1")
+        self.assertIn("start.json is missing", " ".join(herd.problems(self.root, "t1")))  # say why, then go on
+        herd.add_note(self.root, "t1", "late-red", "the task started with Herd 0.3.2")
         ev = herd.verify(self.root, "t1")
         self.assertEqual(herd.problems(self.root, "t1"), [])
         self.assertIn("Red first not checked: the task started before Herd 0.4.0", herd.report(ev))
@@ -516,6 +520,110 @@ class TestSecondReview(Base):
         for _ in range(4):
             herd.verify(self.root, "t1")
         self.assertIn("failed 3 times in a row", herd.gate(self.root, {})["reason"])
+
+
+
+class TestThirdReview(Base):
+    """The holes a third fresh-context review found."""
+
+    def test_a_faked_upgrade_keeps_the_risk_and_needs_a_reason(self):
+        herd.init_task(self.root, "t1", "Change auth/session.py", request="Change auth/session.py")
+        (self.root / ".herd/tasks/t1/task.toml").write_text(TASK)
+        (self.root / "auth").mkdir()
+        (self.root / "auth/session.py").write_text("x = 1\n")  # code before any verify
+        d = self.root / ".herd/tasks/t1"
+        (d / "start.json").unlink()
+        (d / "evidence.json").write_text(json.dumps({"task": "t1", "results": []}))
+        self.attacks_and_review()
+        ev = herd.verify(self.root, "t1")
+        self.assertEqual(ev["risk"]["effective"], "high")
+        self.assertIn("start.json is missing", " ".join(herd.problems(self.root, "t1")))
+
+    def test_a_commit_after_a_high_risk_review_keeps_the_review(self):
+        (self.root / "auth").mkdir()
+        self.start()
+        self.red_then_build()
+        (self.root / "auth/session.py").write_text("x = 1\n")
+        for a in herd.ATTACKS:
+            herd.add_note(self.root, "t1", "tried", f"{a} attack", attack=a, check=OK)
+        herd.verify(self.root, "t1")
+        herd.add_review(self.root, "t1", by="a fresh subagent", text="no Blocker or Major")
+        git(self.root, "add", "-A", "--", ".", ":!.herd")
+        git(self.root, "commit", "-q", "-m", "the reviewed change")
+        herd.verify(self.root, "t1")
+        self.assertEqual(herd.problems(self.root, "t1"), [])
+
+    def test_a_skipped_review_at_high_risk_also_goes_stale(self):
+        (self.root / "auth").mkdir()
+        self.start()
+        self.red_then_build()
+        (self.root / "auth/session.py").write_text("x = 1\n")
+        for a in herd.ATTACKS:
+            herd.add_note(self.root, "t1", "tried", f"{a} attack", attack=a, check=OK)
+        herd.verify(self.root, "t1")
+        herd.add_review(self.root, "t1", skipped=True, text="no subagent here")
+        (self.root / "auth/session.py").write_text("x = 2\n")
+        herd.verify(self.root, "t1")
+        self.assertIn("the code changed after the review", " ".join(herd.problems(self.root, "t1")))
+
+    def test_a_used_rewording_note_cannot_drop_the_criterion_later(self):
+        self.start()
+        self.red_then_build()
+        self.attacks_and_review()
+        narrowed = TASK.replace('text = "It must return 1 for any call"', 'text = "It must return 1 for one call"')
+        (self.root / ".herd/tasks/t1/task.toml").write_text(narrowed)
+        herd.add_note(self.root, "t1", "human-change", "C1: the human said: It must return 1 for one call")
+        herd.verify(self.root, "t1")
+        self.assertEqual(herd.problems(self.root, "t1"), [])
+        removed = TASK.split("[[criteria]]")[0] + "[[criteria]]" + TASK.split("[[criteria]]")[2]
+        (self.root / ".herd/tasks/t1/task.toml").write_text(removed)
+        herd.verify(self.root, "t1")
+        self.assertIn("C1 was removed", " ".join(herd.problems(self.root, "t1")))
+
+    def stash_case(self, branch):
+        if branch:
+            git(self.root, "checkout", "-q", "-b", branch)
+        else:
+            git(self.root, "checkout", "-q", "--detach")
+        self.start()
+        (self.root / "app.py").write_text("def f():\n    return 1\n")
+        git(self.root, "stash", "push", "-q", "-u", "--", "app.py")
+        herd.verify(self.root, "t1")
+        git(self.root, "stash", "pop", "-q")
+        return herd.verify(self.root, "t1")["red"]["stashed"]
+
+    def test_stash_is_found_on_an_uppercase_branch(self):
+        self.assertTrue(self.stash_case("Feature/Login"))
+
+    def test_stash_is_found_on_a_detached_head(self):
+        self.assertTrue(self.stash_case(None))
+
+    def test_a_stash_from_before_init_is_not_flagged(self):
+        (self.root / "old.py").write_text("x = 1\n")
+        git(self.root, "stash", "push", "-q", "-u", "--", "old.py")
+        self.start()
+        self.red_then_build()
+        self.assertEqual(herd.verify(self.root, "t1")["red"]["stashed"], [])
+
+    def test_passing_again_after_a_failure_reminds_about_herd_done_again(self):
+        self.start()
+        self.red_then_build()
+        self.attacks_and_review()
+        herd.verify(self.root, "t1")
+        for _ in range(herd.MAX_BLOCKS):
+            herd.gate(self.root, {})
+        self.assertIsNone(herd.gate(self.root, {}))
+        (self.root / "app.py").write_text("def f():\n    return 2\n")
+        herd.verify(self.root, "t1")
+        self.assertEqual(herd.gate(self.root, {})["decision"], "block")  # failing
+        (self.root / "app.py").write_text("def f():\n    return 1\n")
+        herd.verify(self.root, "t1")
+        self.assertIn("evidence passes", herd.gate(self.root, {})["reason"])
+
+    def test_a_script_under_a_test_directory_is_not_code(self):
+        (self.root / "tests").mkdir()
+        (self.root / "tests/run").write_text("#!/bin/sh\n")
+        self.assertFalse(herd.is_code("tests/run", self.root))
 
 
 if __name__ == "__main__":

@@ -19,6 +19,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import tempfile
 import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
@@ -166,9 +167,10 @@ def init_task(root, slug, goal, quick_check=None, request=None):
     risk = herd_triage.build_record("task", 0, goal + "\n" + (request or ""), {},
                                     toml_path.read_text() if toml_path.exists() else "")["risk"]["effective"]
     head = _git(root, "rev-parse", "HEAD").decode().strip() or None  # red first: what changed since here
+    # ponytail: hashes every uncommitted file once at init (about 1 s per 20k small files); a git stat cache if slower
     dirty = {f: _file_sha(root, f) for f in changed_since(root, head) or []}  # already there: not the agent's,
     (d / "start.json").write_text(json.dumps({"head": head, "risk": risk, "dirty": dirty,  # while unchanged
-                                              "at_epoch": datetime.now(timezone.utc).timestamp()}) + "\n")
+                                              "stashes": _stash_shas(root)}) + "\n")
     if request is not None:
         (d / "request.md").write_text(request)
     (Path(root) / ".herd" / "active").write_text(slug + "\n")
@@ -442,6 +444,25 @@ def fingerprint(root):
     return h.hexdigest()
 
 
+def content_id(root):
+    """Git tree id of the working tree's content, ignoring .herd/: the same before and after a commit."""
+    index = _git(root, "rev-parse", "--git-path", "index").decode().strip()
+    if not index:
+        return None
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_index = Path(tmp) / "index"
+        try:
+            shutil.copy(Path(root) / index, tmp_index)  # reuses git's file cache: only changed files are hashed
+        except OSError:
+            pass
+        env = dict(os.environ, GIT_INDEX_FILE=str(tmp_index))
+        run = lambda *a: subprocess.run(["git", *a], cwd=root, env=env, capture_output=True, text=True)  # noqa: E731
+        if run("add", "-A", "--", *OWN_FILES).returncode:
+            return None
+        out = run("write-tree")
+        return out.stdout.strip() if out.returncode == 0 else None
+
+
 def _task_sha(root, slug):
     return hashlib.sha1((_dir(root, slug) / "task.toml").read_bytes()).hexdigest()
 
@@ -462,18 +483,25 @@ def _file_sha(root, path):
         return None
 
 
-def _stashed_since(root, epoch):
-    """Stash entries made on the current branch since epoch: a way to hide code from the red run."""
-    branch = _branch(root)
-    if not branch or not epoch:
+def _stash_shas(root):
+    return [s.split("\t", 1)[0] for s in _git(root, "stash", "list", "--format=%H%x09%gs").decode().splitlines()]
+
+
+def _stashed_since(root, before):
+    """Stash entries made on this branch since `herd init` (before: the stash ids then): a way to hide code
+    from the red run. The stash list is shared by all worktrees; a branch is checked out in only one."""
+    if before is None:
         return []
-    out = _git(root, "stash", "list", "--format=%ct%x09%gs").decode().splitlines()
-    return [s.split("\t", 1)[1] for s in out if "\t" in s and s.split("\t", 1)[0].isdigit()
-            and int(s.split("\t", 1)[0]) >= int(epoch) and f"on {branch}:" in s.split("\t", 1)[1].lower()]
+    branch = _branch(root)
+    branch = "(no branch)" if branch in ("", "HEAD") else branch
+    subject = re.compile(r"(WIP on|On) " + re.escape(branch) + ":")
+    return [s.split("\t", 1)[1] for s in _git(root, "stash", "list", "--format=%H%x09%gs").decode().splitlines()
+            if "\t" in s and s.split("\t", 1)[0] not in before and subject.match(s.split("\t", 1)[1])]
 
 
 BUILT_EXT = (".pyc", ".pyo", ".class", ".o", ".so", ".dylib", ".dll", ".exe", ".log")
-BUILT_DIRS = {"__pycache__", "node_modules", ".pytest_cache", ".mypy_cache", ".ruff_cache", "build", "dist", "target"}
+BUILT_DIRS = {"__pycache__", "node_modules", ".pytest_cache", ".mypy_cache", ".ruff_cache"}  # never source code;
+# build/, dist/ and target/ can be (cmd/dist/main.go), and real build output is normally gitignored
 
 
 def is_code(path, root=None):
@@ -482,7 +510,7 @@ def is_code(path, root=None):
     if not parts or parts[0] == ".herd" or path.lower().endswith(DOC_EXT + BUILT_EXT) or BUILT_DIRS & set(parts):
         return False  # Herd's state, docs, config, and what running the code leaves behind
     name = parts[-1]
-    if name.startswith("."):  # .gitignore, .editorconfig: setup, not code
+    if name.startswith(".") or TEST_DIRS & {s.lower() for s in parts[:-1]}:  # .gitignore; anything under tests/
         return False
     if "." not in name:  # README, LICENSE, Makefile are not code; an executable script with a shebang is
         try:
@@ -568,10 +596,13 @@ def verify(root, slug):
     head = _git(root, "rev-parse", "HEAD").decode().strip() or "none"
     dirty = bool(_git(root, "status", "--porcelain", "--", *OWN_FILES).strip())
     d = _dir(root, slug)
-    old_ev = _state(d / "evidence.json", {})
-    if not (d / "start.json").exists() and old_ev and "risk" not in old_ev:  # a task verified by Herd before 0.4.0:
-        (d / "start.json").write_text(json.dumps({"head": None, "legacy": True}) + "\n")  # red first not checked,
-        if not (d / "frozen.json").exists():  # and the human criteria are frozen from now on
+    if (d / "started").exists() and not (d / "start.json").exists():  # a task from before Herd 0.4.0, or deleted:
+        req = d / "request.md"  # red first cannot be checked (the gate wants a --late-red reason), the risk is
+        toml_path = Path(root) / "herd.toml"  # triaged again from the goal and the request, and the criteria
+        risk = herd_triage.build_record("task", 0, task["goal"] + "\n" + (req.read_text() if req.exists() else ""), {},
+                                        toml_path.read_text() if toml_path.exists() else "")["risk"]["effective"]
+        (d / "start.json").write_text(json.dumps({"head": None, "legacy": True, "risk": risk}) + "\n")
+        if not (d / "frozen.json").exists():  # are frozen from now on
             (d / "frozen.json").write_text(json.dumps(
                 {c["id"]: {"text": c["text"], "source": c["source"], "check": c["check"]} for c in task["criteria"]}))
     start = _state(d / "start.json", {})  # missing or corrupt: red first and the stored risk are unknown
@@ -584,8 +615,6 @@ def verify(root, slug):
                                          if f not in pre or (pre[f] is not None and pre[f] != _file_sha(root, f))]
     snapshot = {c["id"]: {"text": c["text"], "source": c["source"], "check": c["check"]} for c in task["criteria"]}
     lost = [f.name for f in (d / "start.json", red_path, frozen_path) if f.exists() and _state(f, None) is None]
-    if (d / "started").exists() and not (d / "start.json").exists():
-        lost.append("start.json")  # deleted: red first cannot be checked
     if (d / "evidence.json").exists() and not frozen_path.exists():
         lost.append("frozen.json")  # deleted after the first verify: never re-freeze the edited criteria
     elif not frozen_path.exists():  # the human criteria are frozen at the first verify, checked or not
@@ -599,7 +628,7 @@ def verify(root, slug):
             "at": now(), "at_epoch": datetime.now(timezone.utc).timestamp(),
             "failed": sum(r["status"] == "failing" for r in checked), "total": len(checked),
             "code_before": None if mine is None else [f for f in mine if is_code(f, root)], "seen": mine or [],
-            "stashed": _stashed_since(root, start.get("at_epoch"))}))
+            "stashed": _stashed_since(root, start.get("stashes"))}))
     red = _state(red_path, {}) or None
     red_unreadable = sorted(set(lost)) or False
     hidden = []  # code that existed before the first verify but was moved aside for it (mv keeps the mtime)
@@ -614,8 +643,9 @@ def verify(root, slug):
     frozen = _state(frozen_path, {})
     for n in load_notes(root, slug) if not lost else []:  # the human changed their own criterion:
         cid = n["text"].split(":", 1)[0].strip() if n["kind"] == "human-change" else None  # `--human-change "C1: ..."`
-        if cid in frozen and cid not in snapshot:  # the human dropped it
-            del frozen[cid]
+        if (cid in frozen and cid not in snapshot and frozen[cid].get("by_note") != n["at"]
+                and re.search(r"\b(drop|dropped|remove|removed|delete|deleted)\b", n["text"], re.I)):
+            del frozen[cid]  # the human dropped it: a note that says so, not one already used for a rewording
             frozen_path.write_text(json.dumps(frozen))
         elif (cid in snapshot and frozen.get(cid) != snapshot[cid] and frozen.get(cid, {}).get("by_note") != n["at"]
               and _squash(snapshot[cid]["text"]) in _squash(n["text"])):  # the note quotes the new wording
@@ -651,11 +681,11 @@ def verify(root, slug):
           "known_limits": task.get("known_limits"), "notes": load_notes(root, slug),
           "red": {"failed": red.get("failed", 0), "total": red.get("total", 0), "code_before": red.get("code_before"),
                   "code_hidden": hidden, "stashed": red.get("stashed") or []} if red else None, "red_unreadable": red_unreadable, "timing": timing,
-          "human_not_verbatim": human_not_verbatim, "risk": risk_of(root, start, changed),
-          "legacy": bool(start.get("legacy")), "human_changed": human_changed, "checks_changed": checks_changed, "human_checks_changed": human_checks,
+          "human_not_verbatim": human_not_verbatim, "risk": risk_of(root, start, changed if changed is not None else changed_since(root, "HEAD")),
+          "legacy": bool(start.get("legacy") or not start), "human_changed": human_changed, "checks_changed": checks_changed, "human_checks_changed": human_checks,
           "added_after_red": added,
           "warnings": warnings, "escalate": [cid for cid, n in fails.items() if n >= ESCALATE_AFTER],
-          "fingerprint": fingerprint(root), "task_sha": _task_sha(root, slug),
+          "fingerprint": fingerprint(root), "content": content_id(root), "task_sha": _task_sha(root, slug),
           "results": results, "summary": summary, "attacks": attacks}
     (_dir(root, slug) / "evidence.json").write_text(json.dumps(ev, indent=2))
     return ev
@@ -700,7 +730,8 @@ def add_review(root, slug, by=None, text="", skipped=False):
         raise ValueError('use `herd review --by "<reviewer>" "<what they found>"` or `herd review --skipped "<why>"`')
     ev = load_evidence(root, slug) or {}  # the code state the review saw: it counts only for that state and risk
     extra = {"skipped": True} if skipped else {"by": by.strip()}
-    extra.update({"fingerprint": ev.get("fingerprint"), "risk": (ev.get("risk") or {}).get("effective")})
+    extra.update({"fingerprint": ev.get("fingerprint"), "content": ev.get("content"),
+                  "risk": (ev.get("risk") or {}).get("effective")})
     add_note(root, slug, "review", text, extra=extra)
 
 
@@ -717,7 +748,7 @@ def review_state(root, slug, ev, notes):
         return False, "the review was recorded before any `herd verify`: review the finished change"
     if LEVELS.index(n["risk"]) < LEVELS.index(risk):
         return False, f"the risk rose to {risk} after the review: review again"
-    if risk == "high" and not n.get("skipped") and n.get("fingerprint") != ev.get("fingerprint"):
+    if risk == "high" and n.get("content") != ev.get("content"):  # a commit alone does not change the content
         return False, "the code changed after the review, and the risk is high: review the final change"
     return True, None
 
@@ -841,7 +872,7 @@ def _rule_lines(ev, notes):
     out += [f"Human criterion changed with the human's words, for you to confirm: {n['text']}"
             for n in notes if n["kind"] == "human-change"]
     rv = [n for n in notes if n["kind"] == "review" and not n.get("skipped")]
-    if rv and rv[-1].get("fingerprint") and rv[-1]["fingerprint"] != ev.get("fingerprint"):
+    if rv and rv[-1].get("content") and rv[-1]["content"] != ev.get("content"):
         out.append("The code changed after the review")
     return out
 
@@ -1140,9 +1171,11 @@ def problems(root, slug):
         out.append(f"{', '.join(lost)} in {_dir(root, slug)} is missing or unreadable, so red first and the criteria "
                    "freeze are lost: restore it, or cancel and start a new task")
     stashed = (ev.get("red") or {}).get("stashed")
-    if (code or stashed) and not any(n["kind"] == "late-red" for n in notes):
+    if (code or stashed or ev.get("legacy")) and not any(n["kind"] == "late-red" for n in notes):
         what = (f"{', '.join(code[:5])} changed before the first verify" if code
-                else "a git stash was made on this branch between `herd init` and the first verify")
+                else "a git stash was made on this branch between `herd init` and the first verify" if stashed
+                else "start.json is missing (the task started before Herd 0.4.0, or the file was deleted), "
+                     "so it cannot be checked")
         out.append(f"red first not proven: {what}. If that was deliberate, say why with "
                    "`herd note --late-red \"<why>\"`; it shows in the report and the PR")
     out += [f"human criterion {cid} {'was removed' if how == 'removed' else 'changed'} after the first verify: "
@@ -1195,6 +1228,7 @@ def gate(root, hook):
                   and (pr_wanted(root) or (_dir(root, slug) / "pr").exists()) else "")
         return {"decision": "block", "reason": f"Herd task `{slug}`: the evidence passes ({n + 1}/{MAX_BLOCKS})."
                 f"{commit} Run `python3 {SELF} done` to close the task and print the final report, then paste it."}
+    (_dir(root, slug) / "done_blocks").unlink(missing_ok=True)  # passing again later reminds about `herd done` again
     n = int(counter.read_text()) if counter.exists() else 0
     if n >= MAX_BLOCKS:
         return None

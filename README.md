@@ -264,7 +264,7 @@ While a Herd task is active, each `Edit` or `Write` runs the command on that fil
 
 ## Status
 
-Version 0.2.6 (see the [changelog](CHANGELOG.md)). Working and covered by 188 unit tests on Python 3.11 to 3.13: the evidence harness (`scripts/herd.py`), the Stop gate, the quick route, project-type detection, the lint hook, the caveat log, and the risk-floor module. Benchmarked on one task with Sonnet (above). Not yet done: many live runs through the installed plugin across different project types, and issue-to-pull-request automation on GitHub, which is still design work.
+Version 0.2.8 (see the [changelog](CHANGELOG.md)). Working and covered by 212 unit tests on Python 3.11 to 3.13: the evidence harness (`scripts/herd.py`), the Stop gate, the quick route, project-type detection, the lint hook, the caveat log, zero-test flagging, the opt-in `herd pr` step, and the risk-floor module. Benchmarked on one task with Sonnet (above). Not yet done: many live runs through the installed plugin across different project types, and issue-to-pull-request automation on GitHub (labelled issue to reviewed spec), which is still design work. `herd pr` covers only the last step: a finished local task opens a pull request with its evidence.
 
 ## The design behind it
 
@@ -277,7 +277,7 @@ Herd is built with its own method, using the [Elephant-Goldfish Model](https://g
 
 ## Roadmap
 
-- **Now (v0.2):** local autopilot with evidence, the Stop gate, a quick route, project-type detection, an opt-in lint hook, an adversarial pass and the evidence-planning skill.
+- **Now (v0.2):** local autopilot with evidence, the Stop gate, a quick route, project-type detection, an opt-in lint hook, an adversarial pass, the evidence-planning skill, zero-test flagging and an opt-in, evidence-first pull request step (`herd pr`).
 - **Next:** GitHub automation: a labelled issue becomes a reviewed spec, then a pull request, with the Arbiter and Escalation modules.
 - **Later:** a release gate for high-risk changes, and other agent harnesses.
 

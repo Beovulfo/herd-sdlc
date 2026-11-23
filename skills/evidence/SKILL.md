@@ -29,4 +29,4 @@ Choose with the human what proves their goal works. This skill asks questions: r
 6. **Red first.** Run `herd verify` before any work. Checks should fail.
 7. **Show the evidence** after the work: the command, exit code and output of `herd verify --verbose`. Offer `herd lint --suggest` if the project has a per-file linter.
 
-Record problems with `herd note --found|--fixed|--open|--tried "..."` (`--tried --attack <name>` for a standard attack of the run skill). Never reword or weaken human criteria.
+Record problems with `herd note --found|--fixed|--open|--tried "..."` (`--tried --attack <name> --check "<command>"` for a run-skill attack). Never reword or weaken human criteria.

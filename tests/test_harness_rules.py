@@ -696,5 +696,79 @@ class TestNarrowedClaims(Base):
         self.assertFalse(any("narrows it" in w for w in ev["warnings"]))
 
 
+
+class TestPreInitEdits(Base):
+    """An agent that edits code and only then runs `herd init` is flagged: the PreToolUse hook reads the session log."""
+
+    def session_log(self, *paths):
+        """A Claude Code session log (JSONL) in which the agent edited these files with Edit or Write."""
+        log = self.root.parent / f"{self.root.name}-session.jsonl"
+        lines = [{"type": "user", "message": {"role": "user", "content": "build it"}}]
+        for i, path in enumerate(paths):
+            tool = "Write" if i % 2 else "Edit"
+            lines.append({"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "text", "text": "editing"},
+                {"type": "tool_use", "id": f"t{i}", "name": tool, "input": {"file_path": str(path)}}]}})
+        log.write_text("\n".join(json.dumps(x) for x in lines) + "\n")
+        return log
+
+    def hook(self, command, log=None, raw=None):
+        """Run the hook the way Claude Code does: hook JSON on stdin, from the project folder."""
+        data = raw if raw is not None else json.dumps({
+            "hook_event_name": "PreToolUse", "tool_name": "Bash", "cwd": str(self.root),
+            "transcript_path": str(log) if log else "", "tool_input": {"command": command}})
+        return subprocess.run([sys.executable, str(Path(herd.__file__)), "preinit"], cwd=self.root, input=data,
+                              capture_output=True, text=True)
+
+    INIT = f'python3 "{Path(herd.__file__)}" init t1 "Add f() to app.py" --request "{REQUEST}"'
+
+    def test_code_the_session_edited_before_init_is_flagged(self):
+        (self.root / "app.py").write_text("def f():\n    return 1\n")  # written by the agent with Write
+        p = self.hook(self.INIT, self.session_log(self.root / "app.py", "app.py"))  # Edit, then Write by relative path
+        self.assertEqual((p.returncode, p.stdout), (0, ""), p.stderr)
+        self.start()
+        self.assertEqual(json.loads((self.root / ".herd/tasks/t1/start.json").read_text())["agent_edits"], ["app.py"])
+        ev = herd.verify(self.root, "t1")
+        self.assertEqual(ev["red"]["code_before"], ["app.py"])
+        self.assertIn("red first not proven", " ".join(herd.problems(self.root, "t1")))
+
+    def test_the_humans_own_uncommitted_file_stays_theirs(self):
+        (self.root / "notes.py").write_text("x = 1\n")  # the human's, never touched by the session
+        (self.root / "app.py").write_text("def f():\n    return 1\n")
+        outside = self.root.parent / "elsewhere.py"  # an edit outside the project does not count
+        self.hook(self.INIT, self.session_log(self.root / "app.py", outside))
+        self.start()
+        self.assertEqual(herd.verify(self.root, "t1")["red"]["code_before"], ["app.py"])
+
+    def test_other_commands_and_bad_input_do_nothing(self):
+        (self.root / "app.py").write_text("x = 1\n")
+        log = self.session_log(self.root / "app.py")
+        for p in (self.hook("ls -la", log), self.hook("echo herd init is great", log), self.hook(self.INIT, None),
+                  self.hook(self.INIT, self.root / "missing.jsonl"), self.hook("", raw="{not json"),
+                  self.hook("", raw=""), self.hook("", raw='["a list"]')):
+            self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "", ""))
+        self.start()  # nothing was recorded, so the uncommitted file counts as the human's, as before
+        self.assertNotIn("agent_edits", json.loads((self.root / ".herd/tasks/t1/start.json").read_text()))
+        self.assertEqual(herd.verify(self.root, "t1")["red"]["code_before"], [])
+
+    def test_a_record_from_another_checkout_or_an_old_one_is_not_used(self):
+        (self.root / "app.py").write_text("def f():\n    return 1\n")
+        self.hook(self.INIT, self.session_log(self.root / "app.py"))
+        rec = herd._preinit_path(self.root)
+        data = json.loads(rec.read_text())
+        rec.write_text(json.dumps(dict(data, at=data["at"] - 3 * 3600)))  # hours old: another run's
+        self.start()
+        self.assertFalse(rec.exists())  # init always consumes it
+        self.assertEqual(herd.verify(self.root, "t1")["red"]["code_before"], [])
+
+    def test_the_hook_is_registered_and_safe_on_old_python(self):
+        hooks = json.loads((Path(herd.__file__).parent.parent / "hooks/hooks.json").read_text())["hooks"]
+        pre = [h for g in hooks["PreToolUse"] if g.get("matcher") == "Bash" for h in g["hooks"]]
+        self.assertEqual(len(pre), 1)
+        self.assertIn('herd.py\" preinit', pre[0]["command"])
+        src = Path(herd.__file__).read_text()
+        self.assertIn('sys.argv[1:2] in (["gate"], ["lint"], ["preinit"])', src)  # exits 0 before 3.11 code runs
+
+
 if __name__ == "__main__":
     unittest.main()

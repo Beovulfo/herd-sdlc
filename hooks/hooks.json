@@ -1,5 +1,5 @@
 {
-  "description": "Herd hooks: the Stop gate blocks finishing without fresh passing evidence; the optional lint hook feeds lint errors back after edits.",
+  "description": "Herd hooks: the Stop gate blocks finishing without fresh passing evidence; before `herd init`, a Bash hook records the files the session already edited, for red first; the optional lint hook feeds lint errors back after edits.",
   "hooks": {
     "Stop": [
       {
@@ -20,6 +20,18 @@
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/herd.py\" lint",
             "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/herd.py\" preinit",
+            "timeout": 10
           }
         ]
       }

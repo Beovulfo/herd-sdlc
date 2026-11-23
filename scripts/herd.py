@@ -9,9 +9,13 @@ red first, the standard attacks, frozen human criteria and, at medium and high r
 import sys
 
 if sys.version_info < (3, 11):  # keep this block parseable by old Pythons: it runs before tomllib is imported
-    if sys.argv[1:2] in (["gate"], ["lint"]):
+    if sys.argv[1:2] in (["gate"], ["lint"], ["preinit"]):
         sys.exit(0)  # a hook must never break the session; the CLI says why below
     sys.exit("herd needs Python 3.11 or newer, found " + sys.version.split()[0])
+if sys.argv[1:2] == ["preinit"]:  # the PreToolUse hook runs before every Bash command: leave before the imports
+    PREINIT_RAW = sys.stdin.read() if not sys.stdin.isatty() else ""
+    if "herd.py" not in PREINIT_RAW or "init" not in PREINIT_RAW:
+        sys.exit(0)
 
 import hashlib
 import json
@@ -195,9 +199,12 @@ def init_task(root, slug, goal, quick_check=None, request=None):
                                     toml_path.read_text() if toml_path.exists() else "")["risk"]["effective"]
     head = _git(root, "rev-parse", "HEAD").decode().strip() or None  # red first: what changed since here
     # ponytail: hashes every uncommitted file once at init (about 1 s per 20k small files); a git stat cache if slower
-    dirty = {f: _file_sha(root, f) for f in changed_since(root, head) or []}  # already there: not the agent's,
+    changed = changed_since(root, head) or []
+    edits = _take_preinit(root, changed)  # what this session edited before init is the agent's, uncommitted or not
+    dirty = {f: _file_sha(root, f) for f in changed if f not in edits}  # already there: not the agent's,
     (d / "start.json").write_text(json.dumps({"head": head, "risk": risk, "dirty": dirty,  # while unchanged
-                                              "stashes": _stash_shas(root)}) + "\n")
+                                              "stashes": _stash_shas(root)} | ({"agent_edits": edits} if edits else {}))
+                                  + "\n")
     if request is not None:
         (d / "request.md").write_text(request)
     (Path(root) / ".herd" / "active").write_text(slug + "\n")
@@ -460,6 +467,60 @@ def coverage_warnings(task):
 
 
 # ---- evidence -------------------------------------------------------------
+
+PREINIT_MAX_AGE = 3600  # seconds: a record older than this belongs to an earlier run
+INIT_CMD = re.compile(r"herd\.py[\"']?\s+init\b")
+EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
+
+
+def _preinit_path(root):
+    """Where the PreToolUse hook leaves its record for `herd init`: inside .git, shared by worktrees, never committed."""
+    common = _git(root, "rev-parse", "--git-common-dir").decode().strip()
+    return (Path(root) / common).resolve() / "herd-preinit.json" if common else None
+
+
+def preinit(hook):
+    """PreToolUse hook on Bash. Before `herd init`, record the files this session edited with Edit or Write
+    (from the session log), so red first counts them as the agent's even if they are uncommitted at init.
+    Never blocks and prints nothing; any other command returns at once. ponytail: edits made through Bash
+    (sed, cat >) are not in the log as edits, so they are not seen."""
+    if not isinstance(hook, dict) or not INIT_CMD.search(str((hook.get("tool_input") or {}).get("command", ""))):
+        return
+    log, cwd = Path(str(hook.get("transcript_path") or "")), Path(str(hook.get("cwd") or "."))
+    top = _git(cwd, "rev-parse", "--show-toplevel").decode().strip()
+    if not top or not log.is_file():
+        return
+    files = set()
+    for line in log.read_text(errors="replace").splitlines():
+        try:
+            content = json.loads(line).get("message", {}).get("content", [])
+        except (ValueError, AttributeError):
+            continue
+        for c in content if isinstance(content, list) else []:
+            if isinstance(c, dict) and c.get("type") == "tool_use" and c.get("name") in EDIT_TOOLS:
+                path = (c.get("input") or {}).get("file_path") or (c.get("input") or {}).get("notebook_path")
+                if path:
+                    full = (cwd / path).resolve()
+                    if full.is_relative_to(Path(top).resolve()):
+                        files.add(str(full))
+    target = _preinit_path(top)
+    if files and target:
+        target.write_text(json.dumps({"at": datetime.now(timezone.utc).timestamp(), "files": sorted(files)}))
+
+
+def _take_preinit(root, changed):
+    """The hook's record, consumed: changed paths (relative to root) this session edited before init."""
+    target = _preinit_path(root)
+    if not target or not target.exists():
+        return []
+    rec = _state(target, {})
+    target.unlink(missing_ok=True)
+    if datetime.now(timezone.utc).timestamp() - float(rec.get("at") or 0) > PREINIT_MAX_AGE:
+        return []
+    base = Path(root).resolve()
+    edited = {str(Path(f).relative_to(base)) for f in rec.get("files") or [] if Path(f).is_relative_to(base)}
+    return sorted(f for f in changed if f in edited)
+
 
 def _git(root, *args):
     p = subprocess.run(["git", *args], cwd=root, capture_output=True)
@@ -1318,6 +1379,7 @@ USAGE = {
     "cancel": 'herd cancel [slug] [--reason "text"]',
     "pr": "herd pr [slug] [--yes]   (push the herd/* branch, open or update its PR with the evidence)",
     "gate": "herd gate   (the Stop hook, reads hook JSON on stdin)",
+    "preinit": "herd preinit   (PreToolUse hook on Bash: before `herd init`, records files the session already edited)",
     "triage": 'herd triage "<text>" [--json]',
 }
 
@@ -1497,6 +1559,13 @@ def main(argv):
             slug = _slug_arg(root, args)
             cancel_task(root, slug, reason or "")
             print(f"cancelled {slug}: its files stay in .herd/tasks/{slug}/ and the Stop gate no longer blocks")
+        elif cmd == "preinit":  # PreToolUse hook on Bash: must never break or slow the session
+            try:
+                raw = globals().get("PREINIT_RAW")  # read by the fast path at the top of this file
+                raw = raw if raw is not None else (sys.stdin.read() if not sys.stdin.isatty() else "")
+                preinit(json.loads(raw) if raw.strip() else {})
+            except Exception:  # noqa: BLE001 - a hook that fails must not stop the agent's command
+                pass
         elif cmd == "gate":
             raw = sys.stdin.read() if not sys.stdin.isatty() else ""
             hook = json.loads(raw) if raw.strip() else {}

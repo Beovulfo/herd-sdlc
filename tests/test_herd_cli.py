@@ -1572,7 +1572,7 @@ class TestBudgets(Base):
 
     def test_adversarial_pass_keeps_the_standard_attacks(self):
         text = (SKILLS / "run/adversarial.md").read_text()
-        for attack in ("bad input at every entry point", "never a traceback", "same key", "does not use", "recompute"):
+        for attack in ("bad input at every entry point", "never a traceback", "same key", "does not ask for", "recompute"):
             self.assertIn(attack, text)
         run = (SKILLS / "run/SKILL.md").read_text()
         self.assertIn("Read [adversarial.md](adversarial.md) now", run)  # 0.3.0 runs skipped the optional file

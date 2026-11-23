@@ -1095,6 +1095,14 @@ class TestPr(Base):
         self.assertIn("````bash", body)
         self.assertIn("| ```` test -f greet.txt # `x` ``` ```` exit 0 |", body)
 
+    def test_title_is_short_and_cut_at_a_word(self):
+        self.assertEqual(herd.pr_title("Add a greeting", "t1"), "Add a greeting")
+        long = "Opt-in PR step: a herd pr command pushes the branch and opens or updates a pull request"
+        title = herd.pr_title(long + "\nsecond line", "t1")
+        self.assertLessEqual(len(title), 72)
+        self.assertTrue(title.endswith("...") and long.startswith(title[:-3]) and long[len(title) - 3] == " ")
+        self.assertEqual(herd.pr_title("  \n", "t1"), "t1")
+
     def test_cli_warns_when_the_evidence_is_not_done(self):
         p = self.herd("pr", "t1", "--yes")
         self.assertEqual(p.returncode, 0, p.stderr)

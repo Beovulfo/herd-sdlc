@@ -513,6 +513,15 @@ def pr_body(root, slug):
     return "\n".join(lines + foot) + "\n"
 
 
+def pr_title(goal, slug, limit=72):
+    """The goal's first line, cut at a word boundary to fit a PR list."""
+    line = (str(goal).strip().splitlines() or [slug])[0].strip() or slug
+    if len(line) <= limit:
+        return line
+    cut = line[:limit - 3].rsplit(" ", 1)[0].rstrip(" ,;:")
+    return cut + "..."
+
+
 def open_pr(root, slug, yes=False):
     """Push the task's herd/* branch and open or update its PR with the evidence. Opt-in; no other branch."""
     try:
@@ -540,7 +549,7 @@ def open_pr(root, slug, yes=False):
     if url:
         cmd = ["gh", "pr", "edit", branch, "--body-file", "-"]
     else:
-        cmd = ["gh", "pr", "create", "--head", branch, "--title", (load_task(root, slug)["goal"].splitlines() or [slug])[0][:120], "--body-file", "-"]
+        cmd = ["gh", "pr", "create", "--head", branch, "--title", pr_title(load_task(root, slug)["goal"], slug), "--body-file", "-"]
     p = subprocess.run(cmd, cwd=root, input=body, capture_output=True, text=True)
     if p.returncode:
         raise ValueError(f"`{' '.join(cmd[:3])}` failed: {(p.stderr or p.stdout).strip()[-500:]}")

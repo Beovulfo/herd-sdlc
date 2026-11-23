@@ -2,6 +2,11 @@
 
 All notable changes to Herd. Versions follow `.claude-plugin/plugin.json`.
 
+## 0.3.2
+
+- **Changed:** each standard attack names a command. `herd note --tried --attack <name>` needs `--check "<command>"`, usually a regression test, or text starting `n/a:` when the attack cannot apply. `herd verify` runs these commands like criterion checks and stores their exit code and output. `herd done` and the Stop gate count an attack only when its command passed at the last verify (one that ran zero tests or was logged after the last verify does not count), or when it is marked `n/a:`. Commands rerun at every verify, so one failing command blocks its attack however many others pass. An attack note with no command counts only as a stated `n/a:`, so notes from 0.3.1 or a hand-edited log do not pass the gate. Before, a note was only text: a benchmark run logged three attacks as tried before running them, and the gate accepted them.
+- **Changed:** the report and the PR description show each attack's state and command (`bad-input passing (`...`)`, `collision n/a`, failing, ran zero tests, or missing); the PR lists attacks without a passing command under what is not proven.
+
 ## 0.3.1
 
 Quality first. A benchmark rerun with 0.3.0 was 3% cheaper than 0.2.4 but scored 45 of 48 on the hidden verifier and 0 of 6 on the robustness probe (0.2.4: 48 and 6). Its agent never opened `adversarial.md`, which 0.3.0 had made an optional reference file. A rerun with a first draft of this version, whose agent did read the file, scored 48 of 48 and 6 of 6.

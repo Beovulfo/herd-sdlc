@@ -2,6 +2,15 @@
 
 All notable changes to Herd. Versions follow `.claude-plugin/plugin.json`.
 
+## 0.5.0
+
+Part C of [`herd-guardrails.md`](docs/designs/herd-guardrails.md), after spike [S3](docs/spikes/s3-hook-inputs.md) confirmed the hook inputs Parts A and B rely on.
+
+- **Added:** a stop record. Whenever a task stops without `herd done`, Herd writes `.herd/tasks/<slug>/stopped.json`: the reason (`released` when the Stop gate lets the agent go after 3 blocks, `done_refused` when the evidence passes but `herd done` kept refusing, `cancelled`, or `escalated` when the gate tells the agent to ask the human because a criterion failed 3 times in a row), the detail, the problems left, the evidence time, commit and staleness, the review state, the elapsed time, the gate's block count, and whether the task can be resumed with the next step. Herd computes `resumable` and `next` from the gate's own problems and state files, never from the agent: a cancelled or escalated task, or one whose state files are lost, is not resumable by the agent. The record is overwritten on each stop. Before, a released task left no record of why, and a new session had to read the notes and guess.
+- **Added:** `herd status` prints `Stopped <at>: <reason>. Next: <next>` first (or says the task went on, when newer evidence exists), and `herd status --json` prints the record (or `null`) for a reporting agent. The final report and the PR description name the earlier stop. A later passing `herd done` keeps the record and adds `resolved_at`.
+- **Changed:** the Stop gate no longer crashes on a corrupt or wrong-shaped `evidence.json` or `notes.jsonl`: it blocks and names the file, and after 3 blocks it lets the agent stop with a record that says a human must restore the file or cancel. Before, the hook failed with a traceback and let the agent stop with no record.
+- **Added:** spike S3 (`docs/spikes/s3-hook-inputs.md`): the SubagentStop and PreToolUse inputs, tested live on Claude Code 2.1.330. A plugin agent's `agent_type` is plugin-scoped (`herd:herd-reviewer`), and the subagent's final text can arrive in a `SubagentHandback` tool call instead of `last_assistant_message`; the design is updated.
+
 ## 0.4.1
 
 Lessons from 12 Haiku runs of the supermarket benchmark (Herd 0.3.1 and 0.4.0), kept to changes that add little or no work per run, plus a hook that closes a red-first gap found while building them. Every store they lost came from one bug class: a product reported as unreachable although another side of its shelf was open. Four of six 0.4.0 runs chose a map format that takes the pick cell instead of the shelf, and limits such as "rejected if walls cut it off" or "first neighbour only" contradicted the any-layout claim without reaching the human.

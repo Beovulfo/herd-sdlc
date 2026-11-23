@@ -891,6 +891,97 @@ def gate(root, hook):
     return {"decision": "block", "reason": reason}
 
 
+# ---- setup for agents other than Claude Code (Codex, open models, anything that reads AGENTS.md) ----------
+
+PLUGIN = Path(SELF).parent.parent
+SKILL_NAMES = ("run", "criteria", "evidence")
+AGENTS_START, AGENTS_END = "<!-- herd:start", "<!-- herd:end -->"
+AGENTS_RE = re.compile(re.escape(AGENTS_START) + ".*?" + re.escape(AGENTS_END), re.S)
+HERD_GATE = re.compile(r"herd\.py\W*\s+gate\s*$")  # Herd's Stop hook, from any Herd copy
+AGENTS_BLOCK = """<!-- herd:start: written by `herd setup`; run it again to update -->
+## Herd
+
+Herd is an evidence harness: a task is done only when its checks pass. `herd` means `python3 "{herd}"`, run from the project root.
+
+- Skills: `{skills}/herd-run/SKILL.md` is the autopilot; `herd-criteria` and `herd-evidence` are in the same folder. When the user asks for a Herd run (`herd-run`, `/herd:run`, "use Herd"), read herd-run/SKILL.md and follow it. Read each reference file it names when that step applies.
+- While a Herd task is active (`.herd/active` exists), never end your turn or say done until `herd done` succeeds. If it refuses, fix what it names, run `herd verify`, then `herd done` again. After 3 refusals, ask the human one question and stop.
+{end}"""
+
+
+def render_skill(text, name=None):
+    """A Herd skill file for agents without Claude Code's `${CLAUDE_PLUGIN_ROOT}` and `herd:` skill names."""
+    text = re.sub(r"/?herd:(run|criteria|evidence)\b", r"herd-\1", text.replace("${CLAUDE_PLUGIN_ROOT}", str(PLUGIN)))
+    return re.sub(r"(?m)^name: \S+$", f"name: herd-{name}", text, count=1) if name else text
+
+
+def _read(path):
+    """A text file's content, "" when it does not exist; a clear error naming the file otherwise."""
+    try:
+        return path.read_text() if path.exists() else ""
+    except (OSError, UnicodeDecodeError) as e:
+        raise ValueError(f"{path}: cannot read it ({getattr(e, 'strerror', None) or e})") from None
+
+
+def _codex_hooks(path):
+    """hooks.json text with Herd's Stop gate as the only Herd entry; refuses a file it cannot safely merge."""
+    bad = ValueError(f'{path}: expected {{"hooks": {{"Stop": [...]}}}}; fix or move it, then run `herd setup` again')
+    text, data = _read(path), {}
+    if text:
+        try:
+            data = json.loads(text)
+        except ValueError:
+            raise bad from None
+    hooks = data.get("hooks", {}) if isinstance(data, dict) else None
+    stop = hooks.get("Stop", []) if isinstance(hooks, dict) else None
+    if not isinstance(stop, list) or not all(isinstance(g, dict) and isinstance(g.get("hooks", []), list) for g in stop):
+        raise bad
+    keep = []
+    for group in stop:  # drop Herd's old entry (any copy, any path), keep everything else as it was
+        handlers = [h for h in group.get("hooks", []) if not HERD_GATE.search(str(h.get("command", "")) if isinstance(h, dict) else "")]
+        if handlers or not group.get("hooks"):
+            keep.append(dict(group, hooks=handlers) if "hooks" in group else group)
+    keep.append({"hooks": [{"type": "command", "command": f"python3 {shlex.quote(SELF)} gate", "timeout": 30}]})
+    hooks["Stop"] = keep
+    data["hooks"] = hooks
+    return json.dumps(data, indent=2) + "\n"
+
+
+def _agents_md(path, skills):
+    """AGENTS.md text with one Herd block, in place of the first old one; the rest of the file stays as it was."""
+    old = _read(path)
+    block = AGENTS_BLOCK.format(herd=SELF, skills=skills, end=AGENTS_END)
+    first = AGENTS_RE.search(old)
+    if first:
+        return old[:first.start()] + block + AGENTS_RE.sub("", old[first.end():])
+    return old + ("\n" if old and not old.endswith("\n") else "") + ("\n" if old else "") + block + "\n"
+
+
+def setup(user):
+    """Install Herd for Codex and other agents: skills, AGENTS.md rules and a Codex Stop gate. Returns the paths."""
+    if user:
+        codex = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+        skills, agents, hooks = Path.home() / ".agents" / "skills", codex / "AGENTS.md", codex / "hooks.json"
+    else:
+        top = toplevel(Path.cwd())
+        skills, agents, hooks = top / ".agents" / "skills", top / "AGENTS.md", top / ".codex" / "hooks.json"
+    hooks_text, agents_text = _codex_hooks(hooks), _agents_md(agents, skills)  # read both before writing anything
+    try:
+        for name in SKILL_NAMES:
+            dest = skills / f"herd-{name}"
+            shutil.rmtree(dest, ignore_errors=True)  # only Herd's own folders: no stale reference files
+            dest.mkdir(parents=True)
+            for f in sorted((PLUGIN / "skills" / name).glob("*.md")):
+                (dest / f.name).write_text(render_skill(f.read_text(), name if f.name == "SKILL.md" else None))
+        for path, text in ((agents, agents_text), (hooks, hooks_text)):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text)
+    except OSError as e:
+        raise ValueError(f"cannot write {e.filename}: {e.strerror}; fix it, then run `herd setup` again") from None
+    if not user and _git(top, "rev-parse", "--git-dir").strip():
+        _ignore_locally(top, ["/.agents/skills/herd-*/"])
+    return skills, agents, hooks
+
+
 # ---- cli ------------------------------------------------------------------
 
 def _slug_arg(root, args):
@@ -927,6 +1018,7 @@ USAGE = {
     "pr": "herd pr [slug] [--yes]   (push the herd/* branch, open or update its PR with the evidence)",
     "gate": "herd gate   (the Stop hook, reads hook JSON on stdin)",
     "triage": 'herd triage "<text>" [--json]',
+    "setup": "herd setup [--user]   (Codex and other agents: skills, AGENTS.md rules, Codex Stop gate)",
 }
 
 
@@ -1096,6 +1188,15 @@ def main(argv):
             if rec.get("status") == "fallback":  # never hide a broken config behind the default
                 why = f"fallback: {rec.get('cause')}; check herd.toml"
             print(json.dumps(rec, indent=2) if as_json else f"risk: {risk['effective']} ({why})")
+        elif cmd == "setup":
+            if args not in ([], ["--user"]):
+                raise UsageError
+            skills, agents, hooks = setup(user=bool(args))
+            print(f"skills: {skills}/herd-run, herd-criteria, herd-evidence")
+            print(f"rules: {agents} (the Herd block; agents without a Stop hook rely on it)")
+            print(f"Stop gate: {hooks}; trust it once in Codex with /hooks")
+            if not args:
+                print("these files name this Herd copy by absolute path: keep them out of shared commits")
     except UsageError:
         print(f"herd: usage: {USAGE[cmd]}", file=sys.stderr)
         return 1

@@ -2,6 +2,14 @@
 
 All notable changes to Herd. Versions follow `.claude-plugin/plugin.json`.
 
+## 0.4.0
+
+Herd outside Claude Code: OpenAI Codex, open models, and other agents that read `AGENTS.md`.
+
+- **Added:** `herd setup [--user]`. It renders the three skills as `herd-run`, `herd-criteria` and `herd-evidence`, with `${CLAUDE_PLUGIN_ROOT}` replaced by the absolute path of this Herd copy and `/herd:<skill>` names replaced by `herd-<skill>`. It also writes a Herd block to `AGENTS.md` (the `herd` command, where the skills are, and the rule never to stop before `herd done` succeeds) and the Stop gate to a Codex `hooks.json`. Codex's Stop hook takes the same `{"decision": "block", "reason": ...}` output that `herd gate` already prints. Project mode writes `.agents/skills/`, `AGENTS.md` and `.codex/hooks.json` in the repository and adds the skill folders to `.git/info/exclude`; `--user` writes `~/.agents/skills/`, `$CODEX_HOME/AGENTS.md` and `$CODEX_HOME/hooks.json`. It keeps the user's own content in both files, replaces only Herd's entries on a rerun (also from a moved copy), and refuses a `hooks.json` it cannot merge without writing anything.
+- **Changed:** the run skill says that where the agent has no Stop hook, it must never stop before `herd done` succeeds.
+- **Docs:** the README has an "Other agents" section: what works with Claude Code, Codex, open models served by Unsloth Studio or `llama-server` and driven by Codex or Claude Code, and other agents that read `AGENTS.md`. Where there is no Stop hook, only the `AGENTS.md` rule holds. The lint hook stays Claude Code only.
+
 ## 0.3.2
 
 - **Changed:** each standard attack names a command. `herd note --tried --attack <name>` needs `--check "<command>"`, usually a regression test, or text starting `n/a:` when the attack cannot apply. `herd verify` runs these commands like criterion checks and stores their exit code and output. `herd done` and the Stop gate count an attack only when its command passed at the last verify (one that ran zero tests or was logged after the last verify does not count), or when it is marked `n/a:`. Commands rerun at every verify, so one failing command blocks its attack however many others pass. An attack note with no command counts only as a stated `n/a:`, so notes from 0.3.1 or a hand-edited log do not pass the gate. `herd verify` prints attacks that need attention (all of them with `--verbose`) and exits 1 when one fails. The latest note for an attack decides, so a mistyped or renamed command can be replaced; earlier commands that now fail stay listed in the PR. A command that runs no project code (`true`, `echo`, `test -f`) warns and does not count. `--timeout S` sets an attack command's time limit; each distinct command runs once per verify. Before, a note was only text: a benchmark run logged three attacks as tried before running them, and the gate accepted them.

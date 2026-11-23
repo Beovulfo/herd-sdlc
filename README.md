@@ -18,6 +18,7 @@
   <a href="#quickstart">Quickstart</a> &middot;
   <a href="#how-it-works">How it works</a> &middot;
   <a href="#architecture">Architecture</a> &middot;
+  <a href="#other-agents">Codex and open models</a> &middot;
   <a href="#several-tasks-at-once">Parallel tasks</a> &middot;
   <a href="#see-it-work">See it work</a> &middot;
   <a href="#benchmark-with-and-without-herd">Benchmark</a> &middot;
@@ -30,7 +31,7 @@
   <br><sub>A real session with Herd 0.3.2 and Claude Sonnet 5.5, sped up: one message, then intake, criteria, red first, build, break it, review, verify and evidence. The Stop gate blocks one early finish.</sub>
 </p>
 
-Herd is a lightweight [Claude Code](https://claude.com/claude-code) plugin that runs a task end to end with as little human input as possible. You give it a goal and, if you like, success criteria. The agent plans, builds, tries to break its own work, reviews and verifies. It only stops when **runnable checks prove the criteria pass**, and it only asks you something when an action is irreversible or a real trade-off needs a human.
+Herd is a lightweight [Claude Code](https://claude.com/claude-code) plugin, also usable from Codex and open models ([other agents](#other-agents)), that runs a task end to end with as little human input as possible. You give it a goal and, if you like, success criteria. The agent plans, builds, tries to break its own work, reviews and verifies. It only stops when **runnable checks prove the criteria pass**, and it only asks you something when an action is irreversible or a real trade-off needs a human.
 
 Most agent workflows ask people to write long requirement lists, then trust the agent when it says "done". Herd flips that:
 
@@ -89,6 +90,32 @@ Two options are off by default; ask for them in the request, or switch them on i
 ```
 
 The task then runs on a new branch in its own worktree, cut from the branch you are on, and ends with a pull request whose description is the evidence.
+
+## Other agents
+
+The CLI is plain Python and does not depend on Claude Code, so other coding agents can run Herd too. Clone this repository, then run `herd setup` once:
+
+```bash
+git clone https://github.com/Beovulfo/herd-sdlc ~/herd-sdlc
+python3 ~/herd-sdlc/scripts/herd.py setup --user
+```
+
+`herd setup --user` writes the skills as `herd-run`, `herd-criteria` and `herd-evidence` to `~/.agents/skills/`, a Herd block to `$CODEX_HOME/AGENTS.md`, and the Stop gate to `$CODEX_HOME/hooks.json` (`CODEX_HOME` defaults to `~/.codex`). Without `--user` it writes the same into the current repository: `.agents/skills/`, `AGENTS.md` and `.codex/hooks.json`. Your own content in both files stays; a rerun replaces only Herd's entries, and a `hooks.json` it cannot read is refused unchanged. The files name your Herd copy by absolute path: run `herd setup` again after moving it, and keep them out of shared commits (project mode adds its skill folders to `.git/info/exclude`).
+
+Then ask for a run. In Codex: `$herd-run Add a --json flag to the export command.` Elsewhere: "Use Herd to add a --json flag to the export command."
+
+| Agent | How Herd gets in | Stop gate | Lint hook |
+| --- | --- | --- | --- |
+| Claude Code | the plugin, `/herd:run` | yes | yes, opt-in |
+| Codex CLI | `herd setup --user`, then `$herd-run` | configured; not yet seen firing live (below) | no |
+| Open models in Codex, such as Unsloth Studio or `llama-server` (`unsloth start codex`, `codex --oss`) | `herd setup` in the repository | configured; not yet seen firing live (below) | no |
+| Open models in Claude Code (`unsloth start claude`, `ANTHROPIC_BASE_URL`) | the plugin, unchanged | yes | yes, opt-in |
+| Other agents that read `AGENTS.md` | `herd setup` in the repository; the block names the skill files by path | no | no |
+
+- **Unsloth is not an agent.** It trains and serves open models. Its docs run them as coding agents through Codex (Unsloth Studio or `llama-server`, Responses API) or through Claude Code. `unsloth start codex` gives Codex its own home, so it does not read `~/.codex`: use project mode there.
+- **No Stop gate, only a rule.** Where there is no Stop hook, or before you trust it, the `AGENTS.md` block tells the agent never to stop before `herd done` succeeds. A model can ignore a rule; it cannot get past the gate. Check `herd status` yourself. Smaller open models also follow long skills less reliably.
+- **The Codex Stop gate is configured, not proven live.** Codex's Stop hook takes the same output as `herd gate`, and Codex runs a new or changed hook only after you trust it in `/hooks`. In one live test (Codex 0.139.0, `codex exec --oss` with a local Ollama model) the model read the `AGENTS.md` block, but Codex ran no hook from `hooks.json`, not even a trivial one. The interactive CLI was not tried. Until it is, treat Codex like an agent with only the rule.
+- **How it is tested.** `tests/test_herd_setup.py` runs `herd setup`, then a whole task through the rendered command and the Stop hook command with Codex's hook input, without Claude Code. CI runs no live Codex or open-model session.
 
 ## How it works
 
@@ -317,6 +344,7 @@ sh examples/supermarket-route/verifier/score_run.sh sonnet-herd-1
 | `herd done [--verbose]` | Write `evidence.md`, close the task; refuses unless fresh and passing and, on the standard route, until each standard attack has a passing command (or an `n/a:` reason). Updates the task's PR description if `herd pr` opened one. Prints two lines; `--verbose` prints the report too |
 | `herd cancel --reason "text"` | Abandon the task: keep its files, stop the Stop gate from blocking |
 | `herd pr [slug] [--yes]` | Opt-in: push the `herd/*` branch, open or update its PR with the evidence as the description; never merges |
+| `herd setup [--user]` | Install Herd for Codex and other agents: the skills, an `AGENTS.md` block and a Codex Stop gate, in this repository or, with `--user`, in your home ([other agents](#other-agents)) |
 | `herd help` | List every command with its usage |
 | `herd gate` | The Stop hook (reads hook JSON on stdin) |
 | `herd lint` | The optional PostToolUse lint hook; `herd lint --suggest` prints a `[lint]` block for `herd.toml` |
@@ -356,7 +384,7 @@ While a Herd task is active, each `Edit` or `Write` runs the command on that fil
 
 ## Status
 
-Version 0.3.2 (see the [changelog](CHANGELOG.md)). Working and covered by 273 unit tests on Python 3.11 to 3.13: the evidence harness (`scripts/herd.py`), the Stop gate, the quick route, project-type detection, the lint hook, the caveat log, zero-test flagging, the opt-in `herd pr` step, the opt-in worktree start for parallel tasks, short output by default, and the risk-floor module. Releases 0.2.7 to 0.3.0 were each built with Herd itself; 0.2.8 to 0.3.0 were opened as pull requests by `herd pr`. Benchmarked on one task with Sonnet (above). Not yet done: many live runs through the installed plugin across different project types, and issue-to-pull-request automation on GitHub (labelled issue to reviewed spec), which is still design work. `herd pr` covers only the last step: a finished local task opens a pull request with its evidence.
+Version 0.4.0 (see the [changelog](CHANGELOG.md)). Working and covered by 289 unit tests on Python 3.11 to 3.13: the evidence harness (`scripts/herd.py`), the Stop gate, the quick route, project-type detection, the lint hook, the caveat log, zero-test flagging, the opt-in `herd pr` step, the opt-in worktree start for parallel tasks, short output by default, `herd setup` for Codex and other agents, and the risk-floor module. Releases 0.2.7 to 0.3.0 were each built with Herd itself; 0.2.8 to 0.3.0 were opened as pull requests by `herd pr`. Benchmarked on one task with Sonnet (above). Not yet done: many live runs through the installed plugin across different project types, and issue-to-pull-request automation on GitHub (labelled issue to reviewed spec), which is still design work. `herd pr` covers only the last step: a finished local task opens a pull request with its evidence.
 
 ## The design behind it
 
@@ -369,9 +397,9 @@ Herd is built with its own method, using the [Elephant-Goldfish Model](https://g
 
 ## Roadmap
 
-- **Now (v0.3):** local autopilot with evidence, short output by default, the Stop gate, a quick route, project-type detection, an opt-in lint hook, an adversarial pass whose standard attacks `herd done` enforces, the evidence-planning skill, zero-test flagging, an opt-in, evidence-first pull request step (`herd pr`) and an opt-in worktree start so several agents can run tasks in one repository.
+- **Now (v0.3):** local autopilot with evidence, short output by default, the Stop gate, a quick route, project-type detection, an opt-in lint hook, an adversarial pass whose standard attacks `herd done` enforces, the evidence-planning skill, zero-test flagging, an opt-in, evidence-first pull request step (`herd pr`) and an opt-in worktree start so several agents can run tasks in one repository, and `herd setup` for Codex, open models and other agents that read `AGENTS.md`.
 - **Next:** GitHub automation: a labelled issue becomes a reviewed spec, then a pull request, with the Arbiter and Escalation modules.
-- **Later:** a release gate for high-risk changes, and other agent harnesses.
+- **Later:** a release gate for high-risk changes, and live runs in Codex and with open models.
 
 ## Development
 

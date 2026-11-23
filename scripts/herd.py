@@ -23,6 +23,11 @@ import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
 
+try:
+    import fcntl
+except ImportError:  # ponytail: Windows has no flock; parallel inits there can still race
+    fcntl = None
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import herd_detect  # noqa: E402
 import herd_triage  # noqa: E402
@@ -73,6 +78,11 @@ VARIES = re.compile(r"\b(vary|varies|varied|varying|variation|generated?|random\
 SCALED = re.compile(r"\b(scales?|sizes?|largest?|big|biggest|huge|time limit|timed|timing|seconds|performance|"
                     r"runtime|latency|up to \d+)\b", re.I)
 NOTE_KINDS = ("found", "fixed", "open", "tried")
+# the standard attacks of the adversarial pass (skills/run/adversarial.md): `herd done` needs a tried note for each
+ATTACKS = {"bad-input": "bad input at every entry point ends in a clear message, never a traceback",
+           "collision": "two inputs on the same key or position each still count",
+           "one-bad-part": "one broken entry the request does not ask for does not reject the whole input, while a broken requested one still fails clearly",
+           "recount": "every reported number recomputed from the output with separate code"}
 MAX_TEXT_WORDS, MAX_COVERAGE_WORDS = 40, 50  # advisory limits, see length_warnings
 WORKTREES = ".claude/worktrees"  # where `herd init --worktree` puts tasks; Claude Code's EnterWorktree can enter it
 OWN_FILES = (".", ":!.herd")  # pathspec: this checkout's work, not Herd's own state
@@ -138,6 +148,10 @@ def init_task(root, slug, goal, quick_check=None, request=None):
         if rec["risk"]["floor"] == "high":
             raise ValueError("risk floor is high: use the full criteria flow, not --quick")
         text = QUICK.format(goal=json.dumps(goal), check=json.dumps(quick_check))
+    other = active_slug(root)
+    if other and _dir(root, other).exists() and not cancelled(root, other):
+        raise ValueError(f"task {other} is still active in this checkout: finish it (`herd done`), cancel it, "
+                         f"or start this one in its own worktree with --worktree")
     d.mkdir(parents=True)
     (d / "task.toml").write_text(text)
     (d / "started").write_text(now() + "\n")
@@ -208,6 +222,23 @@ def _ignore_locally(root, patterns):
             fh.write("".join(f"{p}\n" for p in missing))
 
 
+def task_branch(root, slug):
+    """Put a plain init's work on its own branch herd/<slug>, cut from the current one (uncommitted changes
+    come along). Returns (base branch or None, warning or None); outside git it does nothing."""
+    if not _git(root, "rev-parse", "--git-dir"):
+        return None, None
+    base = _branch(root)
+    if base == f"herd/{slug}":
+        return None, None
+    if base in ("", "HEAD"):
+        return None, f"HEAD is detached or the repository has no commit yet: create branch herd/{slug} yourself"
+    p = subprocess.run(["git", "switch", "-c", f"herd/{slug}"], cwd=root, capture_output=True, text=True)
+    if p.returncode:
+        return None, f"could not create branch herd/{slug}: {p.stderr.strip()[-200:]}"
+    (_dir(root, slug) / "base").write_text(base + "\n")  # `herd pr` targets it
+    return base, None
+
+
 def worktree_required(root):
     try:
         cfg = tomllib.loads((Path(root) / "herd.toml").read_text()).get("worktree")
@@ -239,8 +270,13 @@ def init_worktree(root, slug, goal, quick_check=None, request=None):
     # other agents' worktrees and every checkout's Herd state stay out of `git status` and `git add -A`
     _ignore_locally(root, [f"/{WORKTREES}/", ".herd/"])
     tree = _main_checkout(root) / WORKTREES / f"herd-{slug}"
-    p = subprocess.run(["git", "worktree", "add", "-b", f"herd/{slug}", str(tree), "HEAD"],
-                       cwd=root, capture_output=True, text=True)
+    # git reads every worktree's admin files during `worktree add` and fails on one that a parallel
+    # add has half written, so parallel inits take turns for this one call
+    with open(Path(_gitpath(root, "--git-common-dir")) / "herd-worktree.lock", "a") as lock:
+        if fcntl:
+            fcntl.flock(lock, fcntl.LOCK_EX)  # released when the file closes
+        p = subprocess.run(["git", "worktree", "add", "-b", f"herd/{slug}", str(tree), "HEAD"],
+                           cwd=root, capture_output=True, text=True)
     if p.returncode:
         raise ValueError(f"git worktree add failed: {p.stderr.strip()[-300:]}")
     path = tree / Path(root).resolve().relative_to(toplevel(root).resolve())  # same subfolder as the project
@@ -450,16 +486,22 @@ def verify(root, slug):
     return ev
 
 
-def add_note(root, slug, kind, text):
-    """Append a caveat to the task's log: found, fixed, open (a known limit) or tried (adversarial attempt)."""
+def add_note(root, slug, kind, text, attack=None):
+    """Append a caveat to the task's log: found, fixed, open (a known limit) or tried (adversarial attempt).
+
+    attack names which standard attack a tried note covers (one of ATTACKS)."""
     if kind not in NOTE_KINDS:
         raise ValueError(f"note kind must be one of {NOTE_KINDS}")
+    if attack is not None and (kind != "tried" or attack not in ATTACKS):
+        raise ValueError(f"--attack goes with --tried and is one of: {', '.join(ATTACKS)}")
     if not text.strip():
         raise ValueError("note text is empty")
     d, started = _dir(root, slug), _dir(root, slug) / "started"
     t = now()
     rec = {"at": t, "kind": kind, "text": text.strip(),
            "elapsed_s": _secs(started.read_text().strip(), t) if started.exists() else None}
+    if attack:
+        rec["attack"] = attack
     with open(d / "notes.jsonl", "a") as f:
         f.write(json.dumps(rec) + "\n")
 
@@ -487,6 +529,17 @@ def _largest_batch(notes):
     return best
 
 
+def _attack_line(notes):
+    """`Adversarial pass: ...` with the standard attacks covered and missing; None when nothing was tried."""
+    tried = [n for n in notes if n["kind"] == "tried"]
+    if not tried:
+        return None
+    covered = {n.get("attack") for n in tried}
+    missing = [a for a in ATTACKS if a not in covered]
+    return (f"Adversarial pass: {len(tried)} attempt{'s' if len(tried) != 1 else ''} recorded; standard attacks "
+            + (f"missing: {', '.join(missing)}" if missing else "all logged"))
+
+
 def report(ev, notes=None):
     s = ev["summary"]
     notes = ev.get("notes") or [] if notes is None else notes
@@ -510,9 +563,7 @@ def report(ev, notes=None):
     if ev.get("known_limits"):
         lines.append(f"Known limits: {ev['known_limits']}")
     if ev.get("route") != "quick":
-        tried = sum(n["kind"] == "tried" for n in notes)
-        lines.append(f"Adversarial pass: {tried} attempt{'s' if tried != 1 else ''} recorded" if tried
-                     else "Adversarial pass: not recorded")
+        lines.append(_attack_line(notes) or "Adversarial pass: not recorded")
     lines += ["", "| id | status | source | check |", "| --- | --- | --- | --- |"]
     for r in ev["results"]:
         lines.append(f"| {r['id']} | {r['status']} | {r['source']} | `{r['check'] or '-'}` |")
@@ -619,9 +670,8 @@ def pr_body(root, slug):
         details.append(f"Elapsed: {fmt_duration(ev['timing']['elapsed_s'])} from `herd init` to the last verify")
     if ev.get("test_budget"):
         details.append(f"Test budget: {ev['test_budget']}")
-    tried = sum(n["kind"] == "tried" for n in notes)
-    if tried:
-        details.append(f"Adversarial pass: {tried} attempt{'s' if tried != 1 else ''} recorded")
+    if _attack_line(notes):
+        details.append(_attack_line(notes))
     # the reviewer's view ends here; the rest is collapsed, nothing is dropped
     count = {k: sum(n["kind"] == k for n in notes) for k in NOTE_KINDS}
     lines += ["", "<details><summary>Run details and caveat log "
@@ -685,7 +735,9 @@ def open_pr(root, slug, yes=False):
     p = subprocess.run(cmd, cwd=root, input=body, capture_output=True, text=True)
     if p.returncode:
         raise ValueError(f"`{' '.join(cmd[:3])}` failed: {(p.stderr or p.stdout).strip()[-500:]}")
-    return url or p.stdout.strip().splitlines()[-1]
+    url = url or p.stdout.strip().splitlines()[-1]
+    (_dir(root, slug) / "pr").write_text(url + "\n")  # `herd done` refreshes this PR's description
+    return url
 
 
 # ---- lint hook ------------------------------------------------------------
@@ -741,6 +793,13 @@ def problems(root, slug):
     out = [f"{r['id']} is failing: {r['text']}" for r in ev["results"] if r["status"] == "failing"]
     if not ev["summary"]["passing"] and not out:
         out.append("no passing criterion: give at least one criterion a runnable check")
+    if ev.get("route") != "quick":
+        tried = {n.get("attack") for n in load_notes(root, slug) if n["kind"] == "tried"}
+        missing = [a for a in ATTACKS if a not in tried]
+        if missing:
+            out.append("adversarial pass incomplete (skills/run/adversarial.md): try "
+                       + "; ".join(f"{a}: {ATTACKS[a]}" for a in missing)
+                       + ". Log each with `herd note --tried --attack <name> \"what you ran and saw\"`")
     return out
 
 
@@ -791,7 +850,7 @@ def _slug_arg(root, args):
 USAGE = {
     "init": 'herd init <slug> "<goal>" [--request "<message>"] [--quick "<check>"] [--worktree]',
     "check": "herd check [slug]",
-    "note": 'herd note --found|--fixed|--open|--tried "text"',
+    "note": 'herd note --found|--fixed|--open|--tried [--attack bad-input|collision|one-bad-part|recount] "text"',
     "detect": "herd detect",
     "lint": "herd lint [--suggest]   (without --suggest: the PostToolUse hook, reads hook JSON on stdin)",
     "verify": "herd verify [slug] [--verbose]",
@@ -844,6 +903,11 @@ def main(argv):
                 return 0
             check_worktree_rule(root, args[0])
             init_task(root, args[0], args[1], quick_check=quick, request=request)
+            base, warn = task_branch(root, args[0])
+            if base:
+                print(f"switched to new branch herd/{args[0]}, cut from {base}")
+            if warn:
+                print(f"warning: {warn}", file=sys.stderr)
             if quick is None:
                 print(f"created .herd/tasks/{args[0]}/task.toml (commented template): add criteria with checks, then run `herd check`")
             else:
@@ -860,11 +924,12 @@ def main(argv):
             return 1 if errs else 0
         elif cmd == "note":
             kinds = {"--found": "found", "--fixed": "fixed", "--open": "open", "--tried": "tried"}
+            attack, args = _opt(args, "--attack")
             flags = [a for a in args if a.startswith("--")]
             rest = [a for a in args if not a.startswith("--")]
             if len(flags) != 1 or flags[0] not in kinds or len(rest) != 1:
                 raise UsageError
-            add_note(root, _slug_arg(root, []), kinds[flags[0]], rest[0])
+            add_note(root, _slug_arg(root, []), kinds[flags[0]], rest[0], attack=attack)
             print(f"noted ({kinds[flags[0]]}): {rest[0]}")
         elif cmd == "detect":
             print(json.dumps(herd_detect.detect(root), indent=2))
@@ -916,6 +981,12 @@ def main(argv):
             proven = sum(r["status"] == "passing" and not r.get("zero_tests") for r in ev["results"])
             print(f"done: evidence is fresh and passing ({proven} of {len(ev['results'])} criteria proven)")
             print(f"report: {(_dir(root, slug) / 'evidence.md').relative_to(root)}")
+            if (_dir(root, slug) / "pr").exists():  # a PR exists: its description must show the final evidence
+                try:
+                    print(f"pr: description updated with the final evidence: {open_pr(root, slug, yes=True)}")
+                except ValueError as e:
+                    print(f"warning: the pull request still shows older evidence ({e}); run `herd pr` again",
+                          file=sys.stderr)
         elif cmd == "pr":
             slug = _slug_arg(root, [a for a in args if a != "--yes"])
             print(open_pr(root, slug, yes="--yes" in args))

@@ -23,6 +23,11 @@ import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
 
+try:
+    import fcntl
+except ImportError:  # ponytail: Windows has no flock; parallel inits there can still race
+    fcntl = None
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import herd_detect  # noqa: E402
 import herd_triage  # noqa: E402
@@ -239,8 +244,13 @@ def init_worktree(root, slug, goal, quick_check=None, request=None):
     # other agents' worktrees and every checkout's Herd state stay out of `git status` and `git add -A`
     _ignore_locally(root, [f"/{WORKTREES}/", ".herd/"])
     tree = _main_checkout(root) / WORKTREES / f"herd-{slug}"
-    p = subprocess.run(["git", "worktree", "add", "-b", f"herd/{slug}", str(tree), "HEAD"],
-                       cwd=root, capture_output=True, text=True)
+    # git reads every worktree's admin files during `worktree add` and fails on one that a parallel
+    # add has half written, so parallel inits take turns for this one call
+    with open(Path(_gitpath(root, "--git-common-dir")) / "herd-worktree.lock", "a") as lock:
+        if fcntl:
+            fcntl.flock(lock, fcntl.LOCK_EX)  # released when the file closes
+        p = subprocess.run(["git", "worktree", "add", "-b", f"herd/{slug}", str(tree), "HEAD"],
+                           cwd=root, capture_output=True, text=True)
     if p.returncode:
         raise ValueError(f"git worktree add failed: {p.stderr.strip()[-300:]}")
     path = tree / Path(root).resolve().relative_to(toplevel(root).resolve())  # same subfolder as the project

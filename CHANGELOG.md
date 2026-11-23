@@ -5,6 +5,7 @@ All notable changes to Herd. Versions follow `.claude-plugin/plugin.json`.
 ## 0.3.1
 
 - **Changed:** the adversarial pass (`skills/run/adversarial.md`) always tries four attacks, whatever the request says: bad input at every entry point (missing, malformed, wrong type, unknown id, empty) must end in one clear message and a non-zero exit, never a traceback; collisions (two inputs on the same key or position) must each still count; one broken entry the request does not use must not reject the whole input; and every reported number is recomputed from the output with separate code. A benchmark rerun with 0.3.0 missed all four kinds of bug. A test keeps these attacks in the file.
+- **Fixed:** parallel `herd init --worktree` calls could fail with `failed to read .git/worktrees/.../commondir`, because git reads every worktree's admin files while another add is half done. The `git worktree add` call now takes a file lock in the git directory (Unix; Windows has no `flock`). This made one CI run on main fail.
 
 ## 0.3.0
 

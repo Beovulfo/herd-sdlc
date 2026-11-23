@@ -647,6 +647,14 @@ class TestNarrowedClaims(Base):
         self.assertEqual(herd.problems(self.root, "t1"), [])  # shown to the human, not blocked
         self.assertIn("narrowed by: Calls with arguments are rejected", self.cli("done").stdout)
 
+    def test_empty_or_odd_evidence_gives_no_lines_and_no_error(self):
+        human_any = [{"id": "C1", "source": "human", "text": "works for any layout"}]
+        for ev in ({}, {"results": []}, {"results": human_any, "known_limits": None},
+                   {"results": human_any, "known_limits": ""}, {"results": [{"id": "C1"}], "known_limits": "only x"}):
+            self.assertEqual(herd.narrowed_claims(ev, []), [], ev)
+        self.assertEqual(herd.narrowed_claims({"results": human_any, "known_limits": "Only small maps."}, []),
+                         ["C1 says 'any', narrowed by: Only small maps."])
+
     def test_no_narrowing_lines_without_a_human_any_claim(self):
         text = TASK.replace('"It must return 1 for any call"', '"It must return 1"').replace(
             'known_limits = "Repeated calls are not timed."', 'known_limits = "Only one call is checked."').replace(

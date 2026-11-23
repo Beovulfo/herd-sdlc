@@ -422,9 +422,13 @@ class TestQuantifierWarnings(Base):
         self.assertIn("what varies", out[0])
 
     def test_coverage_that_names_the_variation_is_accepted(self):
-        for cov in ("checked on generated layouts from several families", "random seeds, 100 inputs",
+        for cov in ("checked on generated layouts from several families and random ones", "random seeds, 100 inputs",
                     "property test over arbitrary inputs", "fuzz of many sizes"):
             self.assertEqual(self.warn("Works for any supermarket", cov), [], cov)
+        # 0.4.1: families the agent designs vary the input but share the code's blind spots
+        out = self.warn("Works for any supermarket", "checked on generated layouts from several families")
+        self.assertEqual(len(out), 1)
+        self.assertIn("names no random inputs", out[0])
 
     def test_each_quantifier_word_triggers(self):
         for word in ("any", "every", "whatever", "whichever", "many", "each", "arbitrary"):

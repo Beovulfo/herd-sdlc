@@ -93,6 +93,7 @@ ATTACKS = {"bad-input": "bad input at every entry point ends in a clear message,
            "one-bad-part": "one broken entry the request does not ask for does not reject the whole input, while a broken requested one still fails clearly",
            "recount": "every reported number recomputed from the output with separate code, on the generated and "
                       "collision inputs too"}
+RANDOM = re.compile(r"\b(random\w*|seed(s|ed)?|fuzz\w*|property|hypothesis)\b", re.I)
 UNIVERSAL = re.compile(r"\b(any|every|whatever|whichever|arbitrary)\b", re.I)  # a human claim over all inputs
 NARROWS = re.compile(r"\b(only|first|rejected|rejects?|refused|refuses?|cannot|can't|unsupported|not supported|"
                      r"not handled|assumes?|assumed|ignored|ignores?|limited to|must be)\b", re.I)
@@ -431,6 +432,10 @@ def coverage_warnings(task):
         if q and not VARIES.search(cov):
             out.append(f"{cid}: human criterion says '{q.group(0)}' but its `coverage` does not say what varies "
                        "(generated inputs, seeds, families, sizes)")
+        u = UNIVERSAL.search(str(c.get("text", "")))
+        if u and VARIES.search(cov) and not RANDOM.search(cov):  # shapes the agent designs share the code's blind spots
+            out.append(f"{cid}: human criterion says '{u.group(0)}' but its `coverage` names no random inputs "
+                       "(random, seeded or fuzzed cases the agent did not design)")
         if sc and not SCALED.search(cov):
             out.append(f"{cid}: human criterion says '{sc.group(0)}' but its `coverage` has no scale statement "
                        "(largest size tried, time limit)")

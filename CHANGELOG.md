@@ -8,6 +8,7 @@ Lessons from 12 Haiku runs of the supermarket benchmark (Herd 0.3.1 and 0.4.0), 
 
 - **Added:** a known limit or open note that narrows a human any/every claim (only, first, rejected, assumed, ignored and the like) is listed under Not proven in the report, the final report and the PR, and `herd verify` warns about it. It does not block: the human decides. The check is a word list, so it can miss a limit worded otherwise and flag a harmless one.
 - **Changed:** the `recount` attack also runs on the generated and collision inputs. A Haiku run recounted its own examples and missed a time that was short by one pick when two products shared a cell.
+- **Added:** `herd verify` warns when the `coverage` of a human any/every criterion names no random, seeded or fuzzed inputs. Five of six 0.3.1 Haiku runs tested the any-layout claim only on layout shapes they designed themselves, which shared the code's blind spot.
 - **Changed:** the adversarial pass asks for purely random inputs besides the shapes the agent designs, and the criteria skill says to take each input as the human described it (a product on its shelf), not in a pre-computed form.
 
 ## 0.4.0

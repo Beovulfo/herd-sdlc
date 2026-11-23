@@ -647,6 +647,16 @@ class TestNarrowedClaims(Base):
         self.assertEqual(herd.problems(self.root, "t1"), [])  # shown to the human, not blocked
         self.assertIn("narrowed by: Calls with arguments are rejected", self.cli("done").stdout)
 
+    def test_an_any_claim_without_random_inputs_in_its_coverage_is_warned(self):
+        task = {"criteria": [{"id": "C1", "source": "human", "text": "works whatever its layout",
+                              "coverage": "Proves valid routes on generated aisle, hall and maze layouts"}],
+                "known_limits": "x"}
+        self.assertTrue(any("names no random inputs" in w for w in herd.coverage_warnings(task)))
+        task["criteria"][0]["coverage"] += ", plus 50 random-obstacle stores from fixed seeds"
+        self.assertFalse(any("names no random inputs" in w for w in herd.coverage_warnings(task)))
+        task["criteria"][0].update(source="agent-proposed", coverage="Proves aisle layouts")
+        self.assertFalse(any("random" in w for w in herd.coverage_warnings(task)))  # only the human's claim
+
     def test_empty_or_odd_evidence_gives_no_lines_and_no_error(self):
         human_any = [{"id": "C1", "source": "human", "text": "works for any layout"}]
         for ev in ({}, {"results": []}, {"results": human_any, "known_limits": None},

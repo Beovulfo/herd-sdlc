@@ -6,6 +6,7 @@ Short experiments that answered a question before Herd was built on the answer.
 | --- | --- | --- |
 | [S1](s1-egm-unattended.md) | Can EGM's brainstorm, draft, review and resolve steps run with no human turn? | Yes, with a driver that answers each gate from the PRD. Reviewers ran unattended in every run (10 to 11 reviewer runs per review, none failed). Human input was needed only for scope decisions the reviewers escalated: 2, 1 and 0 answers over three runs. Seven gaps are listed in the spike. |
 | [S2](s2-baseline.md) | What does EGM cost a human today? | Protocol only, not run yet. It will give the baseline for the PRD's touchpoint and human-minute targets. |
+| [S3](s3-codex-live.md) | After `herd setup`, does a live Codex session with a local open model follow Herd, and does the Stop gate fire? | The `AGENTS.md` rules were read; no hook from `hooks.json` ran in `codex exec` 0.139.0, not even a trivial one. Cause unknown. |
 
 ## S1 run logs
 

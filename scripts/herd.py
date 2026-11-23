@@ -884,10 +884,10 @@ def gate(root, hook):
     if n >= MAX_BLOCKS:
         return None
     counter.write_text(str(n + 1))
-    cmd = f"python3 {SELF} verify"
+    cmd = f"python3 {shlex.quote(SELF)} verify"
     reason = (f"Herd task `{slug}` is not done ({n + 1}/{MAX_BLOCKS} stop attempts blocked). "
               + "; ".join(probs) + f". Run `{cmd}` after fixing. If you are stuck, ask the human one question and stop."
-              + f" If the human abandoned the task, run `python3 {SELF} cancel --reason \"...\"`.")
+              + f" If the human abandoned the task, run `python3 {shlex.quote(SELF)} cancel --reason \"...\"`.")
     return {"decision": "block", "reason": reason}
 
 
@@ -940,7 +940,8 @@ def _codex_hooks(path):
         handlers = [h for h in group.get("hooks", []) if not HERD_GATE.search(str(h.get("command", "")) if isinstance(h, dict) else "")]
         if handlers or not group.get("hooks"):
             keep.append(dict(group, hooks=handlers) if "hooks" in group else group)
-    keep.append({"hooks": [{"type": "command", "command": f"python3 {shlex.quote(SELF)} gate", "timeout": 30}]})
+    gate_cmd = f"{shlex.quote(sys.executable)} {shlex.quote(SELF)} gate"  # an interpreter known to be 3.11+
+    keep.append({"hooks": [{"type": "command", "command": gate_cmd, "timeout": 30}]})
     hooks["Stop"] = keep
     data["hooks"] = hooks
     return json.dumps(data, indent=2) + "\n"
@@ -949,6 +950,10 @@ def _codex_hooks(path):
 def _agents_md(path, skills):
     """AGENTS.md text with one Herd block, in place of the first old one; the rest of the file stays as it was."""
     old = _read(path)
+    pairs = len(AGENTS_RE.findall(old))
+    if old.count(AGENTS_START) != pairs or old.count(AGENTS_END) != pairs:  # never guess where a block ends
+        raise ValueError(f"{path}: a Herd block has a start or end marker without its pair; "
+                         f"fix or remove it, then run `herd setup` again")
     block = AGENTS_BLOCK.format(herd=SELF, skills=skills, end=AGENTS_END)
     first = AGENTS_RE.search(old)
     if first:
@@ -964,7 +969,14 @@ def setup(user):
     else:
         top = toplevel(Path.cwd())
         skills, agents, hooks = top / ".agents" / "skills", top / "AGENTS.md", top / ".codex" / "hooks.json"
+    if re.search(r'["$`\\]', str(PLUGIN)):  # the rendered skills quote the path in "..."
+        raise ValueError(f"{PLUGIN}: move Herd to a path without \", $, ` or \\, then run `herd setup` again")
     hooks_text, agents_text = _codex_hooks(hooks), _agents_md(agents, skills)  # read both before writing anything
+    for name in SKILL_NAMES:  # replace only folders Herd wrote, never a user's own skill of the same name
+        own = skills / f"herd-{name}" / "SKILL.md"
+        text = _read(own) if (skills / f"herd-{name}").exists() else ""
+        if (skills / f"herd-{name}").exists() and not (f"name: herd-{name}" in text and "/scripts/herd.py" in text):
+            raise ValueError(f"{own.parent}: not written by `herd setup`; move it, then run `herd setup` again")
     try:
         for name in SKILL_NAMES:
             dest = skills / f"herd-{name}"

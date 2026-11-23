@@ -189,7 +189,13 @@ class TestMerge(Base):
         agents.write_text('top\n<!-- herd:start old -->\npython3 "/old/scripts/herd.py"\n<!-- herd:end -->\nbottom\n')
         hooks.write_text(json.dumps({"hooks": {"Stop": [
             {"hooks": [{"type": "command", "command": "python3 '/old/scripts/herd.py' gate", "timeout": 30}]}]}}))
+        old_skill = self.home / ".agents/skills/herd-run"  # rendered by a Herd copy at the old place
+        old_skill.mkdir(parents=True)
+        (old_skill / "SKILL.md").write_text('---\nname: herd-run\n---\npython3 "/old/scripts/herd.py"\n')
+        (old_skill / "stale.md").write_text("gone after setup")
         self.run_setup("user")
+        self.assertFalse((old_skill / "stale.md").exists())
+        self.assertNotIn("/old/", (old_skill / "SKILL.md").read_text())
         text = agents.read_text()
         self.assertNotIn("/old/", text)
         self.assertTrue(text.startswith("top\n") and text.endswith("bottom\n"), text)
@@ -269,6 +275,27 @@ class TestAttacks(Base):
         self.assertIn("echo mine", cmds)
         self.assertEqual((skills / "run" / "SKILL.md").read_text(), "---\nname: run\ndescription: mine\n---\n")
 
+    def test_unpaired_markers_in_agents_md_are_refused(self):
+        _, agents, _ = self.places("project")
+        for text in ("mine\n<!-- herd:start x -->\nmy text\n",
+                     "mine\n<!-- herd:start x -->\nmy text\n<!-- herd:start y -->\nb\n<!-- herd:end -->\n",
+                     "mine\n<!-- herd:end -->\n"):
+            with self.subTest(text=text):
+                agents.write_text(text)
+                self.assertIn("AGENTS.md", self.refused())
+                self.assertEqual(agents.read_text(), text)
+
+    def test_a_users_own_herd_named_skill_is_not_deleted(self):
+        skills, _, _ = self.places("project")
+        (skills / "herd-run").mkdir(parents=True)
+        (skills / "herd-run" / "SKILL.md").write_text("---\nname: herd-run\ndescription: my own\n---\n")
+        self.assertIn("herd-run", self.refused())
+        self.assertIn("my own", (skills / "herd-run" / "SKILL.md").read_text())
+
+    def test_hook_uses_the_interpreter_that_ran_setup(self):
+        _, _, hooks = self.run_setup("user")
+        self.assertTrue(self.gate_command(hooks).startswith(shlex.quote(sys.executable) + " "))
+
     def test_one_bad_part_elsewhere_in_hooks_json_is_kept(self):
         _, _, hooks = self.places("project")
         hooks.parent.mkdir()
@@ -340,15 +367,24 @@ class TestDocs(unittest.TestCase):
     def test_readme_says_what_works_where(self):
         readme = (REPO / "README.md").read_text()
         section = readme.split("## Other agents", 1)[1].split("\n## ", 1)[0]
-        for word in ("Claude Code", "Codex", "Unsloth", "AGENTS.md", "herd setup", "--user", "/hooks", "Stop gate"):
+        for word in ("Claude Code", "Codex", "Unsloth", "AGENTS.md", "herd setup", "--user", "/hooks", "Stop gate",
+                     "worktree", "docs/spikes/s3-codex-live.md", "unsloth.ai/docs"):
             self.assertIn(word, section, word)
+        rows = {r.split("|")[1].strip(): [c.strip() for c in r.split("|")[2:-1]]
+                for r in section.splitlines() if r.startswith("| ") and not r.startswith("| ---")}
+        # the Stop gate column must not promise more than the code and the live probe show
+        self.assertEqual(rows["Claude Code"][1], "yes")
+        self.assertTrue(rows["Codex CLI"][1].startswith("configured; not yet seen firing live"))
+        self.assertEqual(rows["Other agents that read `AGENTS.md`"][1], "no")
+        self.assertTrue((REPO / "docs/spikes/s3-codex-live.md").exists())
 
     def test_version_agrees(self):
         version = json.loads((REPO / ".claude-plugin/plugin.json").read_text())["version"]
         top = re.search(r"^## (\S+)", (REPO / "CHANGELOG.md").read_text(), re.M).group(1)
         self.assertEqual(top, version)
-        self.assertIn(f"Version {version} ", (REPO / "README.md").read_text())
-        self.assertNotEqual(version, "0.3.2")
+        readme = (REPO / "README.md").read_text()
+        self.assertIn(f"Version {version} ", readme)
+        self.assertIn(f"**Now (v{version.rsplit('.', 1)[0]}):**", readme)
 
 
 if __name__ == "__main__":

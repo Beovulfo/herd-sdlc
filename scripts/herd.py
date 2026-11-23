@@ -73,6 +73,7 @@ VARIES = re.compile(r"\b(vary|varies|varied|varying|variation|generated?|random\
 SCALED = re.compile(r"\b(scales?|sizes?|largest?|big|biggest|huge|time limit|timed|timing|seconds|performance|"
                     r"runtime|latency|up to \d+)\b", re.I)
 NOTE_KINDS = ("found", "fixed", "open", "tried")
+MAX_TEXT_WORDS, MAX_COVERAGE_WORDS = 40, 50  # advisory limits, see length_warnings
 WORKTREES = ".claude/worktrees"  # where `herd init --worktree` puts tasks; Claude Code's EnterWorktree can enter it
 OWN_FILES = (".", ":!.herd")  # pathspec: this checkout's work, not Herd's own state
 # Test runners' own words for an empty run, and for a run that executed tests. Advisory, so the list
@@ -335,6 +336,18 @@ def check_warnings(task, request=None):
     return out
 
 
+def length_warnings(task):
+    """Advisory: long criterion and coverage texts cost tokens on every read and hide the point."""
+    out = []
+    for c in task.get("criteria", []):
+        cid = c.get("id", "?")
+        if len(str(c.get("text", "")).split()) > MAX_TEXT_WORDS and c.get("source") != "human":
+            out.append(f"{cid}: criterion text over {MAX_TEXT_WORDS} words; keep one testable sentence")
+        if len(str(c.get("coverage", "")).split()) > MAX_COVERAGE_WORDS:
+            out.append(f"{cid}: coverage over {MAX_COVERAGE_WORDS} words; name what the check proves and misses, briefly")
+    return out
+
+
 def coverage_warnings(task):
     """Advisory: say what a human criterion's check does not cover, and when the claim may fail."""
     out = []
@@ -548,6 +561,11 @@ def _code(text):
     return f"{t}{pad}{_cell(text)}{pad}{t}"
 
 
+def _clip(text, limit=60):
+    """Long check commands are cut in the table; Reproduce has them in full."""
+    return text if len(text) <= limit else text[:limit - 3].rstrip() + "..."
+
+
 def _stale(root, slug, ev):
     return ev["task_sha"] != _task_sha(root, slug) or ev["fingerprint"] != fingerprint(root)
 
@@ -578,7 +596,8 @@ def pr_body(root, slug):
     passing = proven
     if passing:
         lines += ["| id | source | criterion | proof: the check that passed |", "| --- | --- | --- | --- |"]
-        lines += [f"| {r['id']} | {r['source']} | {_cell(r['text'])} | {_code(r['check'])} exit 0 |" for r in passing]
+        lines += [f"| {r['id']} | {r['source']} | {_cell(r['text'])} | {_code(_clip(r['check']))} exit 0 |"
+                  for r in passing]
     else:
         lines.append("Nothing yet: no criterion has a passing check.")
     gaps = [f"- {r['id']} is failing (exit {r['exit_code']}): {r['text']}" for r in results if r["status"] == "failing"]
@@ -603,18 +622,24 @@ def pr_body(root, slug):
     tried = sum(n["kind"] == "tried" for n in notes)
     if tried:
         details.append(f"Adversarial pass: {tried} attempt{'s' if tried != 1 else ''} recorded")
-    lines += ["", "## Run details", ""] + [f"- {d}" for d in details]
+    # the reviewer's view ends here; the rest is collapsed, nothing is dropped
+    count = {k: sum(n["kind"] == k for n in notes) for k in NOTE_KINDS}
+    lines += ["", "<details><summary>Run details and caveat log "
+              f"({count['tried']} tried, {count['found']} found, {count['fixed']} fixed)</summary>", ""]
+    lines += [f"- {d}" for d in details]
     # ponytail: output tails stay out of the PR (they can hold secrets); the reviewer re-runs the check instead
     if notes:
         shown = notes[:MAX_PR_NOTES]
-        lines += ["", "Caveats logged during the run:"]
+        lines += ["", "Caveats logged during the run:", ""]
         lines += [f"- {fmt_duration(n['elapsed_s']) + ' ' if n.get('elapsed_s') is not None else ''}"
                   f"{n['kind']}: {n['text']}" for n in shown]
         if len(notes) > len(shown):
             lines.append(f"- and {len(notes) - len(shown)} more: run `herd status {slug}`")
+    lines += ["", "</details>"]
     checks = [r["check"] for r in results if r["check"].strip()]
     fence = _ticks("\n".join(checks), least=3)
-    lines += ["", "## Reproduce", "", "Run from the repository root:", "", fence + "bash"] + checks + [fence]
+    lines += ["", "<details><summary>Reproduce: run from the repository root</summary>", "",
+              fence + "bash"] + checks + [fence, "", "</details>"]
     return "\n".join(lines + foot) + "\n"
 
 
@@ -769,13 +794,13 @@ USAGE = {
     "note": 'herd note --found|--fixed|--open|--tried "text"',
     "detect": "herd detect",
     "lint": "herd lint [--suggest]   (without --suggest: the PostToolUse hook, reads hook JSON on stdin)",
-    "verify": "herd verify [slug]",
+    "verify": "herd verify [slug] [--verbose]",
     "status": "herd status [slug]",
-    "done": "herd done [slug]",
+    "done": "herd done [slug] [--verbose]",
     "cancel": 'herd cancel [slug] [--reason "text"]',
     "pr": "herd pr [slug] [--yes]   (push the herd/* branch, open or update its PR with the evidence)",
     "gate": "herd gate   (the Stop hook, reads hook JSON on stdin)",
-    "triage": 'herd triage "<text>"',
+    "triage": 'herd triage "<text>" [--json]',
 }
 
 
@@ -829,7 +854,8 @@ def main(argv):
             errs = validate_task(task)
             print("\n".join(errs) if errs else "ok")
             req_path = _dir(root, slug) / "request.md"
-            for w in check_warnings(task, req_path.read_text() if req_path.exists() else None) + coverage_warnings(task):
+            for w in (check_warnings(task, req_path.read_text() if req_path.exists() else None)
+                      + coverage_warnings(task) + length_warnings(task)):
                 print(f"warning: {w}")
             return 1 if errs else 0
         elif cmd == "note":
@@ -855,12 +881,14 @@ def main(argv):
                 if out:
                     print(json.dumps(out))
         elif cmd == "verify":
-            ev = verify(root, _slug_arg(root, args))
+            verbose = "--verbose" in args
+            ev = verify(root, _slug_arg(root, [a for a in args if a != "--verbose"]))
             s = ev["summary"]
             print(f"{s['passing']} passing, {s['failing']} failing, {s['unchecked']} unchecked")
-            for r in ev["results"]:
+            for r in ev["results"]:  # by default only what needs attention
                 zero = " (ran zero tests)" if r.get("zero_tests") else ""
-                print(f"  {r['id']} {r['status']}{zero}: {r['text']}")
+                if verbose or r["status"] != "passing" or zero:
+                    print(f"  {r['id']} {r['status']}{zero}: {r['text']}")
             return 1 if s["failing"] else 0
         elif cmd == "status":
             slug = _slug_arg(root, args)
@@ -873,16 +901,21 @@ def main(argv):
             probs = problems(root, slug)
             print("not done: " + "; ".join(probs) if probs else "done: evidence is fresh and passing")
         elif cmd == "done":
-            slug = _slug_arg(root, args)
+            verbose = "--verbose" in args
+            slug = _slug_arg(root, [a for a in args if a != "--verbose"])
             probs = problems(root, slug)
             if probs:
                 print("not done: " + "; ".join(probs), file=sys.stderr)
                 return 1
-            text = report(load_evidence(root, slug), load_notes(root, slug))
+            ev = load_evidence(root, slug)
+            text = report(ev, load_notes(root, slug))
             (_dir(root, slug) / "evidence.md").write_text(text)
             (root / ".herd" / "active").unlink(missing_ok=True)
-            print(text)
-            print("done: evidence is fresh and passing")
+            if verbose:
+                print(text)
+            proven = sum(r["status"] == "passing" and not r.get("zero_tests") for r in ev["results"])
+            print(f"done: evidence is fresh and passing ({proven} of {len(ev['results'])} criteria proven)")
+            print(f"report: {(_dir(root, slug) / 'evidence.md').relative_to(root)}")
         elif cmd == "pr":
             slug = _slug_arg(root, [a for a in args if a != "--yes"])
             print(open_pr(root, slug, yes="--yes" in args))
@@ -901,9 +934,15 @@ def main(argv):
             if out:
                 print(json.dumps(out))
         elif cmd == "triage":
+            as_json = "--json" in args
+            text = " ".join(a for a in args if a != "--json")
             toml_path = root / "herd.toml"
-            rec = herd_triage.build_record("task", 0, " ".join(args), {}, toml_path.read_text() if toml_path.exists() else "")
-            print(json.dumps(rec, indent=2))
+            rec = herd_triage.build_record("task", 0, text, {}, toml_path.read_text() if toml_path.exists() else "")
+            risk = rec["risk"]
+            why = ", ".join(risk["floor_rules"]) or "default: no path rule matched"
+            if rec.get("status") == "fallback":  # never hide a broken config behind the default
+                why = f"fallback: {rec.get('cause')}; check herd.toml"
+            print(json.dumps(rec, indent=2) if as_json else f"risk: {risk['effective']} ({why})")
     except UsageError:
         print(f"herd: usage: {USAGE[cmd]}", file=sys.stderr)
         return 1

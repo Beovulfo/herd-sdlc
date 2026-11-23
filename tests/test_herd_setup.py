@@ -194,13 +194,19 @@ class TestMerge(Base):
         (old_skill / "SKILL.md").write_text('---\nname: herd-run\n---\npython3 "/old/scripts/herd.py"\n')
         (old_skill / "stale.md").write_text("gone after setup")
         self.run_setup("user")
-        self.assertFalse((old_skill / "stale.md").exists())
+        self.assertTrue((old_skill / "stale.md").exists())  # not Herd's file name: never deleted
         self.assertNotIn("/old/", (old_skill / "SKILL.md").read_text())
         text = agents.read_text()
         self.assertNotIn("/old/", text)
         self.assertTrue(text.startswith("top\n") and text.endswith("bottom\n"), text)
         self.assertNotIn("/old/", hooks.read_text())
         self.assertIn(str(HERD), self.gate_command(hooks))
+
+    def test_user_files_inside_a_herd_skill_folder_are_kept(self):
+        skills, _, _ = self.run_setup("project")
+        (skills / "herd-run" / "my-notes.txt").write_text("mine")
+        self.run_setup("project")
+        self.assertEqual((skills / "herd-run" / "my-notes.txt").read_text(), "mine")
 
     def test_malformed_hooks_json_is_refused_unchanged(self):
         skills, agents, hooks = self.places("project")
@@ -313,6 +319,68 @@ class TestAttacks(Base):
         self.assertEqual(p.returncode, 0, p.stderr)
 
 
+class TestPrivacy(Base):
+    """Project mode must not put this machine's Herd path into anything a team commits."""
+
+    def status(self):
+        return subprocess.run(["git", "status", "--porcelain", "--untracked-files=all"], cwd=self.project,
+                              capture_output=True, text=True).stdout
+
+    def test_nothing_setup_writes_reaches_a_commit(self):
+        (self.project / "AGENTS.md").write_text("# Team rules\n")  # not committed yet
+        self.run_setup("project")
+        self.assertEqual(self.status(), "")
+        git(self.project, "add", "-A")
+        staged = subprocess.run(["git", "diff", "--cached"], cwd=self.project, capture_output=True, text=True).stdout
+        self.assertNotIn(str(REPO), staged)
+
+    def test_tracked_files_are_refused(self):
+        _, agents, hooks = self.places("project")
+        for path, text in ((agents, "# Team rules\n"), (hooks, '{"hooks": {}}')):
+            with self.subTest(path=path.name):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(text)
+                git(self.project, "add", "-A")
+                git(self.project, "commit", "-q", "-m", f"track {path.name}")
+                p = self.setup_cmd()
+                self.assertEqual(p.returncode, 1, p.stdout)
+                self.assertIn(path.name, p.stderr)
+                self.assertIn("tracked", p.stderr)
+                self.assertIn("--user", p.stderr)
+                self.assertNotIn("Traceback", p.stderr)
+                self.assertEqual(path.read_text(), text)
+                self.assertFalse((self.project / ".agents").exists())
+                git(self.project, "rm", "-q", "--cached", str(path))
+                git(self.project, "commit", "-q", "-m", "untrack")
+                path.unlink()
+
+    def test_user_mode_needs_no_repository(self):
+        p = self.setup_cmd("--user", cwd=self.home)
+        self.assertEqual(p.returncode, 0, p.stderr)
+
+
+class TestRoot(Base):
+    def test_project_in_a_subfolder(self):
+        sub = self.project / "packages" / "app"
+        (sub / "src").mkdir(parents=True)
+        (sub / "herd.toml").write_text("")
+        p = self.setup_cmd(cwd=sub / "src")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        for f in ("AGENTS.md", ".codex/hooks.json", ".agents/skills/herd-run/SKILL.md"):
+            self.assertTrue((sub / f).exists(), f)
+            self.assertFalse((self.project / f).exists(), f)
+        status = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all"], cwd=self.project,
+                                capture_output=True, text=True).stdout
+        self.assertEqual(status.split(), ["??", "packages/app/herd.toml"])
+        herd = f"{shlex.quote(sys.executable)} {shlex.quote(str(HERD))}"
+        check = "python3 -c \"import sys; sys.exit(1)\""
+        self.assertEqual(self.sh(f"{herd} init q 'x' --quick {shlex.quote(check)}", cwd=sub / "src").returncode, 0)
+        self.assertTrue((sub / ".herd/active").exists())
+        self.sh(f"{herd} verify", cwd=sub)
+        out = json.loads(self.stop(sub / ".codex/hooks.json", sub / "src").stdout)
+        self.assertEqual(out["decision"], "block")
+
+
 class TestEndToEnd(Base):
     """A whole Herd task through the rendered instructions only, the way Codex or an open model would run it."""
 
@@ -371,13 +439,13 @@ class TestDocs(unittest.TestCase):
         readme = (REPO / "README.md").read_text()
         section = readme.split("## Other agents", 1)[1].split("\n## ", 1)[0]
         for word in ("Claude Code", "Codex", "Unsloth", "AGENTS.md", "herd setup", "--user", "/hooks", "Stop gate",
-                     "worktree", "docs/spikes/s3-codex-live.md", "unsloth.ai/docs"):
+                     "worktree", "docs/spikes/s3-codex-live.md", "unsloth.ai/docs", "unverified"):
             self.assertIn(word, section, word)
         rows = {r.split("|")[1].strip(): [c.strip() for c in r.split("|")[2:-1]]
                 for r in section.splitlines() if r.startswith("| ") and not r.startswith("| ---")}
         # the Stop gate column must not promise more than the code and the live probe show
         self.assertEqual(rows["Claude Code"][1], "yes")
-        self.assertTrue(rows["Codex CLI"][1].startswith("configured; not yet seen firing live"))
+        self.assertTrue(rows["Codex CLI"][1].startswith("configured, unverified live"))
         self.assertEqual(rows["Other agents that read `AGENTS.md`"][1], "no")
         self.assertTrue((REPO / "docs/spikes/s3-codex-live.md").exists())
 

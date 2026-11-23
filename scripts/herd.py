@@ -965,9 +965,13 @@ def setup(user):
     if user:
         codex = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
         skills, agents, hooks = Path.home() / ".agents" / "skills", codex / "AGENTS.md", codex / "hooks.json"
-    else:
-        top = toplevel(Path.cwd())
-        skills, agents, hooks = top / ".agents" / "skills", top / "AGENTS.md", top / ".codex" / "hooks.json"
+    else:  # the folder Herd's tasks and Stop gate use, also in a monorepo package with its own herd.toml
+        root = find_root(Path.cwd())
+        skills, agents, hooks = root / ".agents" / "skills", root / "AGENTS.md", root / ".codex" / "hooks.json"
+        for f in (agents, hooks):  # these hold this machine's path to Herd: never in a commit
+            if _git(root, "ls-files", "--", str(f)).strip():
+                raise ValueError(f"{f}: tracked by git, so Herd's entry would put this machine's path to Herd "
+                                 "in a commit; use `herd setup --user`, or untrack the file")
     if re.search(r'["$`\\]', str(PLUGIN)):  # the rendered skills quote the path in "..."
         raise ValueError(f"{PLUGIN}: move Herd to a path without \", $, ` or \\, then run `herd setup` again")
     hooks_text, agents_text = _codex_hooks(hooks), _agents_md(agents, skills)  # read both before writing anything
@@ -981,8 +985,7 @@ def setup(user):
     try:
         for name in SKILL_NAMES:
             dest = skills / f"herd-{name}"
-            shutil.rmtree(dest, ignore_errors=True)  # only Herd's own folders: no stale reference files
-            dest.mkdir(parents=True)
+            dest.mkdir(parents=True, exist_ok=True)  # only Herd's own files are rewritten; others stay
             for f in sorted((PLUGIN / "skills" / name).glob("*.md")):
                 (dest / f.name).write_text(render_skill(f.read_text(), name if f.name == "SKILL.md" else None))
         for path, text in ((agents, agents_text), (hooks, hooks_text)):
@@ -990,8 +993,11 @@ def setup(user):
             path.write_text(text)
     except OSError as e:
         raise ValueError(f"cannot write {e.filename}: {e.strerror}; fix it, then run `herd setup` again") from None
-    if not user and _git(top, "rev-parse", "--git-dir").strip():
-        _ignore_locally(top, ["/.agents/skills/herd-*/"])
+    top = None if user else toplevel(root)
+    if top and _git(top, "rev-parse", "--git-dir").strip():
+        rel = root.resolve().relative_to(top.resolve()).as_posix()
+        pre = "/" if rel == "." else f"/{rel}/"
+        _ignore_locally(top, [f"{pre}.agents/skills/herd-*/", f"{pre}AGENTS.md", f"{pre}.codex/hooks.json"])
     return skills, agents, hooks
 
 
@@ -1209,7 +1215,7 @@ def main(argv):
             print(f"rules: {agents} (the Herd block; agents without a Stop hook rely on it)")
             print(f"Stop gate: {hooks}; trust it once in Codex with /hooks")
             if not args:
-                print("these files name this Herd copy by absolute path: keep them out of shared commits")
+                print("they name this Herd copy by absolute path, so they are in .git/info/exclude, never committed")
     except UsageError:
         print(f"herd: usage: {USAGE[cmd]}", file=sys.stderr)
         return 1

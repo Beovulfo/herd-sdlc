@@ -10,6 +10,7 @@ All notable changes to Herd. Versions follow `.claude-plugin/plugin.json`.
 - **Added:** `--worktree` adds `/.claude/worktrees/` and `.herd/` to the repository's own `.git/info/exclude` (never committed), so the main checkout's `git status` stays clean, a `git add -A` cannot pick up another agent's worktree, and `git worktree remove` works.
 - **Fixed:** the Stop gate and the CLI find the task from any subdirectory: the root is the nearest folder with `.herd/` or `herd.toml`, so a project in a subfolder of a repository keeps its own tasks.
 - **Changed:** the run skill's intake step covers the worktree start; the README and `herd.toml` describe it.
+- **Docs:** the README is brought up to date for 0.2.7 to 0.2.9: why-use-it points, a Quickstart example asking for a worktree and a PR, a "Several tasks at once" section, `herd pr` in both diagrams and an example PR description, a table of the `herd.toml` settings, the push and merge rule, and the status and roadmap.
 
 ## 0.2.8
 

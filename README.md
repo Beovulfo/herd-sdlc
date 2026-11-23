@@ -18,6 +18,7 @@
   <a href="#quickstart">Quickstart</a> &middot;
   <a href="#how-it-works">How it works</a> &middot;
   <a href="#architecture">Architecture</a> &middot;
+  <a href="#several-tasks-at-once">Parallel tasks</a> &middot;
   <a href="#see-it-work">See it work</a> &middot;
   <a href="#benchmark-with-and-without-herd">Benchmark</a> &middot;
   <a href="#commands-and-skills">Commands</a> &middot;
@@ -42,6 +43,9 @@ You review evidence (command output, commit SHA, timestamps), not process.
 - **Done means proven.** A Stop hook blocks the agent from finishing until every check passes, with evidence newer than the last edit.
 - **Your words stay yours.** Criteria you write are quoted verbatim and never weakened. Gaps are filled by the agent and marked `agent-proposed`.
 - **Caveats surface early.** The agent must say what each check does not prove, try to break its own work, and log what it finds, so problems appear during the run, not after it.
+- **Checks that test nothing are caught.** A check that exits 0 but ran zero tests is flagged instead of counted as proof.
+- **The pull request is the evidence (opt-in).** `herd pr` opens a PR whose description shows what is proven and by which check, what is not, and how to reproduce it. It never merges.
+- **Several tasks at once (opt-in).** `herd init --worktree` gives each task its own branch and git worktree, so several agents can work in one repository without touching each other.
 - **Light.** A small Python CLI on the standard library, no dependencies, plain-text task files. It reuses [Superpowers](https://github.com/obra/superpowers) and [EGM](https://github.com/google/elephant-goldfish-model) when they are installed.
 
 ## Quickstart
@@ -76,11 +80,19 @@ Then, inside your project, in a new session:
 
 Herd creates the task, writes criteria with checks and shows them to you, runs them once to see them fail, builds on a `herd/<slug>` branch, tries to break the result, gets a fresh-context review, verifies, and ends with an evidence report. High-risk changes get one approval question before building. For a trivial change, say "quick fix": one check, no ceremony. To plan with Herd how to prove a change for your project type, run `/herd:evidence`.
 
+Two options are off by default; ask for them in the request, or switch them on in `herd.toml` ([settings](#project-settings-herdtoml)):
+
+```text
+/herd:run In its own worktree, add a --json flag to the export command. Open a PR when done.
+```
+
+The task then runs on a new branch in its own worktree, cut from the branch you are on, and ends with a pull request whose description is the evidence.
+
 ## How it works
 
 ```mermaid
 flowchart LR
-    A[Goal] --> B[Intake and risk floor]
+    A[Goal] --> B[Intake and risk floor<br/>opt-in: own worktree]
     B -->|standard| C[Criteria with checks]
     B -->|trivial: quick route| Q[One criterion, one check]
     C --> D[Build: plan, tests first, code]
@@ -91,15 +103,32 @@ flowchart LR
     F -->|failing| D
     F -->|passing| G[herd done<br/>evidence report]
     G -.->|Stop hook| F
+    G -->|opt-in| P[herd pr<br/>PR with the evidence]
 ```
 
-1. **Intake.** The task gets a folder, `.herd/tasks/<slug>/task.toml`, and a risk floor computed from path rules in `herd.toml` (migrations, auth, billing, and so on). The agent can raise the risk, never lower it. A trivial change takes the **quick route**: one criterion and one check, no criteria interview, no approval question, no review. It is refused at a `high` risk floor and still ends in fresh passing evidence. With `--worktree` (opt-in, or required by `[worktree] required = true` in `herd.toml`) the task starts on a new `herd/<slug>` branch in its own git worktree, cut from the branch you are on, with its own task state, so several agents can run Herd tasks in one repository without touching each other. The agent moves its session into that worktree (Claude Code's EnterWorktree); `herd` commands run from the starting checkout refuse and name the worktree. Herd adds `/.claude/worktrees/` and `.herd/` to the repository's own `.git/info/exclude` (never committed), so other agents' worktrees never show up in `git status` or a `git add -A`. After the merge, `git worktree remove .claude/worktrees/herd-<slug>` deletes it.
+1. **Intake.** The task gets a folder, `.herd/tasks/<slug>/task.toml`, and a risk floor computed from path rules in `herd.toml` (migrations, auth, billing, and so on). The agent can raise the risk, never lower it. A trivial change takes the **quick route**: one criterion and one check, no criteria interview, no approval question, no review. It is refused at a `high` risk floor and still ends in fresh passing evidence. With `--worktree` (opt-in) the task starts on its own branch in its own git worktree: see [Several tasks at once](#several-tasks-at-once).
 2. **Criteria.** Every criterion has a `check`: a shell command where exit 0 means pass. Criteria you write are authoritative: the agent quotes your words, adds a `coverage` note saying what the check proves and what it does not, and the report flags any `human` criterion that is not a verbatim quote. A criterion with no check is `unchecked` and is never counted as met. `herd detect` proposes the project's real test command.
 3. **Build.** Tests first, small steps, on a branch. Superpowers is used for planning, TDD and subagents when installed.
 4. **Break it, then review.** The agent tries to break its own work on exactly what the request promises: the words `any`, `every`, `very big` become generated cases of different shapes and a scale run. Each attempt, failure and fix is logged with `herd note`. For medium and high risk, a fresh-context reviewer then looks at the diff.
 5. **Verify.** `herd verify` runs every check and stores evidence: status, exit code, output tail, commit SHA, a fingerprint of the workspace, a timestamp, how many checks failed on the first run (a check that was green before any work is visible), and the wall-clock time since `herd init`. A check that exits 0 but whose output says it ran zero tests (`Ran 0 tests`, `no tests ran`, `[no test files]` and the like) is marked in the evidence and the report warns about it. The warning is advisory: the Stop gate does not change.
 6. **Stop gate.** While a task is active, a Stop hook refuses to let the agent finish unless the evidence is fresh and passing. Edit a file after verifying and the evidence is stale. After 3 blocked attempts the gate lets the agent stop so it can ask you one question instead of looping. To drop a task, `herd cancel` closes it and keeps its files as a record.
 7. **Pull request (opt-in).** When the request asks for a PR, or `herd.toml` has `[pr] open = true`, `herd pr` pushes the task's `herd/<slug>` branch and opens a pull request whose description is the evidence: the result, what is proven and by which check, what is not proven (failing or unchecked criteria, coverage gaps, known limits, open caveats), the run details and the commands to reproduce. A second `herd pr` refreshes the description. It needs a clean working tree, so the PR holds exactly the verified code. It leaves check output out of the description (it can hold secrets) but publishes the check commands, the criteria and the notes as written, so never put a secret in them. It pushes no other branch and never merges: you review the evidence and merge.
+
+### Several tasks at once
+
+Herd keeps a task's state in the checkout it runs in, so two agents in one checkout would share it. To run several tasks in one repository, start each in its own worktree:
+
+```text
+$ herd init export-json "Add a --json flag to the export command" --worktree
+created worktree <repo>/.claude/worktrees/herd-export-json on branch herd/export-json, cut from feature/reports. Work from there: in Claude Code, EnterWorktree with that path; otherwise cd into it. Run every herd command from it.
+```
+
+- **Its own branch, cut from where you are.** `herd/<slug>` starts at the current local branch, which is recorded as the task's base; `herd pr` opens the pull request against it.
+- **Its own state.** The task's files and Stop gate live in the worktree. Other agents can start other tasks from the same branch at the same time; each gate sees only its own task, and a duplicate task name fails without touching the first.
+- **A forgotten move fails loudly.** `herd` commands run from the starting checkout for a task that lives in a worktree refuse and name the worktree.
+- **Clean main checkout.** Herd adds `/.claude/worktrees/` and `.herd/` to the repository's own `.git/info/exclude` (never committed), so other tasks never show up in `git status` or a `git add -A`.
+- **Make it the rule.** With `[worktree] required = true` in `herd.toml`, a plain `herd init` refuses outside a matching worktree.
+- **Clean up after the merge** with `git worktree remove .claude/worktrees/herd-<slug>`. Uncommitted changes in the starting checkout are not carried over; Herd warns when there are some.
 
 ## Architecture
 
@@ -112,6 +141,7 @@ flowchart LR
     CLI["herd CLI<br/>scripts/herd.py"]
     T["herd_triage<br/>risk floor"]
     D["herd_detect<br/>test command"]
+    G["git and gh<br/>worktrees, herd pr"]
     subgraph State[".herd/tasks/&lt;slug&gt;/"]
         TT["task.toml<br/>goal, criteria, checks"]
         EV["evidence.json<br/>results, SHA, fingerprint"]
@@ -121,14 +151,16 @@ flowchart LR
     H -->|gate, lint| CLI
     CLI --> T
     CLI --> D
+    CLI -->|opt-in| G
     CLI -->|reads| TT
     CLI -->|runs checks, writes| EV
     CLI -->|appends| NO
 ```
 
 - **The skills are the method; the CLI is the referee.** The skills tell the agent what to do in each step. The CLI only records and checks: it runs the commands in `task.toml` and decides from their exit codes, never from what the agent says.
-- **The Stop hook enforces it.** It asks the CLI whether the stored evidence is passing and still matches the workspace: a SHA-1 over `HEAD`, the diff and untracked files, plus a hash of `task.toml`. Any edit after `herd verify` makes the evidence stale.
-- **State is plain files** in the project, one folder per task, so a human can read, diff or delete it.
+- **The Stop hook enforces it.** It asks the CLI whether the stored evidence is passing and still matches the workspace: a SHA-1 over `HEAD`, the diff and untracked files, plus a hash of `task.toml`. Any edit after `herd verify` makes the evidence stale. The hook finds the task from any subdirectory: the root is the nearest folder with `.herd/` or `herd.toml`, so a project in a subfolder of a repository keeps its own tasks.
+- **State is plain files** in the project, one folder per task (in the task's own worktree when it has one), so a human can read, diff or delete it.
+- **GitHub only when you opt in.** `herd pr` uses the `gh` CLI to push the task's branch and open its pull request. Nothing else talks to a service.
 - **Two modules are not wired in yet.** `herd_arbiter.py` (rules on review findings) and `herd_escalation.py` (one GitHub issue to pause and ask a human) are tested building blocks for the GitHub automation on the roadmap.
 
 ## See it work
@@ -172,6 +204,27 @@ Adversarial pass: 2 attempts recorded
 | C1 | passing | human | `python3 -m unittest test_textutil.TestSlugify.test_basic` |
 | C2 | passing | agent-proposed | `python3 -m unittest test_textutil.TestSlugify.test_empty` |
 done: evidence is fresh and passing
+```
+
+With `herd pr`, the same evidence becomes the pull request description (abridged):
+
+```markdown
+# Evidence: slugify
+
+**Result:** 2 of 2 criteria proven by a passing check (0 failing, 0 unchecked).
+
+The evidence is fresh: the checks ran at 2026-11-23T10:02:11Z on commit `4cd7bd83130f`.
+
+## What is proven
+| id | source | criterion | proof: the check that passed |
+| C1 | human | Given 'Hello, World!', when slugify runs, then it returns 'hello-world' | `python3 -m unittest test_textutil.TestSlugify.test_basic` exit 0 |
+
+## What is not proven
+- C1, what its check proves and does not: proves the basic case and punctuation; does not prove accents or very long input
+- Known limits: ASCII text only; non-Latin scripts are not handled
+
+## Run details
+## Reproduce
 ```
 
 If the agent tries to finish while a check is failing, the Stop hook answers instead:
@@ -244,6 +297,17 @@ python3 examples/supermarket-route/verifier/verify_general.py with_herd examples
 
 `herd` is `python3 scripts/herd.py`. Inside the plugin it is `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/herd.py"`.
 
+### Project settings (`herd.toml`)
+
+All optional. Without a `herd.toml`, Herd uses the defaults below. This repository's [`herd.toml`](herd.toml) is an annotated example.
+
+| Table | Default | What it does |
+| --- | --- | --- |
+| `[floor]` | `migrations/**`, `auth/**`, `billing/**` and `herd.toml` are high | Path rules for the risk floor; a high floor means one approval question and no quick route |
+| `[worktree] required = true` | off | Every task must start in its own worktree (`herd init --worktree`) |
+| `[pr] open = true` | off | `herd pr` may push the task branch and open its pull request without `--yes` |
+| `[lint]` | off | Per-file lint after each edit, see below |
+
 **Lint feedback after each edit (opt-in).** Add a `[lint]` table to your project's `herd.toml`:
 
 ```toml
@@ -262,10 +326,11 @@ While a Herd task is active, each `Edit` or `Write` runs the command on that fil
 - **Ask rarely, ask once.** The agent stops for an irreversible action, a real trade-off, or when stuck after 3 review rounds or 3 failed attempts on a criterion. It asks one question with numbered options.
 - **Decisions are reported** in at most three lines: decision, reason, how to override.
 - **Checks run as shell commands** from `task.toml`, in your repository, with your permissions. Treat a task file like code: read it, especially in a repository you do not trust.
+- **Push only its own branch, never merge.** `herd pr` pushes only the task's `herd/<slug>` branch from a clean working tree and opens or updates its pull request. The merge is yours.
 
 ## Status
 
-Version 0.2.8 (see the [changelog](CHANGELOG.md)). Working and covered by 212 unit tests on Python 3.11 to 3.13: the evidence harness (`scripts/herd.py`), the Stop gate, the quick route, project-type detection, the lint hook, the caveat log, zero-test flagging, the opt-in `herd pr` step, and the risk-floor module. Benchmarked on one task with Sonnet (above). Not yet done: many live runs through the installed plugin across different project types, and issue-to-pull-request automation on GitHub (labelled issue to reviewed spec), which is still design work. `herd pr` covers only the last step: a finished local task opens a pull request with its evidence.
+Version 0.2.9 (see the [changelog](CHANGELOG.md)). Working and covered by 226 unit tests on Python 3.11 to 3.13: the evidence harness (`scripts/herd.py`), the Stop gate, the quick route, project-type detection, the lint hook, the caveat log, zero-test flagging, the opt-in `herd pr` step, the opt-in worktree start for parallel tasks, and the risk-floor module. Releases 0.2.7 to 0.2.9 were each built with Herd itself; 0.2.8 and 0.2.9 were opened as pull requests by `herd pr`. Benchmarked on one task with Sonnet (above). Not yet done: many live runs through the installed plugin across different project types, and issue-to-pull-request automation on GitHub (labelled issue to reviewed spec), which is still design work. `herd pr` covers only the last step: a finished local task opens a pull request with its evidence.
 
 ## The design behind it
 
@@ -278,7 +343,7 @@ Herd is built with its own method, using the [Elephant-Goldfish Model](https://g
 
 ## Roadmap
 
-- **Now (v0.2):** local autopilot with evidence, the Stop gate, a quick route, project-type detection, an opt-in lint hook, an adversarial pass, the evidence-planning skill, zero-test flagging and an opt-in, evidence-first pull request step (`herd pr`).
+- **Now (v0.2):** local autopilot with evidence, the Stop gate, a quick route, project-type detection, an opt-in lint hook, an adversarial pass, the evidence-planning skill, zero-test flagging, an opt-in, evidence-first pull request step (`herd pr`) and an opt-in worktree start so several agents can run tasks in one repository.
 - **Next:** GitHub automation: a labelled issue becomes a reviewed spec, then a pull request, with the Arbiter and Escalation modules.
 - **Later:** a release gate for high-risk changes, and other agent harnesses.
 

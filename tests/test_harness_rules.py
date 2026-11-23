@@ -100,6 +100,30 @@ class TestRedFirst(Base):
         self.assertEqual(herd.verify(self.root, "t1")["red"]["code_before"], [])
 
 
+class TestOwnStateFiles(Base):
+    def test_corrupt_or_old_state_files_never_stop_verify(self):
+        self.start()
+        self.red_then_build()
+        d = self.root / ".herd/tasks/t1"
+        (d / "red.json").write_text("{bad")
+        self.assertEqual(self.cli("verify").returncode, 0)  # a corrupt red.json counts as no first run on record
+        for name in ("fails.json", "start.json"):
+            (d / name).write_text("{bad")
+        (d / "red.json").write_text(json.dumps({"at": "2026-11-23T10:00:00Z", "failed": 2, "total": 2}))  # 0.3.x shape
+        p = self.cli("verify")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        ev = json.loads((d / "evidence.json").read_text())
+        self.assertIsNone(ev["red"]["code_before"])
+        self.assertEqual(ev["risk"]["effective"], "medium")
+        self.assertEqual(ev["human_changed"], [])
+
+    def test_a_broken_herd_toml_makes_the_risk_high(self):
+        self.start()
+        self.red_then_build()
+        (self.root / "herd.toml").write_text('floor = "oops')
+        self.assertEqual(herd.verify(self.root, "t1")["risk"]["effective"], "high")
+
+
 class TestRiskAndReview(Base):
     def test_risk_is_stored_at_init_and_raised_by_changed_files(self):
         self.start()
@@ -136,6 +160,16 @@ class TestRiskAndReview(Base):
         ev = herd.verify(self.root, "t1")
         self.assertEqual(herd.problems(self.root, "t1"), [])
         self.assertIn("Review: a fresh subagent: no Blocker or Major", herd.report(ev))
+
+    def test_the_latest_of_several_reviews_is_the_one_reported(self):
+        self.start()
+        self.red_then_build()
+        herd.add_review(self.root, "t1", skipped=True, text="no reviewer yet")
+        herd.add_review(self.root, "t1", by="a fresh subagent", text="one Major, fixed")
+        self.assertIn("Review: a fresh subagent: one Major, fixed", herd.report(herd.verify(self.root, "t1")))
+        self.assertNotIn("unreviewed", herd.pr_body(self.root, "t1"))
+        herd.add_review(self.root, "t1", skipped=True, text="the reviewer crashed on the second round")
+        self.assertIn("unreviewed: the reviewer crashed", herd.pr_body(self.root, "t1"))
 
     def test_quick_route_needs_no_review(self):
         herd.init_task(self.root, "q1", "Fix typo", quick_check=APP_CHECK)
@@ -199,6 +233,24 @@ class TestFinalReport(Base):
         self.assertIn("Review: a fresh subagent: no Blocker or Major", out)
         self.assertIn("Not proven: nothing open", out)
         self.assertIn(".herd/tasks/t1/evidence.md", out)
+
+
+    def test_final_report_numbers_match_an_independent_recount(self):
+        self.start(TASK + '\n[[criteria]]\nid = "C3"\ntext = "Looks right"\nsource = "agent-proposed"\ncheck = ""\n')
+        self.red_then_build()
+        for i in range(3):
+            herd.add_note(self.root, "t1", "found", f"finding {i}")
+        herd.add_note(self.root, "t1", "fixed", "fix 0")
+        self.attacks_and_review()
+        herd.verify(self.root, "t1")
+        ev = json.loads((self.root / ".herd/tasks/t1/evidence.json").read_text())
+        notes = [json.loads(x) for x in (self.root / ".herd/tasks/t1/notes.jsonl").read_text().splitlines()]
+        lines = herd.final_report(self.root, "t1", ev, notes)
+        proven = sum(r["status"] == "passing" and not r.get("zero_tests") for r in ev["results"])  # recount by hand
+        self.assertEqual(lines[1].split(";")[0], f"Proven: {proven} of {len(ev['results'])} criteria")
+        self.assertEqual(lines[3].count("found"), sum(n["kind"] == "found" for n in notes))
+        self.assertEqual(lines[3].count("fixed"), sum(n["kind"] == "fixed" for n in notes))
+        self.assertIn("C3 unchecked", lines[2])
 
 
 class TestWarningsAndEscalation(Base):

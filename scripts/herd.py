@@ -443,6 +443,15 @@ def _task_sha(root, slug):
     return hashlib.sha1((_dir(root, slug) / "task.toml").read_bytes()).hexdigest()
 
 
+def _state(path, default):
+    """One of Herd's own small JSON state files; a missing or corrupt one counts as `default`, never an error."""
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return default
+    return data if isinstance(data, type(default)) else default
+
+
 def is_code(path):
     """A changed path that counts as code for red first: not Herd's own state, not docs, not tests."""
     parts = Path(path).parts
@@ -526,7 +535,7 @@ def verify(root, slug):
     head = _git(root, "rev-parse", "HEAD").decode().strip() or "none"
     dirty = bool(_git(root, "status", "--porcelain", "--", *OWN_FILES).strip())
     d = _dir(root, slug)
-    start = json.loads((d / "start.json").read_text()) if (d / "start.json").exists() else {}
+    start = _state(d / "start.json", {})  # missing or corrupt: red first and the stored risk are unknown
     changed = changed_since(root, start.get("head"))
     red_path = d / "red.json"
     checked = [r for r in results if r["status"] != "unchecked"]
@@ -536,7 +545,7 @@ def verify(root, slug):
             "code_before": None if changed is None else [f for f in changed if is_code(f)],
             "criteria": {c["id"]: {"text": c["text"], "source": c["source"], "check": c["check"]}
                          for c in task["criteria"]}}))
-    red = json.loads(red_path.read_text()) if red_path.exists() else None
+    red = _state(red_path, {}) or None  # a corrupt red.json counts as no first run on record
     frozen = (red or {}).get("criteria") or {}
     now_by_id = {c["id"]: c for c in task["criteria"]}
     human_changed = [(cid, "removed" if cid not in now_by_id else "changed") for cid, c in frozen.items()
@@ -549,7 +558,7 @@ def verify(root, slug):
     human_not_verbatim = human_unquoted(task, request_text)
     warnings = check_warnings(task, request_text) + coverage_warnings(task) + length_warnings(task)
     fails_path = d / "fails.json"  # consecutive failing verifies per criterion, for the escalation rule
-    fails = json.loads(fails_path.read_text()) if fails_path.exists() else {}
+    fails = _state(fails_path, {})
     fails = {r["id"]: fails.get(r["id"], 0) + 1 if r["status"] == "failing" else 0 for r in results}
     fails_path.write_text(json.dumps(fails))
     timing, started_path = None, _dir(root, slug) / "started"

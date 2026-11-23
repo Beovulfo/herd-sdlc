@@ -1027,6 +1027,68 @@ class TestSimplifiedAdversarial(Base):
         self.assertNotIn("instead of probing again", self.adv)
 
 
+class TestTaskBranch(Base):
+    """A plain `herd init` puts the work on its own branch herd/<slug>, cut from the current one."""
+
+    def cli(self, *args, cwd=None):
+        return subprocess.run([sys.executable, str(Path(herd.__file__)), *args], cwd=cwd or self.root,
+                              capture_output=True, text=True)
+
+    def branch(self, root=None):
+        return subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=root or self.root,
+                              capture_output=True, text=True).stdout.strip()
+
+    def test_init_switches_to_a_new_branch_and_records_the_base(self):
+        start = self.branch()
+        (self.root / "README.md").write_text("edited, not committed")
+        p = self.cli("init", "t1", "g")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.branch(), "herd/t1")
+        self.assertIn(f"cut from {start}", p.stdout)
+        self.assertEqual((self.root / ".herd/tasks/t1/base").read_text().strip(), start)  # herd pr targets it
+        self.assertEqual((self.root / "README.md").read_text(), "edited, not committed")  # nothing lost
+
+    def test_already_on_the_task_branch_stays_there(self):
+        git(self.root, "switch", "-q", "-c", "herd/t1")
+        p = self.cli("init", "t1", "g")
+        self.assertEqual((p.returncode, self.branch()), (0, "herd/t1"))
+        self.assertNotIn("switched", p.stdout)
+        self.assertFalse((self.root / ".herd/tasks/t1/base").exists())
+
+    def test_existing_branch_or_detached_head_warns_and_keeps_the_task(self):
+        git(self.root, "branch", "herd/t1")
+        p = self.cli("init", "t1", "g")
+        self.assertEqual(p.returncode, 0)
+        self.assertIn("could not create branch herd/t1", p.stderr)
+        self.assertTrue((self.root / ".herd/tasks/t1/task.toml").exists())
+        herd.cancel_task(self.root, "t1")
+        git(self.root, "switch", "-q", "--detach")
+        p = self.cli("init", "t2", "g")
+        self.assertEqual(p.returncode, 0)
+        self.assertIn("detached", p.stderr)
+
+    def test_no_commit_yet_or_no_git_warns_or_does_nothing(self):
+        fresh = Path(tempfile.mkdtemp())
+        try:
+            p = self.cli("init", "t1", "g", cwd=fresh)  # not a git repository
+            self.assertEqual((p.returncode, p.stderr), (0, ""))
+            git(fresh, "init", "-q")
+            herd.cancel_task(fresh, "t1")
+            p = self.cli("init", "t2", "g", cwd=fresh)  # no commit yet
+            self.assertEqual(p.returncode, 0)
+            self.assertIn("no commit yet", p.stderr)
+        finally:
+            shutil.rmtree(fresh, ignore_errors=True)
+
+    def test_a_refused_init_does_not_switch(self):
+        start = self.branch()
+        self.cli("init", "t1", "g")
+        git(self.root, "switch", "-q", start)
+        p = self.cli("init", "t2", "g")  # t1 still active
+        self.assertEqual(p.returncode, 1)
+        self.assertEqual(self.branch(), start)
+
+
 class TestOneActiveTask(Base):
     def test_second_init_in_one_checkout_is_refused_until_the_first_ends(self):
         herd.init_task(self.root, "t1", "g")

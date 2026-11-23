@@ -222,6 +222,23 @@ def _ignore_locally(root, patterns):
             fh.write("".join(f"{p}\n" for p in missing))
 
 
+def task_branch(root, slug):
+    """Put a plain init's work on its own branch herd/<slug>, cut from the current one (uncommitted changes
+    come along). Returns (base branch or None, warning or None); outside git it does nothing."""
+    if not _git(root, "rev-parse", "--git-dir"):
+        return None, None
+    base = _branch(root)
+    if base == f"herd/{slug}":
+        return None, None
+    if base in ("", "HEAD"):
+        return None, f"HEAD is detached or the repository has no commit yet: create branch herd/{slug} yourself"
+    p = subprocess.run(["git", "switch", "-c", f"herd/{slug}"], cwd=root, capture_output=True, text=True)
+    if p.returncode:
+        return None, f"could not create branch herd/{slug}: {p.stderr.strip()[-200:]}"
+    (_dir(root, slug) / "base").write_text(base + "\n")  # `herd pr` targets it
+    return base, None
+
+
 def worktree_required(root):
     try:
         cfg = tomllib.loads((Path(root) / "herd.toml").read_text()).get("worktree")
@@ -886,6 +903,11 @@ def main(argv):
                 return 0
             check_worktree_rule(root, args[0])
             init_task(root, args[0], args[1], quick_check=quick, request=request)
+            base, warn = task_branch(root, args[0])
+            if base:
+                print(f"switched to new branch herd/{args[0]}, cut from {base}")
+            if warn:
+                print(f"warning: {warn}", file=sys.stderr)
             if quick is None:
                 print(f"created .herd/tasks/{args[0]}/task.toml (commented template): add criteria with checks, then run `herd check`")
             else:

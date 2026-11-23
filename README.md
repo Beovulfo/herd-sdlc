@@ -124,7 +124,7 @@ $ herd init export-json "Add a --json flag to the export command" --worktree
 created worktree <repo>/.claude/worktrees/herd-export-json on branch herd/export-json, cut from feature/reports. Work from there: in Claude Code, EnterWorktree with that path; otherwise cd into it. Run every herd command from it.
 ```
 
-- **Its own branch, cut from where you are.** `herd/<slug>` starts at the current local branch, which is recorded as the task's base; `herd pr` opens the pull request against it.
+- **Its own branch, cut from where you are.** `herd/<slug>` starts at the current local branch, which is recorded as the task's base; `herd pr` opens the pull request against it. A plain `herd init` does the same in the current checkout, without a new folder.
 - **Its own state.** The task's files and Stop gate live in the worktree. Other agents can start other tasks from the same branch at the same time; each gate sees only its own task, and a duplicate task name fails without touching the first.
 - **A forgotten move fails loudly.** `herd` commands run from the starting checkout for a task that lives in a worktree refuse and name the worktree.
 - **Clean main checkout.** Herd adds `/.claude/worktrees/` and `.herd/` to the repository's own `.git/info/exclude` (never committed), so other tasks never show up in `git status` or a `git add -A`.
@@ -299,7 +299,7 @@ python3 examples/supermarket-route/verifier/verify_general.py with_herd examples
 | `/herd:run <task>` | The autopilot: intake, criteria, build, break it, review, verify, evidence |
 | `/herd:criteria` | Write success criteria with runnable checks |
 | `/herd:evidence` | Interactive: decide with you how to prove the change works for your project type |
-| `herd init <slug> "<goal>" --request "<message>"` | Create a task and make it active. `--request` stores the human's message verbatim so `herd check` can flag human criteria that are not quotes |
+| `herd init <slug> "<goal>" --request "<message>"` | Create a task, make it active, and switch to a new `herd/<slug>` branch cut from the current one (uncommitted changes come along; it warns instead on a detached HEAD or a repository with no commit). `--request` stores the human's message verbatim so `herd check` can flag human criteria that are not quotes |
 | `herd init <slug> "<goal>" --quick "<check>"` | Quick route for a trivial change: one criterion, one check. Refused at a `high` risk floor |
 | `herd init <slug> "<goal>" --worktree` | Opt-in: start the task on a new `herd/<slug>` branch in its own worktree at `.claude/worktrees/herd-<slug>`, cut from the current local branch, so several agents can run tasks in one repository. `[worktree] required = true` in `herd.toml` makes it mandatory |
 | `herd check` | Validate `task.toml`; warns about criterion texts over 40 words, coverage notes over 50 words, checks that do not run project code, human criteria that are not quotes, missing `coverage` or `known_limits`, and quantifier or size words (`any`, `every`, `very big`) whose `coverage` does not say what varies or what scale was tried |
@@ -350,7 +350,7 @@ While a Herd task is active, each `Edit` or `Write` runs the command on that fil
 
 ## Status
 
-Version 0.3.1 (see the [changelog](CHANGELOG.md)). Working and covered by 249 unit tests on Python 3.11 to 3.13: the evidence harness (`scripts/herd.py`), the Stop gate, the quick route, project-type detection, the lint hook, the caveat log, zero-test flagging, the opt-in `herd pr` step, the opt-in worktree start for parallel tasks, short output by default, and the risk-floor module. Releases 0.2.7 to 0.3.0 were each built with Herd itself; 0.2.8 to 0.3.0 were opened as pull requests by `herd pr`. Benchmarked on one task with Sonnet (above). Not yet done: many live runs through the installed plugin across different project types, and issue-to-pull-request automation on GitHub (labelled issue to reviewed spec), which is still design work. `herd pr` covers only the last step: a finished local task opens a pull request with its evidence.
+Version 0.3.1 (see the [changelog](CHANGELOG.md)). Working and covered by 259 unit tests on Python 3.11 to 3.13: the evidence harness (`scripts/herd.py`), the Stop gate, the quick route, project-type detection, the lint hook, the caveat log, zero-test flagging, the opt-in `herd pr` step, the opt-in worktree start for parallel tasks, short output by default, and the risk-floor module. Releases 0.2.7 to 0.3.0 were each built with Herd itself; 0.2.8 to 0.3.0 were opened as pull requests by `herd pr`. Benchmarked on one task with Sonnet (above). Not yet done: many live runs through the installed plugin across different project types, and issue-to-pull-request automation on GitHub (labelled issue to reviewed spec), which is still design work. `herd pr` covers only the last step: a finished local task opens a pull request with its evidence.
 
 ## The design behind it
 

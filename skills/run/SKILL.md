@@ -8,7 +8,7 @@ argument-hint: "<the task, one or two sentences>"
 
 Work the task to the end without waiting on the human. The human gave a goal (and maybe criteria). You deliver code plus **evidence** that the criteria pass. "Done" means `herd done` succeeded, not that you say so. A Stop hook enforces this while a task is active.
 
-Run `herd` commands from the project root (a git repository), written out in full so they work in any shell:
+Run `herd` commands from the project root (a git repository), or from the task's worktree when it has one, written out in full so they work in any shell:
 `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/herd.py" <command>`. Below, `herd <command>` means exactly that. Check commands you write in `task.toml` also run from the project root.
 
 ## Steps
@@ -16,6 +16,7 @@ Run `herd` commands from the project root (a git repository), written out in ful
 1. **Intake.** Pick a short slug and a route.
    - **Quick** for a trivial change: one file, no new behaviour surface, and an existing command that can fail first. Run `herd init <slug> "<goal>" --quick "<check>" --request "<the user's message, verbatim>"`. It refuses a `high` risk floor. Quick skips the criteria interview, the approval question and the fresh-context review. It still needs red first, `herd verify` and `herd done`. Skip steps 2, 4, 6 and 7 below; continue at step 3.
    - **Standard** for everything else: run `herd init <slug> "<goal>" --request "<the user's message, verbatim>"`. The request is stored so `herd check` can confirm that human criteria quote the human.
+   - **Own worktree (opt-in).** Add `--worktree` to `herd init` when `herd.toml` has `[worktree] required = true`, when the user asks for it, or when other agents may work in the same repository. It creates the branch `herd/<slug>` in its own worktree at `.claude/worktrees/herd-<slug>`, cut from the branch you are on, and prints the path. Move into it before anything else: in Claude Code, call EnterWorktree with that path; otherwise `cd` into it. Run every later edit and command from there. If a `herd` command says the task lives in its worktree, you are in the wrong place: move there. Never start a second task in a checkout that already has an active one.
    Then run `herd triage "<goal text>"` (standard route). Triage prints a risk floor from `herd.toml` path rules: `high` or `medium` if a rule matched, `medium` by default when the text names no path, `low` only if a maintainer labelled it. You may raise the risk, never lower it. Do not ask clarifying questions: fill gaps with stated assumptions.
 2. **Criteria.** Follow the `herd:criteria` skill, then run `herd check`. Run `herd detect` to find the project's real test command instead of guessing. If the user wants to plan the evidence together, point them to `/herd:evidence`.
 3. **Red.** Run `herd verify` once before building. It should report the checks failing. A check that already passes proves nothing: tighten it. If `herd verify` marks a check `(ran zero tests)`, its command found no tests: fix the command or the test path, never leave it, because it passes without proving anything.

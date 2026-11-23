@@ -2,6 +2,15 @@
 
 All notable changes to Herd. Versions follow `.claude-plugin/plugin.json`.
 
+## 0.2.9
+
+- **Added:** `herd init <slug> "<goal>" --worktree` starts a task on a new `herd/<slug>` branch in its own git worktree at `.claude/worktrees/herd-<slug>`, cut from the local branch you are on. The task's files and active pointer live in that worktree, so several agents can run Herd tasks in one repository at once; a duplicate slug fails cleanly, and a failed init removes the worktree and branch it made. The base branch is recorded and `herd pr` targets it. Uncommitted changes left in the starting checkout are reported.
+- **Added:** `[worktree] required = true` in `herd.toml` (opt-in) makes a plain `herd init` refuse outside a linked worktree on `herd/<slug>`.
+- **Added:** `herd` commands run from the starting checkout for a task that lives in a worktree refuse and name the worktree, so a forgotten move fails loudly.
+- **Added:** `--worktree` adds `/.claude/worktrees/` and `.herd/` to the repository's own `.git/info/exclude` (never committed), so the main checkout's `git status` stays clean, a `git add -A` cannot pick up another agent's worktree, and `git worktree remove` works.
+- **Fixed:** the Stop gate and the CLI find the task from any subdirectory: the root is the nearest folder with `.herd/` or `herd.toml`, so a project in a subfolder of a repository keeps its own tasks.
+- **Changed:** the run skill's intake step covers the worktree start; the README and `herd.toml` describe it.
+
 ## 0.2.8
 
 - **Added:** `herd pr [slug] [--yes]`, an opt-in pull request step. It runs only with `[pr] open = true` in `herd.toml` or `--yes` (which the run skill passes when the request asks for a PR). It pushes the task's `herd/<slug>` branch, refuses any other branch, and opens a pull request, or updates the one that exists. The description is the evidence, first: the result and freshness, a table of what is proven and the check that proved each item, what is not proven (failing and unchecked criteria, zero-test runs, coverage gaps, known limits, open caveats), run details, and the check commands to reproduce. It refuses a dirty working tree, leaves check output out of the description, and lists at most 60 caveats. It never merges.

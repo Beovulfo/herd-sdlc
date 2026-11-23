@@ -73,6 +73,8 @@ VARIES = re.compile(r"\b(vary|varies|varied|varying|variation|generated?|random\
 SCALED = re.compile(r"\b(scales?|sizes?|largest?|big|biggest|huge|time limit|timed|timing|seconds|performance|"
                     r"runtime|latency|up to \d+)\b", re.I)
 NOTE_KINDS = ("found", "fixed", "open", "tried")
+WORKTREES = ".claude/worktrees"  # where `herd init --worktree` puts tasks; Claude Code's EnterWorktree can enter it
+OWN_FILES = (".", ":!.herd")  # pathspec: this checkout's work, not Herd's own state
 # Test runners' own words for an empty run, and for a run that executed tests. Advisory, so the list
 # only has to catch the common cases: unittest, pytest, cargo, go, jest, mocha.
 ZERO_TESTS = re.compile(r"\bRan 0 tests?\b|\bcollected 0 items\b|\bno tests ran\b|\brunning 0 tests\b"
@@ -157,6 +159,109 @@ def cancel_task(root, slug, reason=""):
 def cancelled(root, slug):
     p = _dir(root, slug) / "cancelled"
     return json.loads(p.read_text()) if p.exists() else None
+
+
+def _branch(root):
+    return _git(root, "rev-parse", "--abbrev-ref", "HEAD").decode().strip()
+
+
+def _gitpath(root, what):
+    out = _git(root, "rev-parse", what).decode().strip()
+    return str((Path(root) / out).resolve()) if out else ""  # older git prints these relative to root
+
+
+def toplevel(path):
+    """The work tree root that contains path, or path itself outside git."""
+    top = _git(path, "rev-parse", "--show-toplevel").decode().strip()
+    return Path(top) if top else Path(path)
+
+
+def find_root(path):
+    """The nearest folder up to the work tree root that has `.herd/` or `herd.toml`, else the work tree root.
+
+    A project in a subfolder of a repository (a monorepo package) keeps its own `.herd/`.
+    """
+    path, top = Path(path).resolve(), toplevel(path).resolve()
+    for d in (path, *path.parents):
+        if (d / ".herd").is_dir() or (d / "herd.toml").is_file():
+            return d
+        if d == top:
+            break
+    return top
+
+
+def _main_checkout(root):
+    """The repository's main work tree (the first `git worktree list` entry), also for submodules."""
+    first = _git(root, "worktree", "list", "--porcelain").decode().splitlines()[:1]
+    return Path(first[0].split(" ", 1)[1]) if first and first[0].startswith("worktree ") else toplevel(root)
+
+
+def _ignore_locally(root, patterns):
+    """Add patterns to the repository's own `info/exclude` (never committed) when missing."""
+    exclude = Path(_gitpath(root, "--git-common-dir")) / "info" / "exclude"
+    exclude.parent.mkdir(parents=True, exist_ok=True)
+    have = exclude.read_text().splitlines() if exclude.exists() else []
+    missing = [p for p in patterns if p not in have]
+    if missing:
+        with exclude.open("a") as fh:
+            fh.write("".join(f"{p}\n" for p in missing))
+
+
+def worktree_required(root):
+    try:
+        cfg = tomllib.loads((Path(root) / "herd.toml").read_text()).get("worktree")
+    except (OSError, tomllib.TOMLDecodeError):
+        return False
+    return isinstance(cfg, dict) and cfg.get("required") is True
+
+
+def check_worktree_rule(root, slug):
+    """With `[worktree] required = true`, a plain init must run in a linked worktree on herd/<slug>."""
+    if not worktree_required(root):
+        return
+    linked = _gitpath(root, "--git-dir") != _gitpath(root, "--git-common-dir")
+    if not linked or _branch(root) != f"herd/{slug}":
+        raise ValueError(f"herd.toml requires each task in its own worktree on herd/{slug}: "
+                         f"run `herd init {slug} \"<goal>\" --worktree` instead")
+
+
+def init_worktree(root, slug, goal, quick_check=None, request=None):
+    """Start a task on a new herd/<slug> branch in its own worktree, cut from the current local branch.
+
+    Returns (path, base branch, whether uncommitted changes were left behind in the starting checkout).
+    """
+    if not SLUG.fullmatch(slug):
+        raise ValueError("slug must be lower-case letters, digits and dashes (max 41 chars)")
+    base = _branch(root)
+    if base in ("", "HEAD"):
+        raise ValueError("start from a local branch: HEAD is detached or the repository has no commit yet")
+    # other agents' worktrees and every checkout's Herd state stay out of `git status` and `git add -A`
+    _ignore_locally(root, [f"/{WORKTREES}/", ".herd/"])
+    tree = _main_checkout(root) / WORKTREES / f"herd-{slug}"
+    p = subprocess.run(["git", "worktree", "add", "-b", f"herd/{slug}", str(tree), "HEAD"],
+                       cwd=root, capture_output=True, text=True)
+    if p.returncode:
+        raise ValueError(f"git worktree add failed: {p.stderr.strip()[-300:]}")
+    path = tree / Path(root).resolve().relative_to(toplevel(root).resolve())  # same subfolder as the project
+    try:
+        init_task(path, slug, goal, quick_check=quick_check, request=request)
+        (_dir(path, slug) / "base").write_text(base + "\n")
+    except Exception:  # undo only what this call made: its own new worktree and branch
+        subprocess.run(["git", "worktree", "remove", "--force", str(tree)], cwd=root, capture_output=True)
+        subprocess.run(["git", "branch", "-D", f"herd/{slug}"], cwd=root, capture_output=True)
+        raise
+    pointer = Path(root) / ".herd" / "elsewhere"
+    pointer.mkdir(parents=True, exist_ok=True)
+    (pointer / slug).write_text(str(path) + "\n")  # one file per task: safe when several inits run at once
+    left = bool(_git(root, "status", "--porcelain", "--", *OWN_FILES).strip())
+    return path, base, left
+
+
+def elsewhere(root):
+    """Tasks started from this checkout that live in their own worktree: {slug: path}."""
+    d = Path(root) / ".herd" / "elsewhere"
+    found = {p.name: p.read_text().strip() for p in sorted(d.iterdir())} if d.exists() else {}
+    return {k: v for k, v in found.items() if Path(v).exists()}  # a removed worktree is forgotten
 
 
 def load_task(root, slug):
@@ -264,8 +369,8 @@ def fingerprint(root):
     """Hash of HEAD, tracked changes and untracked file contents, ignoring .herd/."""
     h = hashlib.sha1()
     h.update(_git(root, "rev-parse", "HEAD"))
-    h.update(_git(root, "diff", "HEAD", "--", ".", ":!.herd"))
-    for name in sorted(_git(root, "ls-files", "--others", "--exclude-standard", "--", ".", ":!.herd").decode().splitlines()):
+    h.update(_git(root, "diff", "HEAD", "--", *OWN_FILES))
+    for name in sorted(_git(root, "ls-files", "--others", "--exclude-standard", "--", *OWN_FILES).decode().splitlines()):
         h.update(name.encode())
         try:
             h.update((Path(root) / name).read_bytes())
@@ -306,7 +411,7 @@ def verify(root, slug):
         results.append(r)
     summary = {s: sum(r["status"] == s for r in results) for s in ("passing", "failing", "unchecked")}
     head = _git(root, "rev-parse", "HEAD").decode().strip() or "none"
-    dirty = bool(_git(root, "status", "--porcelain", "--", ".", ":!.herd").strip())
+    dirty = bool(_git(root, "status", "--porcelain", "--", *OWN_FILES).strip())
     red_path = _dir(root, slug) / "red.json"
     checked = [r for r in results if r["status"] != "unchecked"]
     if not red_path.exists() and checked:  # first verify with a runnable check: how many were red
@@ -534,7 +639,7 @@ def open_pr(root, slug, yes=False):
     branch = _git(root, "rev-parse", "--abbrev-ref", "HEAD").decode().strip()
     if branch != f"herd/{slug}":
         raise ValueError(f"herd pr pushes only the task's branch herd/{slug}; this is `{branch or 'no branch'}`")
-    if _git(root, "status", "--porcelain", "--", ".", ":!.herd").strip():
+    if _git(root, "status", "--porcelain", "--", *OWN_FILES).strip():
         raise ValueError("herd pr needs a clean working tree: commit the work, run `herd verify`, then `herd pr`, "
                          "so the pull request contains exactly the code the evidence is about")
     if not shutil.which("gh"):
@@ -549,7 +654,9 @@ def open_pr(root, slug, yes=False):
     if url:
         cmd = ["gh", "pr", "edit", branch, "--body-file", "-"]
     else:
-        cmd = ["gh", "pr", "create", "--head", branch, "--title", pr_title(load_task(root, slug)["goal"], slug), "--body-file", "-"]
+        base_file = _dir(root, slug) / "base"
+        base = ["--base", base_file.read_text().strip()] if base_file.exists() else []
+        cmd = ["gh", "pr", "create", "--head", branch, *base, "--title", pr_title(load_task(root, slug)["goal"], slug), "--body-file", "-"]
     p = subprocess.run(cmd, cwd=root, input=body, capture_output=True, text=True)
     if p.returncode:
         raise ValueError(f"`{' '.join(cmd[:3])}` failed: {(p.stderr or p.stdout).strip()[-500:]}")
@@ -638,6 +745,10 @@ def gate(root, hook):
 def _slug_arg(root, args):
     """Slug from the arguments, the active task, or the only task that exists."""
     slug = args[0] if args else active_slug(root)
+    moved = elsewhere(root)
+    if slug and slug in moved and not _dir(root, slug).exists():
+        sys.exit(f"task {slug} lives in its worktree {moved[slug]}: work from there "
+                 "(Claude Code: EnterWorktree with that path; otherwise cd into it)")
     if slug:
         return slug
     tasks_dir = Path(root) / ".herd" / "tasks"
@@ -646,11 +757,14 @@ def _slug_arg(root, args):
         return tasks[0]
     if tasks:
         sys.exit(f"no active task; pass one of: {', '.join(tasks)}")
+    if moved:
+        sys.exit("no task in this checkout; tasks started here live in their worktrees: "
+                 + ", ".join(f"{k} in {v}" for k, v in moved.items()) + ". Work from there")
     sys.exit("no active task: run `herd init <slug> \"<goal>\"`")
 
 
 USAGE = {
-    "init": 'herd init <slug> "<goal>" [--request "<message>"] [--quick "<check>"]',
+    "init": 'herd init <slug> "<goal>" [--request "<message>"] [--quick "<check>"] [--worktree]',
     "check": "herd check [slug]",
     "note": 'herd note --found|--fixed|--open|--tried "text"',
     "detect": "herd detect",
@@ -680,7 +794,7 @@ def _opt(args, flag):
 
 
 def main(argv):
-    root = Path.cwd()
+    root = find_root(Path.cwd())
     cmd, args = (argv[0], argv[1:]) if argv else ("status", [])
     if cmd in ("help", "-h", "--help"):
         print(__doc__ + "\nCommands:\n" + "\n".join(f"  {u}" for u in USAGE.values()))
@@ -692,8 +806,18 @@ def main(argv):
         if cmd == "init":
             quick, args = _opt(args, "--quick")
             request, args = _opt(args, "--request")
+            worktree = "--worktree" in args
+            args = [a for a in args if a != "--worktree"]
             if len(args) != 2:
                 raise UsageError
+            if worktree:
+                path, base, left = init_worktree(root, args[0], args[1], quick_check=quick, request=request)
+                print(f"created worktree {path} on branch herd/{args[0]}, cut from {base}. Work from there: in Claude "
+                      "Code, EnterWorktree with that path; otherwise cd into it. Run every herd command from it.")
+                if left:
+                    print(f"warning: uncommitted changes in {base} were not carried into the worktree", file=sys.stderr)
+                return 0
+            check_worktree_rule(root, args[0])
             init_task(root, args[0], args[1], quick_check=quick, request=request)
             if quick is None:
                 print(f"created .herd/tasks/{args[0]}/task.toml (commented template): add criteria with checks, then run `herd check`")
@@ -773,7 +897,7 @@ def main(argv):
         elif cmd == "gate":
             raw = sys.stdin.read() if not sys.stdin.isatty() else ""
             hook = json.loads(raw) if raw.strip() else {}
-            out = gate(Path(hook.get("cwd") or root), hook)
+            out = gate(find_root(Path(hook.get("cwd") or root)), hook)
             if out:
                 print(json.dumps(out))
         elif cmd == "triage":

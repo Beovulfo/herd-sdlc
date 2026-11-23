@@ -1109,6 +1109,218 @@ class TestPr(Base):
         self.assertIn("warning: the pull request shows evidence that is not done", p.stderr)
 
 
+WT_TASK = '''goal = "Write out.txt"
+known_limits = "none"
+
+[[criteria]]
+id = "C1"
+text = "out.txt exists"
+source = "agent-proposed"
+check = "test -f out.txt"
+'''
+
+
+class TestWorktree(Base):
+    """Tasks in their own worktree, cut from the local branch the work starts on."""
+
+    def setUp(self):
+        super().setUp()
+        git(self.root, "switch", "-q", "-c", "work")
+        (self.root / "base.txt").write_text("from work")
+        git(self.root, "add", "base.txt")
+        git(self.root, "commit", "-q", "-m", "work commit")
+
+    def tearDown(self):
+        subprocess.run(["git", "worktree", "prune"], cwd=self.root, capture_output=True)
+        super().tearDown()
+
+    def herd(self, *args, cwd=None, env=None):
+        return subprocess.run([sys.executable, str(Path(herd.__file__)), *args], cwd=cwd or self.root,
+                              capture_output=True, text=True, env=env)
+
+    def wt(self, slug):
+        return self.root / ".claude" / "worktrees" / f"herd-{slug}"
+
+    def out(self, args, cwd):
+        return subprocess.run(args, cwd=cwd, capture_output=True, text=True).stdout.strip()
+
+    def test_creates_a_worktree_on_a_new_branch_cut_from_the_current_branch(self):
+        p = self.herd("init", "t1", "Write out.txt", "--worktree")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        path = self.wt("t1")
+        self.assertIn(str(path), p.stdout)
+        self.assertEqual(self.out(["git", "rev-parse", "--abbrev-ref", "HEAD"], path), "herd/t1")
+        self.assertEqual(self.out(["git", "rev-parse", "HEAD"], path), self.out(["git", "rev-parse", "HEAD"], self.root))
+        self.assertTrue((path / ".herd/tasks/t1/task.toml").exists())
+        self.assertEqual((path / ".herd/active").read_text().strip(), "t1")
+        self.assertEqual((path / ".herd/tasks/t1/base").read_text().strip(), "work")
+        self.assertFalse((self.root / ".herd/active").exists())  # the starting checkout has no task of its own
+        self.assertFalse((self.root / ".herd/tasks").exists())
+        self.assertEqual(self.out(["git", "rev-parse", "--abbrev-ref", "HEAD"], self.root), "work")
+
+    def test_base_warns_about_uncommitted_changes_left_behind(self):
+        (self.root / "base.txt").write_text("edited, not committed")
+        p = self.herd("init", "t1", "Write out.txt", "--worktree")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("uncommitted", p.stderr)
+        self.assertEqual((self.wt("t1") / "base.txt").read_text(), "from work")
+
+    def test_base_refuses_a_detached_head(self):
+        git(self.root, "checkout", "-q", "--detach")
+        p = self.herd("init", "t1", "Write out.txt", "--worktree")
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("local branch", p.stderr)
+        self.assertFalse(self.wt("t1").exists())
+
+    def test_herd_pr_targets_the_recorded_base(self):
+        self.herd("init", "t1", "Write out.txt", "--worktree")
+        path = self.wt("t1")
+        origin = self.root.parent / (self.root.name + "-origin.git")
+        gh = self.root.parent / (self.root.name + "-gh")
+        try:
+            subprocess.run(["git", "init", "-q", "--bare", str(origin)], check=True)
+            git(path, "remote", "add", "origin", str(origin))
+            gh.mkdir()
+            (gh / "gh").write_text(FAKE_GH)
+            (gh / "gh").chmod(0o755)
+            env = dict(os.environ, FAKE_GH_DIR=str(gh), PATH=f"{gh}{os.pathsep}{os.environ['PATH']}")
+            p = self.herd("pr", "t1", "--yes", cwd=path, env=env)
+            self.assertEqual(p.returncode, 0, p.stderr)
+            create = [ln for ln in (gh / "log").read_text().splitlines() if ln.startswith("ARGS pr create")]
+            self.assertIn("--base work", create[0])
+        finally:
+            shutil.rmtree(origin, ignore_errors=True)
+            shutil.rmtree(gh, ignore_errors=True)
+
+    def test_opt_in_off_plain_init_is_unchanged(self):
+        p = self.herd("init", "t1", "Write out.txt")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue((self.root / ".herd/tasks/t1/task.toml").exists())
+        self.assertFalse((self.root / ".claude").exists())
+
+    def required(self):
+        (self.root / "herd.toml").write_text("[worktree]\nrequired = true\n")
+        git(self.root, "add", "herd.toml")
+        git(self.root, "commit", "-q", "-m", "require worktrees")
+
+    def test_opt_in_required_refuses_a_plain_init_in_the_main_checkout(self):
+        self.required()
+        p = self.herd("init", "t1", "Write out.txt")
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("--worktree", p.stderr)
+        self.assertFalse((self.root / ".herd/tasks/t1").exists())
+
+    def test_opt_in_required_refuses_a_worktree_on_another_branch(self):
+        self.required()
+        other = self.root.parent / (self.root.name + "-other")
+        git(self.root, "worktree", "add", "-q", "-b", "feature", str(other))
+        try:
+            p = self.herd("init", "t1", "Write out.txt", cwd=other)
+            self.assertEqual(p.returncode, 1)
+            self.assertIn("herd/t1", p.stderr)
+        finally:
+            git(self.root, "worktree", "remove", "--force", str(other))
+
+    def test_opt_in_required_accepts_init_worktree_and_a_matching_worktree(self):
+        self.required()
+        p = self.herd("init", "t1", "Write out.txt", "--worktree")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        manual = self.root.parent / (self.root.name + "-t2")
+        git(self.root, "worktree", "add", "-q", "-b", "herd/t2", str(manual))
+        try:
+            p = self.herd("init", "t2", "Write out.txt", cwd=manual)
+            self.assertEqual(p.returncode, 0, p.stderr)
+        finally:
+            git(self.root, "worktree", "remove", "--force", str(manual))
+
+    def test_end_to_end_inside_the_worktree(self):
+        self.assertEqual(self.herd("init", "t1", "Write out.txt", "--worktree").returncode, 0)
+        path = self.wt("t1")
+        (path / ".herd/tasks/t1/task.toml").write_text(WT_TASK)
+        self.assertEqual(self.herd("check", cwd=path).returncode, 0)
+        self.assertEqual(self.herd("verify", cwd=path).returncode, 1)  # red first
+        (path / "out.txt").write_text("done")
+        git(path, "add", "out.txt")
+        git(path, "commit", "-q", "-m", "write out.txt")
+        self.assertEqual(self.herd("verify", cwd=path).returncode, 0)
+        p = self.herd("done", cwd=path)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("done: evidence is fresh and passing", p.stdout)
+        self.assertFalse((self.root / "out.txt").exists())  # the starting checkout never saw the work
+
+    def test_concurrent_inits_from_one_checkout_are_isolated(self):
+        # a main-checkout task with fresh evidence must stay fresh while others start worktree tasks
+        herd.init_task(self.root, "home", "Home task")
+        (self.root / ".herd/tasks/home/task.toml").write_text(WT_TASK.replace("test -f out.txt", "test -f base.txt"))
+        herd.verify(self.root, "home")
+        slugs = [f"t{i}-{os.urandom(3).hex()}" for i in range(6)]
+        procs = [subprocess.Popen([sys.executable, str(Path(herd.__file__)), "init", s, f"Goal {s}", "--worktree"],
+                                  cwd=self.root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                 for s in slugs]
+        results = [(p.wait(), p.stderr.read()) for p in procs]
+        self.assertEqual([r[0] for r in results], [0] * len(slugs), results)
+        for s in slugs:
+            path = self.wt(s)
+            self.assertEqual(self.out(["git", "rev-parse", "--abbrev-ref", "HEAD"], path), f"herd/{s}")
+            self.assertEqual(sorted(p.name for p in (path / ".herd/tasks").iterdir()), [s])
+            self.assertEqual((path / ".herd/active").read_text().strip(), s)
+            block = herd.gate(path, {})
+            self.assertIn(f"`{s}`", block["reason"])
+            self.assertFalse([o for o in slugs if o != s and o in block["reason"]])
+        self.assertEqual((self.root / ".herd/active").read_text().strip(), "home")
+        self.assertEqual(herd.problems(self.root, "home"), [])  # not made stale by the new worktrees
+        self.assertIsNone(herd.gate(self.root, {}))
+        dup = self.herd("init", slugs[0], "Again", "--worktree")
+        self.assertEqual(dup.returncode, 1)
+        self.assertEqual((self.wt(slugs[0]) / ".herd/active").read_text().strip(), slugs[0])
+
+    def test_gate_finds_the_task_from_a_subdirectory(self):
+        self.herd("init", "t1", "Write out.txt", "--worktree")
+        sub = self.wt("t1") / "deep" / "dir"
+        sub.mkdir(parents=True)
+        p = subprocess.run([sys.executable, str(Path(herd.__file__)), "gate"], cwd=self.root,
+                           input=json.dumps({"cwd": str(sub)}), capture_output=True, text=True)
+        self.assertIn('"decision": "block"', p.stdout)
+        self.assertIn("t1", p.stdout)
+
+    def test_clean_status_in_the_main_checkout_and_worktree_remove_works(self):
+        self.assertEqual(self.herd("init", "t1", "Write out.txt", "--worktree").returncode, 0)
+        self.assertEqual(self.out(["git", "status", "--porcelain"], self.root), "")  # nothing for `git add -A` to grab
+        p = subprocess.run(["git", "worktree", "remove", str(self.wt("t1"))], cwd=self.root, capture_output=True, text=True)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(herd.elsewhere(self.root), {})  # a removed worktree is forgotten
+        self.assertEqual(self.herd("init", "t2", "Again", "--worktree").returncode, 0)
+        exclude = Path(self.out(["git", "rev-parse", "--git-common-dir"], self.root))
+        exclude = (exclude if exclude.is_absolute() else self.root / exclude) / "info" / "exclude"
+        self.assertEqual(exclude.read_text().count(".herd/"), 1)  # added once, not on every init
+
+    def test_subproject_in_a_subfolder_keeps_its_own_herd(self):
+        pkg = self.root / "packages" / "app"
+        pkg.mkdir(parents=True)
+        (pkg / "herd.toml").write_text("# app config\n")
+        git(self.root, "add", "-A")
+        git(self.root, "commit", "-q", "-m", "app package")
+        p = self.herd("init", "t1", "Write out.txt", cwd=pkg)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue((pkg / ".herd/tasks/t1").exists())
+        deeper = pkg / "src"
+        deeper.mkdir()
+        self.assertIn("t1", self.herd("verify", cwd=deeper).stdout + self.herd("status", cwd=deeper).stdout)
+        gate = subprocess.run([sys.executable, str(Path(herd.__file__)), "gate"], cwd=self.root,
+                              input=json.dumps({"cwd": str(deeper)}), capture_output=True, text=True)
+        self.assertIn('"decision": "block"', gate.stdout)
+        p = self.herd("init", "t2", "Write out.txt", "--worktree", cwd=pkg)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue((self.wt("t2") / "packages/app/.herd/tasks/t2/task.toml").exists())
+
+    def test_commands_from_the_starting_checkout_points_to_the_worktree(self):
+        self.herd("init", "t1", "Write out.txt", "--worktree")
+        for args in (["verify", "t1"], ["status"], ["note", "--tried", "x"]):
+            p = self.herd(*args)
+            self.assertNotEqual(p.returncode, 0, args)
+            self.assertIn(str(self.wt("t1")), p.stderr, args)
+
+
 def _old_python():
     for exe in ("/usr/bin/python3", "python3.10", "python3.9"):
         path = shutil.which(exe)

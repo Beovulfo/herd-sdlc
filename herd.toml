@@ -28,6 +28,12 @@ raise_by_pct = 50
 # [pr]
 # open = true
 
+# Optional: start every task on its own herd/<slug> branch in its own git worktree, so several
+# agents can work in this repository at once. With it, a plain `herd init` refuses outside a
+# matching worktree; `herd init <slug> "<goal>" --worktree` creates one, cut from the current branch.
+# [worktree]
+# required = true
+
 # Optional per-file lint after each edit while a task is active. Print a block for your
 # project with `herd lint --suggest`. Example:
 # [lint]

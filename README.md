@@ -231,7 +231,7 @@ python3 examples/supermarket-route/verifier/verify_general.py with_herd examples
 | `herd detect` | Propose test and lint commands for Python, Node, Rust, Go and `make test` |
 | `herd note --found\|--fixed\|--open\|--tried "text"` | Log a caveat or an adversarial attempt with a timestamp; the report lists them |
 | `herd triage "<text>"` | Print the risk floor for a task description |
-| `herd verify` | Run all checks, store `evidence.json`; exit 1 if any fail |
+| `herd verify` | Run all checks, store `evidence.json`; exit 1 if any fail; mark a passing check that ran zero tests |
 | `herd status` | Show evidence and whether the task is done |
 | `herd done` | Write `evidence.md`, close the task; refuses unless fresh and passing |
 | `herd cancel --reason "text"` | Abandon the task: keep its files, stop the Stop gate from blocking |

@@ -1,0 +1,18 @@
+| sonnet-plain-2 | ok | CRASH | clean error | clean error | CRASH | CRASH | 3 of 6 |
+| S | 16 | 14 of 16 | 13 of 14 | 29.6% | 17.1% | 6 of 13 | 0.1 | +17.7%, +35.2% |
+| M | 16 | 12 of 16 | 12 of 12 | 67.6% | 41.7% | 12 of 12 | 0.7 | -13.3%, +3.4% |
+| L | 8 | 6 of 8 | 5 of 6 | 84.6% | 82.8% | 5 of 5 | 12.3 | -16.5%, -1.5% |
+| XL | 8 | 6 of 8 | 6 of 6 | 82.2% | 49.9% | 6 of 6 | 60.7 | -12.2%, +2.8% |
+! S random seed 0: optimized: reported time 185.83333333333363 differs from 190.8 (0s)
+! S random seed 1: crash: ValueError: unreachable from (1, 38): [(20, 35)] (0s)
+! S clusters seed 1: crash: ValueError: unreachable from (1, 38): [(20, 1)] (0s)
+! M random seed 0: crash: ValueError: unreachable from (1, 98): [(71, 62)] (0s)
+! M random seed 1: crash: ValueError: unreachable from (1, 98): [(116, 91), (144, 9)] (0s)
+! M clusters seed 0: crash: ValueError: unreachable from (1, 98): [(20, 26), (20, 68), (20, 96)] (0s)
+! M clusters seed 1: crash: ValueError: unreachable from (1, 98): [(20, 4), (20, 12), (44, 96)] (0s)
+! L random seed 0: crash: ValueError: unreachable from (1, 298): [(63, 150), (73, 201), (369, 244)] (0s)
+! L comb seed 0: optimized: reported time 23419.16666666133 differs from 23424.2 (7s)
+! L clusters seed 0: crash: ValueError: unreachable from (1, 298): [(20, 162), (20, 260)] (0s)
+! XL random seed 0: crash: ValueError: unreachable from (1, 398): [(2, 360), (62, 232), (162, 131)] (1s)
+! XL clusters seed 0: crash: ValueError: unreachable from (1, 398): [(20, 32), (20, 40), (20, 242)] (0s)
+RESULT: FAIL (every instance finished in time with a valid route)

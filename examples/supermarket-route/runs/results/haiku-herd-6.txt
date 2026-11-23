@@ -1,0 +1,10 @@
+| haiku-herd-6 | ok | clean error | ok | clean error | clean error | clean error | 6 of 6 |
+| S | 16 | 16 of 16 | 16 of 16 | 27.5% | 12.2% | 8 of 16 | 0.1 | +1.9%, +17.0% |
+| M | 16 | 13 of 16 | 13 of 13 | 69.2% | 40.8% | 13 of 13 | 0.8 | -7.5%, +4.8% |
+| L | 8 | 8 of 8 | 8 of 8 | 79.6% | 41.9% | 8 of 8 | 11.3 | -9.7%, -2.9% |
+| XL | 8 | 7 of 8 | 7 of 7 | 84.1% | 49.7% | 7 of 7 | 43.4 | -10.5%, -1.2% |
+! M random seed 0: crash: optimizer.store.StoreError: product P0181 (item181) cannot be reached from the start (0s)
+! M clusters seed 0: crash: optimizer.store.StoreError: product P0161 (item161) cannot be reached from the start (0s)
+! M clusters seed 1: crash: optimizer.store.StoreError: product P0033 (item33) cannot be reached from the start (0s)
+! XL random seed 0: crash: optimizer.store.StoreError: product P0100 (item100) cannot be reached from the start (0s)
+RESULT: FAIL (every instance finished in time with a valid route)

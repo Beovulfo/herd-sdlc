@@ -1,0 +1,39 @@
+# The request said: "build a route optimizer that works inside any supermarket, even very big ones, whatever its layout. It uses as input the MAP of the supermarket with all the products localised in the map with the product ID and the short-name, and the list of products (id:short name) requested by a customer. ... Success looks like we can simulate step by step the route of the delivery guy, measuring in real time the KPIs: “time-to-prepare-basket” and “distance-covered”, and compare it with the list-order route (not optimized) so we can demonstrate that our optimization algorithm successfully saves more than 30% of time for the basket to be ready"
+goal = "Supermarket route optimizer with step-by-step simulation, KPIs, and >30% time saving vs list order"
+test_budget = "Unit tests on generated stores: 3 layouts (aisles, random obstacles, open pillars) x several seeds, a 200x300 scale run, hostile inputs. Not tested: real store maps, one-way aisles, shelf-side picking rules, congestion, multiple pickers."
+known_limits = "Heuristic (nearest neighbour + 2-opt + or-opt), not provably optimal. Saving depends on the list: lists under about 10 items, a list already in store order, or a pick time much larger than walk time can fall below 30%. Pick time (10 s) and speed (1 cell/s) are assumptions, flags change them. Optimizer matrix needs one BFS per item: very large stores with hundreds of items get slow."
+
+[[criteria]]
+id = "C1"
+text = "build a route optimizer that works inside any supermarket, even very big ones, whatever its layout"
+source = "human"
+coverage = "Scale: largest tried 200x300 cells with 60 items, time limit 60 s. Proves valid full routes on 3 generated layout families x 5 seeds, odd shapes (1-wide, no aisles, unreachable pockets) ; not real maps."
+check = "python3 -m unittest tests.test_route.Layouts tests.test_route.Scale"
+
+[[criteria]]
+id = "C2"
+text = "It uses as input the MAP of the supermarket with all the products localised in the map with the product ID and the short-name, and the list of products (id:short name) requested by a customer"
+source = "human"
+coverage = "Proves the CLI reads a map JSON and an id:short-name list file and routes exactly the listed products; not other map formats."
+check = "python3 -m unittest tests.test_route.CliInput"
+
+[[criteria]]
+id = "C3"
+text = "we can simulate step by step the route of the delivery guy, measuring in real time the KPIs: “time-to-prepare-basket” and “distance-covered”"
+source = "human"
+coverage = "Proves one event per step, adjacent walkable moves, KPIs rising with each event, final KPIs equal to an independent recount of the trace; not a graphical animation."
+check = "python3 -m unittest tests.test_route.Simulation"
+
+[[criteria]]
+id = "C4"
+text = "compare it with the list-order route (not optimized) so we can demonstrate that our optimization algorithm successfully saves more than 30% of time for the basket to be ready"
+source = "human"
+coverage = "Proves >30% time saved on every one of 30 generated stores (3 layouts x 10 seeds, 20 items, random list order); not short lists or lists already in store order."
+check = "python3 -m unittest tests.test_route.Saving"
+
+[[criteria]]
+id = "C5"
+text = "Given a missing, malformed or inconsistent map or list, when the tool runs, then it prints one error line and exits non-zero, with no traceback"
+source = "agent-proposed"
+coverage = "Proves clear errors for missing files, bad JSON, bad grid, bad products, unknown or duplicate ids, name mismatch, unreachable requested product; unrequested unreachable products are ignored."
+check = "python3 -m unittest tests.test_route.BadInput"

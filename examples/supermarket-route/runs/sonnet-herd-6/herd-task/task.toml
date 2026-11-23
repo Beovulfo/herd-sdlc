@@ -1,0 +1,37 @@
+# The request said: "build a route optimizer that works inside any supermarket, even very big ones, whatever its layout. [...] Success looks like we can simulate step by step the route of the delivery guy, measuring in real time the KPIs: “time-to-prepare-basket” and “distance-covered”, and compare it with the list-order route (not optimized) so we can demonstrate that our optimization algorithm successfully saves more than 30% of time for the basket to be ready"
+goal = "Supermarket route optimizer: map + shopping list in, optimized pick route out, step-by-step simulation with live time and distance KPIs vs list-order route, over 30% time saved"
+test_budget = "Unit/CLI level on generated stores: 4 layout families x 5-8 seeds at 40x30 to 60x40, one 300x300 scale run. Not tested: real store maps, stores over 300x300, lists over 50 items, products reachable from several shelf sides, one-way aisles, congestion."
+known_limits = "Saving depends on list size and pick time: lists under about 14 items (one 12-item demo saved 27.8%), or very long pick times (PICK_S), can fall below 30%. Heuristic (nearest neighbour + 2-opt + Or-opt), not provably optimal. Each product is picked from one fixed access cell (nearest to the start)."
+
+[[criteria]]
+id = "C1"
+text = "build a route optimizer that works inside any supermarket, even very big ones, whatever its layout"
+source = "human"
+coverage = "Proves valid routes (walkable, all items, ends at checkout) on 20 generated stores of 4 layout families plus odd shapes, and a 300x300 store (largest size tried) within a 90 s limit; not real maps or larger."
+check = "python3 -m unittest tests.test_router.TestLayouts tests.test_router.TestScale"
+
+[[criteria]]
+id = "C2"
+text = "we can simulate step by step the route of the delivery guy, measuring in real time the KPIs: “time-to-prepare-basket” and “distance-covered”"
+source = "human"
+coverage = "Proves the CLI prints both KPIs and a per-step trace whose distance and time are recounted from the CSV by separate code; not that the live mode paces in wall-clock time."
+check = "python3 -m unittest tests.test_router.TestSimulation"
+
+[[criteria]]
+id = "C3"
+text = "compare it with the list-order route (not optimized) so we can demonstrate that our optimization algorithm successfully saves more than 30% of time for the basket to be ready"
+source = "human"
+coverage = "Proves time saved over the list-order route is above 30% on each of 32 generated 15-item cases (4 layouts, 8 seeds); not lists of fewer than 8 items or other pick-time settings."
+check = "python3 -m unittest tests.test_router.TestSavings"
+
+[[criteria]]
+id = "C4"
+text = "Given a missing, unreadable, malformed or empty map or list, or an unknown product id, when the tool runs, then it prints one error line and exits 2 with no traceback"
+source = "agent-proposed"
+check = "python3 -m unittest tests.test_router.TestBadInput"
+
+[[criteria]]
+id = "C5"
+text = "Given products sharing a cell or name, every list line is picked; given a broken or unreachable product that is not requested, the run still works, and if requested it fails clearly"
+source = "agent-proposed"
+check = "python3 -m unittest tests.test_router.TestCollisionAndBadPart"

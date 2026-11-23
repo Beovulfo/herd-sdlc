@@ -1,0 +1,10 @@
+| haiku-herd-3 | ok | clean error | ok | clean error | clean error | clean error | 6 of 6 |
+| S | 16 | 16 of 16 | 16 of 16 | 33.8% | 19.0% | 9 of 16 | 0.1 | +2.9%, +14.9% |
+| M | 16 | 13 of 16 | 13 of 13 | 69.0% | 41.3% | 13 of 13 | 0.7 | -18.7%, +1.6% |
+| L | 8 | 8 of 8 | 8 of 8 | 79.7% | 42.6% | 8 of 8 | 12.0 | -19.9%, -9.0% |
+| XL | 8 | 7 of 8 | 7 of 7 | 84.0% | 49.9% | 7 of 7 | 46.7 | -17.6%, -7.7% |
+! M random seed 0: crash: routeopt.RouteError: requested product P0181 at [62, 71] cannot be reached from the entrance (1s)
+! M clusters seed 0: crash: routeopt.RouteError: requested product P0161 at [96, 127] cannot be reached from the entrance (0s)
+! M clusters seed 1: crash: routeopt.RouteError: requested product P0033 at [96, 93] cannot be reached from the entrance (0s)
+! XL random seed 0: crash: routeopt.RouteError: requested product P0100 at [396, 410] cannot be reached from the entrance (41s)
+RESULT: FAIL (every instance finished in time with a valid route)

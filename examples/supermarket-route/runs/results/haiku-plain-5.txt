@@ -1,0 +1,13 @@
+| haiku-plain-5 | ok | clean error | ok | ok | clean error | CRASH | 5 of 6 |
+| S | 16 | 15 of 16 | 15 of 15 | 24.5% | 10.2% | 4 of 15 | 0.2 | +1.4%, +15.0% |
+| M | 16 | 14 of 16 | 14 of 14 | 65.2% | 38.9% | 14 of 14 | 0.4 | -7.2%, -0.5% |
+| L | 8 | 6 of 8 | 6 of 6 | 75.8% | 41.3% | 6 of 6 | 4.6 | -10.1%, -1.4% |
+| XL | 8 | 6 of 8 | 6 of 6 | 81.1% | 49.1% | 6 of 6 | 18.6 | -9.8%, -1.5% |
+! S clusters seed 1: timeout (30s)
+! M clusters seed 0: timeout (90s)
+! M clusters seed 1: timeout (90s)
+! L random seed 0: timeout (181s)
+! L clusters seed 0: timeout (181s)
+! XL random seed 0: timeout (301s)
+! XL clusters seed 0: timeout (301s)
+RESULT: FAIL (every instance finished in time with a valid route)

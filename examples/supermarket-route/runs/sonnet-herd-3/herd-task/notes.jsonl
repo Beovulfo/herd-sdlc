@@ -1,0 +1,10 @@
+{"at": "2026-11-23T08:02:07Z", "kind": "found", "text": "demo --items 0 crashed with a traceback (empty list reached the optimizer); found by the bad-flags test", "elapsed_s": 155}
+{"at": "2026-11-23T08:02:07Z", "kind": "fixed", "text": "demo --items 0 now exits 2 with one error line", "elapsed_s": 155}
+{"at": "2026-11-23T08:02:33Z", "kind": "tried", "text": "tests.test_route.BadInput: missing/dir/malformed/non-JSON map, 13 bad map shapes, missing/empty/binary/malformed list, unknown/duplicate id, name mismatch, bad CLI flags; each exits 2 with one stderr line", "elapsed_s": 181, "attack": "bad-input"}
+{"at": "2026-11-23T08:02:33Z", "kind": "found", "text": "binary (non-UTF-8) list file crashed with UnicodeDecodeError traceback", "elapsed_s": 181}
+{"at": "2026-11-23T08:02:33Z", "kind": "fixed", "text": "binary list now gives 'not UTF-8 text'; regression test test_binary_list", "elapsed_s": 181}
+{"at": "2026-11-23T08:02:33Z", "kind": "tried", "text": "BadInput.test_shared_cell_counts_each: two products on one cell both picked (time = distance + 2 picks); duplicate id in list rejected with clear message", "elapsed_s": 181, "attack": "collision"}
+{"at": "2026-11-23T08:02:33Z", "kind": "tried", "text": "BadInput.test_unreachable: unreachable unrequested product ignored (exit 0); requested unreachable product fails 'cannot be reached'", "elapsed_s": 181, "attack": "one-bad-part"}
+{"at": "2026-11-23T08:02:33Z", "kind": "tried", "text": "Simulation.test_steps_and_live_kpis and Layouts recount() rebuild distance, picks, time from the trace only (adjacency, walls, pick cell next to product) on 3 layouts x 5 seeds and 2 speeds", "elapsed_s": 181, "attack": "recount"}
+{"at": "2026-11-23T08:02:33Z", "kind": "tried", "text": "scale: 200x300, 60 items: 7s, saving 52%; hostile shapes: 1x1 map, 1-wide corridor, boxed-in start (random layout, caught generator bug, fixed by carving a ring)", "elapsed_s": 181}
+{"at": "2026-11-23T08:02:33Z", "kind": "open", "text": "heuristic is not provably optimal; 12-item lists can drop to 30% saving (aisles seed 7: 30.0%)", "elapsed_s": 181}

@@ -1,0 +1,12 @@
+| haiku-herd-2 | ok | clean error | ok | clean error | clean error | clean error | 6 of 6 |
+| S | 16 | 15 of 16 | 15 of 15 | 25.9% | 11.3% | 5 of 15 | 0.1 | +2.0%, +16.0% |
+| M | 16 | 13 of 16 | 13 of 13 | 67.5% | 40.0% | 13 of 13 | 0.6 | -8.0%, +3.7% |
+| L | 8 | 7 of 8 | 7 of 7 | 78.4% | 41.7% | 7 of 7 | 9.9 | -9.6%, -2.9% |
+| XL | 8 | 7 of 8 | 7 of 7 | 83.4% | 49.5% | 7 of 7 | 39.3 | -11.4%, -1.2% |
+! S random seed 1: crash: route_optimizer.RouteError: product P0033 cannot be reached from the start (0s)
+! M random seed 1: crash: route_optimizer.RouteError: product P0153 cannot be reached from the start (0s)
+! M clusters seed 0: crash: route_optimizer.RouteError: product P0161 cannot be reached from the start (0s)
+! M clusters seed 1: crash: route_optimizer.RouteError: product P0033 cannot be reached from the start (0s)
+! L random seed 0: crash: route_optimizer.RouteError: product P0242 cannot be reached from the start (7s)
+! XL random seed 0: crash: route_optimizer.RouteError: product P0234 cannot be reached from the start (27s)
+RESULT: FAIL (every instance finished in time with a valid route)

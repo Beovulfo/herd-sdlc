@@ -1,0 +1,21 @@
+# customer shopping list: ID:short name
+P009:Coffee
+P029:Lemon
+P044:Sponge
+P012:Cheese
+P022:Honey
+P045:Candle
+P038:Chips
+P002:Rice
+P001:Milk
+P047:Cola
+P027:Potato
+P033:Tuna
+P039:Nuts
+P013:Water
+P018:Sugar
+P041:Cumin
+P043:Detergent
+P031:Chicken
+P034:Soup
+P015:Soap

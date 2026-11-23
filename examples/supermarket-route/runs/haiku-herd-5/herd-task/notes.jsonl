@@ -1,0 +1,15 @@
+{"at": "2026-11-23T08:18:40Z", "kind": "found", "text": "BFS early-stop: with no targets the search stopped at once, so every product looked unreachable (test_layouts caught it)", "elapsed_s": 935}
+{"at": "2026-11-23T08:18:40Z", "kind": "fixed", "text": "BFS explores fully when no targets are given", "elapsed_s": 935}
+{"at": "2026-11-23T08:18:40Z", "kind": "found", "text": "distance matrix ran one BFS per pair of stops, about 40 times too slow on the 300x300 store", "elapsed_s": 935}
+{"at": "2026-11-23T08:18:40Z", "kind": "fixed", "text": "one BFS per stop; 300x300 store with 40 items plans in seconds", "elapsed_s": 935}
+{"at": "2026-11-23T08:18:40Z", "kind": "found", "text": "benchmark CLI gave a Python traceback for bad counts (items above products, items 0, baskets 0, too many products)", "elapsed_s": 935}
+{"at": "2026-11-23T08:18:40Z", "kind": "fixed", "text": "benchmark and make_store raise RouteError, so the CLI exits 2 with one error line", "elapsed_s": 935}
+{"at": "2026-11-23T08:18:40Z", "kind": "found", "text": "one broken product entry in the store map (on a wall, no name, duplicate id) rejected the whole map", "elapsed_s": 935}
+{"at": "2026-11-23T08:18:40Z", "kind": "fixed", "text": "broken product entries now fail only the baskets that request them; regression test in tests/test_input.py", "elapsed_s": 935}
+{"at": "2026-11-23T08:18:40Z", "kind": "tried", "text": "CLI probes: missing store and basket files, unreadable basket, binary basket, empty basket, malformed line, unknown id, grid given as a number, entrance on a wall, JSON file used as basket, bad --order, bad --delay, bad benchmark counts. All exit 2 with one error line; tests/test_input.py covers the file cases", "elapsed_s": 935, "attack": "bad-input"}
+{"at": "2026-11-23T08:18:41Z", "kind": "tried", "text": "basket line A:milk twice counts two picks (30.7 s); two products on one cell both picked at one stop; tests/test_route.py test_collision_same_cell_counted_twice", "elapsed_s": 936, "attack": "collision"}
+{"at": "2026-11-23T08:18:41Z", "kind": "tried", "text": "unreachable product not in the basket (enclosed cell) and broken map entries not in the basket do not block; tests/test_edges.py and tests/test_input.py", "elapsed_s": 936, "attack": "one-bad-part"}
+{"at": "2026-11-23T08:18:41Z", "kind": "tried", "text": "separate script att/recount.py parses the run trace text only: 143.2 s and 95.0 m match, 30.7 s and 8.0 m match; tests/test_simulation.py also recounts from the trace", "elapsed_s": 936, "attack": "recount"}
+{"at": "2026-11-23T08:18:41Z", "kind": "tried", "text": "quantifiers: four layout families (open hall, aisle grid, comb, maze) over seeds and sizes 12x9 to 61x40, enclosed cell, single item at entrance, 300x300 store with 40 items under 60 s (tests/test_layouts.py)", "elapsed_s": 936}
+{"at": "2026-11-23T08:18:41Z", "kind": "open", "text": "benchmark test takes about 100 s on this machine; its check has timeout_s = 400", "elapsed_s": 936}
+{"at": "2026-11-23T08:18:41Z", "kind": "open", "text": "2-opt is a local optimum: the walk is not proven shortest; known_limits says so", "elapsed_s": 936}

@@ -1,0 +1,15 @@
+{"at": "2026-11-23T08:11:30Z", "kind": "tried", "text": "map missing/dir/empty/not json/top-level list; layout wrong type/ragged/empty; products number/null; product bad row/id/name/out of map; list unknown id/no colon/empty id/empty/binary bytes/directory; scratchpad attacks/bad_input.py, 31 cases", "elapsed_s": 506, "attack": "bad-input"}
+{"at": "2026-11-23T08:11:30Z", "kind": "found", "text": "products set to a number or null raised a TypeError traceback", "elapsed_s": 506}
+{"at": "2026-11-23T08:11:30Z", "kind": "fixed", "text": "parse_store rejects non-list products with one error line", "elapsed_s": 506}
+{"at": "2026-11-23T08:11:30Z", "kind": "found", "text": "a broken product the list does not ask for rejected the whole map (one-bad-part)", "elapsed_s": 506}
+{"at": "2026-11-23T08:11:30Z", "kind": "fixed", "text": "broken products kept in Store.broken; only a requested one fails, with its reason; regression tests in tests/test_input.py", "elapsed_s": 506}
+{"at": "2026-11-23T08:11:31Z", "kind": "found", "text": "duplicate product ids rejected the whole map even when unrequested", "elapsed_s": 507}
+{"at": "2026-11-23T08:11:31Z", "kind": "fixed", "text": "duplicate ids mark the id broken, so only a requested duplicate fails", "elapsed_s": 507}
+{"at": "2026-11-23T08:12:25Z", "kind": "tried", "text": "tests/test_input.py test_duplicate_list_entries_are_each_counted (same product 5x counted 5 picks in scratchpad too) and test_two_products_on_one_cell_are_each_counted; not fresh", "elapsed_s": 561, "attack": "collision"}
+{"at": "2026-11-23T08:12:25Z", "kind": "tried", "text": "tests/test_input.py test_unused_unreachable_product_does_not_block_the_plan, test_broken_unrequested_product_does_not_reject_the_map, test_requested_broken_product_fails_with_its_reason, and unreachable requested product in bad-input list", "elapsed_s": 561, "attack": "one-bad-part"}
+{"at": "2026-11-23T08:12:25Z", "kind": "tried", "text": "scratchpad attacks/recount.py: 12 generated runs, run and compare output re-added with separate code; 0 mismatches", "elapsed_s": 561, "attack": "recount"}
+{"at": "2026-11-23T08:12:25Z", "kind": "tried", "text": "scratchpad attacks/hostile.py: degenerate 1x1, 1-row corridor, walled start, same product 5x, unreachable, odd sizes 1x50 50x1 7x9 101x33 across 4 shapes x 3 seeds, 500x500 scale", "elapsed_s": 561}
+{"at": "2026-11-23T08:12:25Z", "kind": "open", "text": "500x500 store with 60 items takes about 26 s to compare; the 60 s test limit covers 300x300 only", "elapsed_s": 561}
+{"at": "2026-11-23T08:12:25Z", "kind": "open", "text": "the 30% saving is for 15-item lists; a 6-item demo list saves 25.7%, below 30%", "elapsed_s": 561}
+{"at": "2026-11-23T08:12:25Z", "kind": "open", "text": "not fresh-context: attacks were run by the same agent that built the code", "elapsed_s": 561}
+{"at": "2026-11-23T08:12:32Z", "kind": "open", "text": "review skipped: this run cannot spawn a fresh-context reviewer, so the change is unreviewed", "elapsed_s": 568}

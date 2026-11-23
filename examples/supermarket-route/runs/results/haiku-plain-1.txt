@@ -1,0 +1,11 @@
+| haiku-plain-1 | ok | clean error | clean error | clean error | clean error | clean error | 6 of 6 |
+| S | 16 | 16 of 16 | 16 of 16 | 25.6% | 11.0% | 4 of 16 | 0.1 | +1.9%, +17.0% |
+| M | 16 | 12 of 16 | 12 of 12 | 65.4% | 39.8% | 12 of 12 | 0.9 | -7.5%, +4.8% |
+| L | 8 | 8 of 8 | 8 of 8 | 78.5% | 41.6% | 8 of 8 | 16.8 | -10.3%, -2.9% |
+| XL | 8 | 7 of 8 | 7 of 7 | 83.2% | 49.4% | 7 of 7 | 50.2 | -8.9%, -1.2% |
+! M random seed 0: crash: ValueError: P0181 item181 cannot be reached from ENTRANCE (0s)
+! M maze seed 1: crash: ValueError: product P0085 is not on a walkable cell (0s)
+! M clusters seed 0: crash: ValueError: P0161 item161 cannot be reached from ENTRANCE (0s)
+! M clusters seed 1: crash: ValueError: P0033 item33 cannot be reached from ENTRANCE (0s)
+! XL random seed 0: crash: ValueError: P0100 item100 cannot be reached from ENTRANCE (0s)
+RESULT: FAIL (every instance finished in time with a valid route)

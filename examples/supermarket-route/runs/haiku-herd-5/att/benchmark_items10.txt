@@ -1,0 +1,1 @@
+baskets=50 min=28.1 % median=49.0 % max=66.2 %

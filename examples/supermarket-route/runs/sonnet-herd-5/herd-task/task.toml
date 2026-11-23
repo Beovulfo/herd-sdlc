@@ -1,0 +1,47 @@
+# The request said: "build a route optimizer that works inside any supermarket, even very big ones, whatever its layout. It uses as input the MAP of the supermarket with all the products localised in the map with the product ID and the short-name, and the list of products (id:short name) requested by a customer. The goal is to find the best route for the “delivery guy” that is preparing the basket and shipping the shopping list to the customer. Success looks like we can simulate step by step the route of the delivery guy, measuring in real time the KPIs: “time-to-prepare-basket” and “distance-covered”, and compare it with the list-order route (not optimized) so we can demonstrate that our optimization algorithm successfully saves more than 30% of time for the basket to be ready"
+goal = "Route optimizer for the supermarket picker: map and shopping list in, optimized route plus step simulation with KPIs out, compared with list order"
+
+test_budget = "Unit/integration on generated stores: 4 layout families (aisles, islands, open, maze) x seeds, lists of 10-40 items, up to 300x300 cells and 3000 products. Optimality is checked against brute force only on 6-item lists. Not tested: real store maps, one-way aisles, queues, item weight, multi-picker."
+known_limits = "The 30% claim holds for lists of about 10 or more items in generated stores with random list order; short lists (1-3 items) or a list already in shelf order save little. Above 10 stops the order is a heuristic (2-opt plus or-opt), not proven optimal. Walk speed 1.2 m/s and 5 s per pick are assumptions, configurable in code only. Map is a grid; the picker uses the first reachable cell next to a shelf."
+
+[[criteria]]
+id = "C1"
+text = "build a route optimizer that works inside any supermarket, even very big ones, whatever its layout"
+source = "human"
+coverage = "Proves route found and >30% saving on 4 generated layout families, and largest tried 301x301 cells, 3000 products, 60 items, limit 30s each; not real maps."
+check = "python3 -m unittest tests.test_route_optimizer.Scale && python3 -m unittest tests.test_route_optimizer.Saving.test_over_30_percent_every_layout"
+
+[[criteria]]
+id = "C2"
+text = "find the best route for the “delivery guy” that is preparing the basket"
+source = "human"
+coverage = "Proves exact optimum on 6-item lists (vs brute force) and heuristic within 8% of optimum on 9 items; not optimality on large lists."
+check = "python3 -m unittest tests.test_route_optimizer.Saving.test_optimal_on_small_lists && python3 -m unittest tests.test_route_optimizer.Saving.test_heuristic_close_to_optimal"
+
+[[criteria]]
+id = "C3"
+text = "we can simulate step by step the route of the delivery guy, measuring in real time the KPIs: “time-to-prepare-basket” and “distance-covered”"
+source = "human"
+coverage = "Proves each step is a legal adjacent move, all items picked, KPIs recomputed from the trace by separate code, and the CLI prints both KPIs; not wall-clock pacing."
+check = "python3 -m unittest tests.test_route_optimizer.Simulation && python3 -m unittest tests.test_route_optimizer.Cli"
+
+[[criteria]]
+id = "C4"
+text = "compare it with the list-order route (not optimized) so we can demonstrate that our optimization algorithm successfully saves more than 30% of time for the basket to be ready"
+source = "human"
+coverage = "Proves time saving above 30% for 20 generated stores, lists of 10-40 items; short lists may save less."
+check = "python3 -m unittest tests.test_route_optimizer.Saving.test_over_30_percent_every_layout"
+
+[[criteria]]
+id = "C5"
+text = "Given bad input (map, list, unknown id, empty list, unreadable file), when run, then one error line and exit 2, no traceback"
+source = "agent-proposed"
+coverage = "Proves 15+ malformed map, list and file cases fail cleanly; not every possible malformed value."
+check = "python3 -m unittest tests.test_route_optimizer.BadInput"
+
+[[criteria]]
+id = "C6"
+text = "Given products sharing a cell or ids repeated, or unreachable or broken unrequested entries, then each requested item is counted and only bad requested ones fail"
+source = "agent-proposed"
+coverage = "Proves same-cell, repeated-id, duplicate-id, broken and unreachable cases; not every overlap shape."
+check = "python3 -m unittest tests.test_route_optimizer.Collision && python3 -m unittest tests.test_route_optimizer.OneBadPart"

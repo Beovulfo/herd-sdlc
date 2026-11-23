@@ -1,0 +1,6 @@
+| sonnet-plain-4 | ok | clean error | clean error | clean error | CRASH | CRASH | 4 of 6 |
+| S | 16 | 16 of 16 | 16 of 16 | 23.9% | 10.2% | 4 of 16 | 0.1 | +0.2%, +3.0% |
+| M | 16 | 16 of 16 | 16 of 16 | 65.4% | 39.0% | 16 of 16 | 0.8 | -9.5%, +5.6% |
+| L | 8 | 8 of 8 | 8 of 8 | 77.9% | 41.3% | 8 of 8 | 13.3 | -13.9%, -1.1% |
+| XL | 8 | 8 of 8 | 8 of 8 | 82.8% | 49.1% | 8 of 8 | 55.0 | -7.5%, +34.2% |
+RESULT: PASS (every instance finished in time with a valid route)

@@ -1,0 +1,53 @@
+goal = "Build a route optimizer for a supermarket delivery picker: given a store map with product locations and a customer shopping list, find a short picking route, simulate it step by step with time-to-prepare-basket and distance-covered KPIs, and compare against the list-order route (target: more than 30% time saving)."
+
+test_budget = "Unit tests on generated stores: 4 layout families x 25 seeds (library level, plus CLI for bad input); one 300x300 store with 1000 products and a 60-item list under 120 s; a 20-seed benchmark of 60x40 aisle stores. Not tested: real supermarket maps, the speed of real pickers, moves that are not one grid cell at a time."
+
+known_limits = "The 30% claim holds on generated aisle stores with random customer list orders (mean 61.9%, min 55.3%); it is not shown for real stores. Time is a model (1 s per cell, 5 s per pick), not a measurement of people. The optimizer is nearest-neighbour plus 2-opt, not provably optimal: on 7-item lists it matched the brute-force optimum in 37 of 40 stores, worst 13% longer. Scale: 300x300 with 60 items runs in 7.5 s; 500x500 with 100 items took 31 to 35 s, not under a check."
+
+[[criteria]]
+id = "C1"
+text = "works inside any supermarket, even very big ones, whatever its layout"
+source = "human"
+coverage = "Proves valid, complete routes on generated open, aisle, random-wall and split layouts over many seeds, and one 300x300 store with a time limit. Does not prove real store plans or layouts with more than 1000 products."
+check = "python3 -m unittest test_routeopt.Layouts test_routeopt.Scale"
+timeout_s = 170
+
+[[criteria]]
+id = "C2"
+text = "simulate step by step the route of the delivery guy, measuring in real time the KPIs: \"time-to-prepare-basket\" and \"distance-covered\""
+source = "human"
+coverage = "Proves each simulated move is one free cell and the printed KPIs match a separate recount of the step lines. Does not prove wall-clock pacing of the output."
+check = "python3 -m unittest test_routeopt.Simulate"
+timeout_s = 120
+
+[[criteria]]
+id = "C3"
+text = "compare it with the list-order route (not optimized)"
+source = "human"
+coverage = "Proves the compare output reports both routes with the same picks, and the optimized route is never longer than the list-order route. Does not prove the customer's list order is realistic."
+check = "python3 -m unittest test_routeopt.Compare"
+timeout_s = 120
+
+[[criteria]]
+id = "C4"
+text = "successfully saves more than 30% of time for the basket to be ready"
+source = "human"
+coverage = "Proves the mean time-to-prepare-basket saving is above 30% over 20 generated aisle stores with random list orders, and prints the min and max. Does not prove a saving for real stores or for other layouts."
+check = "python3 routeopt.py bench --min-saving 30"
+timeout_s = 170
+
+[[criteria]]
+id = "C5"
+text = "Given an unknown product id, a missing map, a malformed file or a product that is broken, when the CLI runs, then it fails with one clear message and no traceback, unless the broken product is not on the list"
+source = "agent-proposed"
+coverage = "Proves exit 2 and one error line for each bad-input case, and that an unrequested broken map entry is skipped with a warning. Does not prove every possible malformed JSON."
+check = "python3 -m unittest test_routeopt.BadInput"
+timeout_s = 120
+
+[[criteria]]
+id = "C6"
+text = "Given two products on one cell or two list lines for one product, when the route runs, then each one is picked and counted"
+source = "agent-proposed"
+coverage = "Proves shared cells and repeated list lines are counted as separate picks. Does not prove a customer list with thousands of items."
+check = "python3 -m unittest test_routeopt.Collision"
+timeout_s = 120

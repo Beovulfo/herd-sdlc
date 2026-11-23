@@ -1,0 +1,41 @@
+goal = "Build a route optimizer for supermarket picking: given a store map with product locations (id, short name) and a customer shopping list (id:short name), compute a picking route for the delivery guy, simulate it step by step with live KPIs time-to-prepare-basket and distance-covered, and compare against the list-order route; the optimized route must save more than 30% time."
+
+test_budget = "Unit tests (stdlib unittest) on generated layouts, one scale test on a 300x300 store, one demo-store savings test. Not tested: real supermarket maps, stores above 300x300, wall-clock timing on other machines, a UI."
+known_limits = "Savings depend on the layout and the basket. The 30% claim is shown on the demo store and on generated baskets, not guaranteed for every store. Stores with unreachable products are rejected, not planned around."
+
+[[criteria]]
+id = "C1"
+text = "works inside any supermarket, even very big ones, whatever its layout"
+source = "human"
+coverage = "Proves planning on several generated layout shapes (open hall, aisles, maze, rooms) and one 300x300 store within a time limit; not real maps or stores above 300x300"
+check = "python3 -m unittest tests.test_layouts"
+timeout_s = 120
+
+[[criteria]]
+id = "C2"
+text = "Given a store map and a customer list, when the route is simulated, then it moves step by step and shows time-to-prepare-basket and distance-covered live after each step"
+source = "agent-proposed"
+coverage = "Checks each step is one grid move, KPIs grow monotonically and the final KPIs equal the planned route totals; not the display"
+check = "python3 -m unittest tests.test_simulate"
+
+[[criteria]]
+id = "C3"
+text = "measuring in real time the KPIs: time-to-prepare-basket and distance-covered, and compare it with the list-order route (not optimized)"
+source = "human"
+coverage = "Proves both KPIs are reported for the optimized and the list-order route and the comparison is computed from them; not a live UI"
+check = "python3 -m unittest tests.test_compare"
+
+[[criteria]]
+id = "C4"
+text = "successfully saves more than 30% of time for the basket to be ready"
+source = "human"
+coverage = "Proves the optimized route saves more than 30% time on the demo store and on the generated benchmark baskets; not every store or basket"
+check = "python3 -m unittest tests.test_savings"
+timeout_s = 120
+
+[[criteria]]
+id = "C5"
+text = "Given an empty list, or a product id that is not on the map, when the route is planned, then it returns an empty route or raises a clear error and never a wrong route"
+source = "agent-proposed"
+coverage = "Checks empty basket, unknown id and unreachable product; not malformed JSON"
+check = "python3 -m unittest tests.test_edges"

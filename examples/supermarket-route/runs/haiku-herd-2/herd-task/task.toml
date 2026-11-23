@@ -1,0 +1,45 @@
+goal = "Build a route optimizer for a delivery guy preparing a supermarket basket. Works in any supermarket layout. Input: map of the store with product IDs and short names localised on it, plus a customer's product list (id:short name). Output: best route; simulate step by step, live KPIs time-to-prepare-basket and distance-covered, compare with list-order route; demonstrate more than 30% time saving."
+
+test_budget = "Unit tests on hand-made maps and generated aisle, hall and maze layouts up to 300x300 cells; one 300x300 scale check with 60 items; benchmark of 20 seeded stores. Not tested: real store maps, wall-clock timing of the live display, calibration of walk speed and pick time."
+
+known_limits = "The 30 percent saving holds for customer lists in random order against a store with long aisles. The route is a heuristic, not proven optimal. Each product is picked from its first open neighbour only. Walk speed and pick time are fixed constants."
+
+[[criteria]]
+id = "C1"
+text = 'It uses as input the MAP of the supermarket with all the products localised in the map with the product ID and the short-name, and the list of products (id:short name) requested by a customer.'
+source = "human"
+coverage = "Proves the map and list are read and matched by product ID and short name, with errors on mismatch. Does not prove the map format matches a real store export."
+check = "python3 -m unittest tests.test_input"
+
+[[criteria]]
+id = "C2"
+text = 'works inside any supermarket, even very big ones, whatever its layout.'
+source = "human"
+coverage = "Proves valid routes on generated aisle, hall and maze layouts of several shapes and sizes, and a 300x300 store with 60 items in under 30 seconds. Does not prove stores beyond 300x300 cells."
+check = "python3 -m unittest tests.test_layouts tests.test_scale"
+
+[[criteria]]
+id = "C3"
+text = 'Success looks like we can simulate step by step the route of the delivery guy, measuring in real time the KPIs: "time-to-prepare-basket" and "distance-covered"'
+source = "human"
+coverage = "Proves one event per step with both KPIs, final KPIs equal the planned route, and the live CLI output. Does not prove wall-clock real time under load."
+check = "python3 -m unittest tests.test_simulation"
+
+[[criteria]]
+id = "C4"
+text = 'compare it with the list-order route (not optimized) so we can demonstrate that our optimization algorithm successfully saves more than 30% of time for the basket to be ready'
+source = "human"
+coverage = "Proves the aggregate time saving over 20 seeded stores is above 30 percent and reports it. Does not prove the saving for every store or every customer list."
+check = "python3 -m unittest tests.test_savings"
+
+[[criteria]]
+id = "C5"
+text = "The optimized route is never longer than the list-order route, and visits each requested product exactly once."
+source = "agent-proposed"
+check = "python3 -m unittest tests.test_layouts"
+
+[[criteria]]
+id = "C6"
+text = "An unknown product id, a name that differs from the map, a wall start, and an unreachable product each fail with a clear error."
+source = "agent-proposed"
+check = "python3 -m unittest tests.test_input"

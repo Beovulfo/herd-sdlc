@@ -982,6 +982,11 @@ def setup(user):
         unfinished = not own.exists() and folder.is_dir() and {f.name for f in folder.iterdir()} <= ours
         if folder.exists() and not unfinished and not (f"name: herd-{name}" in text and "/scripts/herd.py" in text):
             raise ValueError(f"{own.parent}: not written by `herd setup`; move it, then run `herd setup` again")
+    top = None if user else toplevel(root)
+    if top and _git(top, "rev-parse", "--git-dir").strip():  # before writing, so a failed write leaks nothing
+        rel = re.sub(r"([*?\[\\])", r"\\\1", root.resolve().relative_to(top.resolve()).as_posix())  # gitignore escapes
+        pre = "/" if rel == "." else f"/{rel}/"
+        _ignore_locally(top, [f"{pre}.agents/skills/herd-*/", f"{pre}AGENTS.md", f"{pre}.codex/hooks.json"])
     try:
         for name in SKILL_NAMES:
             dest = skills / f"herd-{name}"
@@ -993,11 +998,6 @@ def setup(user):
             path.write_text(text)
     except OSError as e:
         raise ValueError(f"cannot write {e.filename}: {e.strerror}; fix it, then run `herd setup` again") from None
-    top = None if user else toplevel(root)
-    if top and _git(top, "rev-parse", "--git-dir").strip():
-        rel = root.resolve().relative_to(top.resolve()).as_posix()
-        pre = "/" if rel == "." else f"/{rel}/"
-        _ignore_locally(top, [f"{pre}.agents/skills/herd-*/", f"{pre}AGENTS.md", f"{pre}.codex/hooks.json"])
     return skills, agents, hooks
 
 
@@ -1215,7 +1215,8 @@ def main(argv):
             print(f"rules: {agents} (the Herd block; agents without a Stop hook rely on it)")
             print(f"Stop gate: {hooks}; trust it once in Codex with /hooks")
             if not args:
-                print("they name this Herd copy by absolute path, so they are in .git/info/exclude, never committed")
+                print("they name this Herd copy by absolute path, so AGENTS.md, .codex/hooks.json and the skill folders "
+                      "are in .git/info/exclude: git no longer shows them, even your own content in them")
     except UsageError:
         print(f"herd: usage: {USAGE[cmd]}", file=sys.stderr)
         return 1

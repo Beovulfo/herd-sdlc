@@ -361,7 +361,7 @@ class TestPrivacy(Base):
 
 class TestRoot(Base):
     def test_project_in_a_subfolder(self):
-        sub = self.project / "packages" / "app"
+        sub = self.project / "packages" / "app[1]*"  # gitignore wildcards in the name must be escaped
         (sub / "src").mkdir(parents=True)
         (sub / "herd.toml").write_text("")
         p = self.setup_cmd(cwd=sub / "src")
@@ -371,7 +371,13 @@ class TestRoot(Base):
             self.assertFalse((self.project / f).exists(), f)
         status = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all"], cwd=self.project,
                                 capture_output=True, text=True).stdout
-        self.assertEqual(status.split(), ["??", "packages/app/herd.toml"])
+        self.assertEqual(status.split(), ["??", '"packages/app[1]*/herd.toml"'] if '"' in status
+                         else ["??", "packages/app[1]*/herd.toml"])
+        sibling = self.project / "packages" / "app1x"  # a wrong, unescaped pattern would hide this one too
+        sibling.mkdir()
+        (sibling / "AGENTS.md").write_text("x")
+        self.assertIn("app1x/AGENTS.md", subprocess.run(["git", "status", "--porcelain", "--untracked-files=all"],
+                                                       cwd=self.project, capture_output=True, text=True).stdout)
         herd = f"{shlex.quote(sys.executable)} {shlex.quote(str(HERD))}"
         check = "python3 -c \"import sys; sys.exit(1)\""
         self.assertEqual(self.sh(f"{herd} init q 'x' --quick {shlex.quote(check)}", cwd=sub / "src").returncode, 0)

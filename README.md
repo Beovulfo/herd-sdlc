@@ -27,6 +27,7 @@
 
 <p align="center">
   <img src="assets/demo.gif" alt="A real /herd:run session in Claude Code, with a panel above it lighting the current step: intake, criteria, red first, build, break it, review, verify, evidence" width="860">
+  <br><sub>Recorded with Herd 0.2.6. The steps are the same in 0.3.2; the command output is shorter now, and break it also runs four standard attacks, each with a command.</sub>
 </p>
 
 Herd is a lightweight [Claude Code](https://claude.com/claude-code) plugin that runs a task end to end with as little human input as possible. You give it a goal and, if you like, success criteria. The agent plans, builds, tries to break its own work, reviews and verifies. It only stops when **runnable checks prove the criteria pass**, and it only asks you something when an action is irreversible or a real trade-off needs a human.
@@ -93,14 +94,16 @@ The task then runs on a new branch in its own worktree, cut from the branch you 
 
 ```mermaid
 flowchart LR
-    A[Goal] --> B[Intake and risk floor<br/>opt-in: own worktree]
+    A[Goal] --> B[Intake and risk floor<br/>branch herd/slug<br/>opt-in: own worktree]
     B -->|standard| C[Criteria with checks]
     B -->|trivial: quick route| Q[One criterion, one check]
-    C --> D[Build: plan, tests first, code]
-    Q --> D
-    D --> X[Break it<br/>generated cases, scale]
+    C --> R[Red first<br/>checks fail before the work]
+    Q --> R
+    R --> D[Build: plan, tests first, code]
+    D -->|standard| X[Break it<br/>generated cases, scale<br/>4 attacks, each with a command]
+    D -->|quick route| F
     X --> E[Fresh-eyes review<br/>medium and high risk]
-    E --> F[herd verify<br/>run every check]
+    E --> F[herd verify<br/>criteria and attack commands]
     F -->|failing| D
     F -->|passing| G[herd done<br/>evidence report]
     G -.->|Stop hook| F
@@ -108,7 +111,7 @@ flowchart LR
 ```
 
 1. **Intake.** The task gets a folder, `.herd/tasks/<slug>/task.toml`, and a risk floor computed from path rules in `herd.toml` (migrations, auth, billing, and so on). The agent can raise the risk, never lower it. A trivial change takes the **quick route**: one criterion and one check, no criteria interview, no approval question, no review. It is refused at a `high` risk floor and still ends in fresh passing evidence. With `--worktree` (opt-in) the task starts on its own branch in its own git worktree: see [Several tasks at once](#several-tasks-at-once).
-2. **Criteria.** Every criterion has a `check`: a shell command where exit 0 means pass. Criteria you write are authoritative: the agent quotes your words, adds a `coverage` note saying what the check proves and what it does not, and the report flags any `human` criterion that is not a verbatim quote. A criterion with no check is `unchecked` and is never counted as met. `herd detect` proposes the project's real test command.
+2. **Criteria.** Every criterion has a `check`: a shell command where exit 0 means pass. Criteria you write are authoritative: the agent quotes your words, adds a `coverage` note saying what the check proves and what it does not, and the report flags any `human` criterion that is not a verbatim quote. A criterion with no check is `unchecked` and is never counted as met. `herd detect` proposes the project's real test command. Before any work, `herd verify` runs the checks once: they should fail (red first), and the report shows how many did.
 3. **Build.** Tests first, small steps, on a branch. Superpowers is used for planning, TDD and subagents when installed.
 4. **Break it, then review.** The agent tries to break its own work on exactly what the request promises: the words `any`, `every`, `very big` become generated cases of different shapes and a scale run. It always also runs four standard attacks: bad input at every entry point, collisions, one broken entry it does not need, and a recount of every reported number from the output. Each attack is logged with a command that shows it (`herd note --tried --attack <name> --check "<command>"`); `herd verify` runs these commands like criterion checks, and `herd done` and the Stop gate refuse until each attack has one that passes (or an `n/a:` reason). Each attempt, failure and fix is logged with `herd note`. For medium and high risk, a fresh-context reviewer then looks at the diff.
 5. **Verify.** `herd verify` runs every check and stores evidence: status, exit code, output tail, commit SHA, a fingerprint of the workspace, a timestamp, how many checks failed on the first run (a check that was green before any work is visible), and the wall-clock time since `herd init`. A check that exits 0 but whose output says it ran zero tests (`Ran 0 tests`, `no tests ran`, `[no test files]` and the like) is marked in the evidence and the report warns about it. The warning is advisory: the Stop gate does not change. The command prints one summary line plus only the criteria that need attention.
@@ -142,20 +145,22 @@ flowchart LR
     CLI["herd CLI<br/>scripts/herd.py"]
     T["herd_triage<br/>risk floor"]
     D["herd_detect<br/>test command"]
-    G["git and gh<br/>worktrees, herd pr"]
+    G["git and gh<br/>task branch, worktrees, herd pr"]
     subgraph State[".herd/tasks/&lt;slug&gt;/"]
         TT["task.toml<br/>goal, criteria, checks"]
-        EV["evidence.json<br/>results, SHA, fingerprint"]
-        NO["notes.jsonl<br/>caveats"]
+        NO["notes.jsonl<br/>caveats, attacks with commands"]
+        EV["evidence.json<br/>criteria and attack results,<br/>SHA, fingerprint"]
+        RP["evidence.md<br/>the report"]
     end
     S -->|instruct the agent to run| CLI
     H -->|gate, lint| CLI
     CLI --> T
     CLI --> D
-    CLI -->|opt-in| G
+    CLI --> G
     CLI -->|reads| TT
-    CLI -->|runs checks, writes| EV
     CLI -->|appends| NO
+    CLI -->|runs checks and attack commands, writes| EV
+    CLI -->|herd done writes| RP
 ```
 
 - **Short skills, details on demand, quality first.** The run skill holds the steps; the quick route, the worktree start, the adversarial pass and the PR step are separate files the agent must read in full when that step applies. Where skipping a file would cost quality, the CLI enforces the step itself (the adversarial attacks at `herd done`). Budget tests keep the skills and the command output from growing back.

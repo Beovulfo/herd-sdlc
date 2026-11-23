@@ -564,6 +564,12 @@ def verify(root, slug):
     head = _git(root, "rev-parse", "HEAD").decode().strip() or "none"
     dirty = bool(_git(root, "status", "--porcelain", "--", *OWN_FILES).strip())
     d = _dir(root, slug)
+    old_ev = _state(d / "evidence.json", {})
+    if not (d / "start.json").exists() and old_ev and "risk" not in old_ev:  # a task verified by Herd before 0.4.0:
+        (d / "start.json").write_text(json.dumps({"head": None, "legacy": True}) + "\n")  # red first not checked,
+        if not (d / "frozen.json").exists():  # and the human criteria are frozen from now on
+            (d / "frozen.json").write_text(json.dumps(
+                {c["id"]: {"text": c["text"], "source": c["source"], "check": c["check"]} for c in task["criteria"]}))
     start = _state(d / "start.json", {})  # missing or corrupt: red first and the stored risk are unknown
     changed = changed_since(root, start.get("head"))
     red_path, frozen_path = d / "red.json", d / "frozen.json"
@@ -642,7 +648,7 @@ def verify(root, slug):
           "red": {"failed": red.get("failed", 0), "total": red.get("total", 0), "code_before": red.get("code_before"),
                   "code_hidden": hidden, "stashed": red.get("stashed") or []} if red else None, "red_unreadable": red_unreadable, "timing": timing,
           "human_not_verbatim": human_not_verbatim, "risk": risk_of(root, start, changed),
-          "human_changed": human_changed, "checks_changed": checks_changed, "human_checks_changed": human_checks,
+          "legacy": bool(start.get("legacy")), "human_changed": human_changed, "checks_changed": checks_changed, "human_checks_changed": human_checks,
           "added_after_red": added,
           "warnings": warnings, "escalate": [cid for cid, n in fails.items() if n >= ESCALATE_AFTER],
           "fingerprint": fingerprint(root), "task_sha": _task_sha(root, slug),
@@ -813,7 +819,8 @@ def _rule_lines(ev, notes):
     out = []
     code = _early_code(ev)
     if ev.get("red") and ev["red"].get("code_before") is None:
-        out.append("Red first not checked: no git commit when the task started")
+        out.append("Red first not checked: the task started before Herd 0.4.0 or with no git commit"
+                   + ("; human criteria frozen only from the upgrade" if ev.get("legacy") else ""))
     if ev.get("red_unreadable"):
         out.append("Red first and the criteria freeze are unknown: Herd's state files are missing or unreadable")
     if code:

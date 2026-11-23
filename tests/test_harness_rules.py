@@ -494,6 +494,21 @@ class TestSecondReview(Base):
         herd.verify(self.root, "t1")
         self.assertIn("the code changed after the review", " ".join(herd.problems(self.root, "t1")))
 
+    def test_a_task_verified_by_an_older_herd_is_not_blocked_after_the_upgrade(self):
+        self.start()
+        d = self.root / ".herd/tasks/t1"
+        (d / "start.json").unlink()  # as 0.3.x left it: no start.json, no frozen.json, evidence without risk
+        (d / "evidence.json").write_text(json.dumps({"task": "t1", "results": []}))
+        (self.root / "app.py").write_text("def f():\n    return 1\n")
+        self.attacks_and_review()
+        ev = herd.verify(self.root, "t1")
+        self.assertEqual(herd.problems(self.root, "t1"), [])
+        self.assertIn("Red first not checked: the task started before Herd 0.4.0", herd.report(ev))
+        narrowed = TASK.replace('text = "It must return 1 for any call"', 'text = "It must return 1 for one call"')
+        (d / "task.toml").write_text(narrowed)
+        herd.verify(self.root, "t1")
+        self.assertIn("C1 changed", " ".join(herd.problems(self.root, "t1")))  # frozen from the upgrade on
+
     def test_the_gate_reason_says_to_escalate(self):
         self.start()
         for _ in range(4):

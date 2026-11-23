@@ -1,0 +1,32 @@
+goal = "Build a supermarket route optimizer: plan the delivery guy's route through any supermarket layout to prepare a basket, simulate it step by step, report time-to-prepare-basket and distance-covered live, and compare with the list-order route (target: more than 30% time saved)."
+
+test_budget = "Unit tests on small hand-made maps; generated layouts of 4 shapes (25x25, 5 seeds each); one 300x300 scale run with a 60 s limit; a benchmark of 30 generated stores with 3 random lists each (90 runs). Not tested: real store maps, a GUI, device or wall-clock timing, stores above 300x300."
+
+known_limits = "The 30% claim is measured on generated stores with random product placement and random list order, not on real supermarkets. Time model: 1 s per grid step, 2 s per pick (both fixed in optimizer/simulate.py). The saving shrinks with short lists, small stores, or expensive picks."
+
+[[criteria]]
+id = "C1"
+text = "build a route optimizer that works inside any supermarket, even very big ones, whatever its layout."
+source = "human"
+coverage = "Proves a full valid route on generated layouts of 4 shapes; largest size tried is 300x300 with a 60 s time limit. Does not prove real store maps or stores above 300x300."
+check = "python3 -m unittest tests.test_layouts"
+
+[[criteria]]
+id = "C2"
+text = "Success looks like we can simulate step by step the route of the delivery guy, measuring in real time the KPIs: \"time-to-prepare-basket\" and \"distance-covered\""
+source = "human"
+coverage = "Proves each move is one free adjacent cell, KPIs update at every event and match a separate recount; does not prove wall-clock real-time playback."
+check = "python3 -m unittest tests.test_simulate"
+
+[[criteria]]
+id = "C3"
+text = "compare it with the list-order route (not optimized) so we can demonstrate that our optimization algorithm successfully saves more than 30% of time for the basket to be ready"
+source = "human"
+coverage = "Proves more than 30% aggregate time saving over 90 generated runs versus list order; does not prove the saving on real stores or other time models."
+check = "python3 -m unittest tests.test_savings"
+
+[[criteria]]
+id = "C4"
+text = "Given a bad map, list or unreachable requested product, when the CLI runs, then it prints one error line and exits 2 without a traceback; an unused unreachable product does not block the plan."
+source = "agent-proposed"
+check = "python3 -m unittest tests.test_input"

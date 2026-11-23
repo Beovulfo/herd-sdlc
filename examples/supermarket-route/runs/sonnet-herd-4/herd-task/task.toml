@@ -1,0 +1,37 @@
+# The request said: "build a route optimizer that works inside any supermarket, even very big ones, whatever its layout. ... Success looks like we can simulate step by step the route of the delivery guy, measuring in real time the KPIs: "time-to-prepare-basket" and "distance-covered", and compare it with the list-order route (not optimized) so we can demonstrate that our optimization algorithm successfully saves more than 30% of time for the basket to be ready"
+goal = "Route optimizer for a supermarket map and shopping list, with a step-by-step simulation, KPIs and a comparison against list-order picking"
+test_budget = "Unit/integration tests on generated stores (aisles, open, maze) up to 400x400 cells and 40 items, plus CLI end to end. Not tested: real store maps, one-way aisles, shelf-side access, congestion, item weight or fragility."
+known_limits = "Savings depend on the list: lists of 1-3 items, or items already in pick order, save little. Heuristic (nearest neighbour + 2-opt), not provably optimal. Grid model with uniform walking speed and fixed pick time. Maps over about 1000x1000 cells get slow."
+
+[[criteria]]
+id = "C1"
+text = "works inside any supermarket, even very big ones, whatever its layout"
+source = "human"
+coverage = "Generated aisle, open and maze layouts, largest tried: 400x400 store with 40 items, time limit 60s; disconnected and blocked maps; not real maps or stores above 1000x1000"
+check = "python3 -m unittest tests.test_routeopt.Savings tests.test_routeopt.Scale tests.test_routeopt.OneBadPart"
+
+[[criteria]]
+id = "C2"
+text = "we can simulate step by step the route of the delivery guy, measuring in real time the KPIs: “time-to-prepare-basket” and “distance-covered”"
+source = "human"
+coverage = "Replays the per-step trace with separate code: each move is one walkable cell, running distance and time match, every requested item is picked; not the live display"
+check = "python3 -m unittest tests.test_routeopt.Recount tests.test_routeopt.Collisions"
+
+[[criteria]]
+id = "C3"
+text = "compare it with the list-order route (not optimized) so we can demonstrate that our optimization algorithm successfully saves more than 30% of time for the basket to be ready"
+source = "human"
+coverage = "Time saved over 30% on 15 generated stores (3 layouts, 5 seeds, 20 items) and never worse than list order; within 10% of brute force on 7 items; not tiny lists"
+check = "python3 -m unittest tests.test_routeopt.Savings"
+
+[[criteria]]
+id = "C4"
+text = "Given a missing, malformed or inconsistent map or list, when routeopt runs, then it prints one clear error and exits 2, never a traceback"
+source = "agent-proposed"
+check = "python3 -m unittest tests.test_routeopt.BadInput"
+
+[[criteria]]
+id = "C5"
+text = "Given a generated map and list, when the CLI runs with --min-saving 30, then it prints both KPIs and exits 0"
+source = "agent-proposed"
+check = "python3 -m unittest tests.test_routeopt.Scale.test_cli_end_to_end"

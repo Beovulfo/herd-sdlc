@@ -1,0 +1,13 @@
+| haiku-plain-6 | ok | clean error | ok | CRASH | clean error | clean error | 5 of 6 |
+| S | 16 | 15 of 16 | 15 of 15 | 26.0% | 11.0% | 4 of 15 | 0.1 | +1.4%, +15.0% |
+| M | 16 | 14 of 16 | 14 of 14 | 67.1% | 39.8% | 14 of 14 | 1.0 | -6.8%, +0.4% |
+| L | 8 | 6 of 8 | 6 of 6 | 76.7% | 41.6% | 6 of 6 | 16.5 | -10.9%, -1.4% |
+| XL | 8 | 6 of 8 | 6 of 6 | 81.8% | 49.4% | 6 of 6 | 62.7 | -10.1%, -1.5% |
+! S clusters seed 1: crash: ValueError: cell (20, 1) is unreachable from (1, 38) (0s)
+! M clusters seed 0: crash: ValueError: cell (20, 68) is unreachable from (1, 98) (0s)
+! M clusters seed 1: crash: ValueError: cell (20, 4) is unreachable from (1, 98) (0s)
+! L random seed 0: crash: ValueError: cell (369, 244) is unreachable from (1, 298) (0s)
+! L clusters seed 0: crash: ValueError: cell (20, 162) is unreachable from (1, 298) (0s)
+! XL random seed 0: crash: ValueError: cell (2, 360) is unreachable from (1, 398) (0s)
+! XL clusters seed 0: crash: ValueError: cell (20, 32) is unreachable from (1, 398) (0s)
+RESULT: FAIL (every instance finished in time with a valid route)

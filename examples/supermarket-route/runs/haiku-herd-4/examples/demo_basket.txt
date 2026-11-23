@@ -1,0 +1,12 @@
+P007:tomato
+P013:coffee
+P009:apple
+P012:cheese
+P027:cereal
+P029:soap
+P024:sugar
+P017:chicken
+P021:lettuce
+P003:eggs
+P011:yogurt
+P022:potato

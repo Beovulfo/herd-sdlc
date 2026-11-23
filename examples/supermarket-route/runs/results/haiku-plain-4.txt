@@ -1,0 +1,10 @@
+| haiku-plain-4 | ok | CRASH | CRASH | CRASH | CRASH | CRASH | 1 of 6 |
+| S | 16 | 16 of 16 | 16 of 16 | 25.6% | 11.0% | 4 of 16 | 0.1 | +1.9%, +17.0% |
+| M | 16 | 13 of 16 | 13 of 13 | 66.9% | 39.8% | 13 of 13 | 1.0 | -7.5%, +4.8% |
+| L | 8 | 8 of 8 | 8 of 8 | 78.5% | 41.6% | 8 of 8 | 17.0 | -11.6%, -2.9% |
+| XL | 8 | 7 of 8 | 7 of 7 | 83.2% | 49.4% | 7 of 7 | 54.4 | -9.1%, -1.2% |
+! M random seed 0: crash: ValueError: unreachable from (98, 1): [(62, 71)] (0s)
+! M clusters seed 0: crash: ValueError: unreachable from (98, 1): [(96, 20), (96, 27), (96, 127)] (0s)
+! M clusters seed 1: crash: ValueError: unreachable from (98, 1): [(96, 44), (96, 49), (96, 93)] (0s)
+! XL random seed 0: crash: ValueError: unreachable from (398, 1): [(131, 162), (206, 232), (274, 523), (396, 410)] (0s)
+RESULT: FAIL (every instance finished in time with a valid route)

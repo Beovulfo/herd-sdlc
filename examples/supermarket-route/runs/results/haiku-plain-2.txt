@@ -1,0 +1,17 @@
+| haiku-plain-2 | ok | clean error | clean error | ok | clean error | clean error | 6 of 6 |
+| S | 16 | 16 of 16 | 16 of 16 | 26.1% | 11.4% | 5 of 16 | 0.1 | +1.9%, +17.0% |
+| M | 16 | 13 of 16 | 13 of 13 | 67.6% | 40.1% | 13 of 13 | 2.9 | -6.9%, +4.8% |
+| L | 8 | 7 of 8 | 7 of 7 | 77.0% | 41.7% | 7 of 7 | 86.3 | -12.2%, -5.3% |
+| XL | 8 | 1 of 8 | 1 of 1 | 91.5% | 91.5% | 1 of 1 | 54.6 | -5.0%, -5.0% |
+! M random seed 0: crash: ValueError: P0181 cannot be reached from start (0s)
+! M clusters seed 0: crash: ValueError: P0161 cannot be reached from start (0s)
+! M clusters seed 1: crash: ValueError: P0033 cannot be reached from start (0s)
+! L maze seed 0: timeout (180s)
+! XL parallel seed 0: timeout (300s)
+! XL vertical seed 0: timeout (300s)
+! XL islands seed 0: timeout (300s)
+! XL random seed 0: crash: ValueError: P0100 cannot be reached from start (2s)
+! XL comb seed 0: timeout (300s)
+! XL lshape seed 0: timeout (300s)
+! XL maze seed 0: timeout (300s)
+RESULT: FAIL (every instance finished in time with a valid route)

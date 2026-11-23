@@ -1,0 +1,8 @@
+{"at": "2026-11-23T08:01:51Z", "kind": "found", "text": "maze generator could seal the start (0 m route, 0% saving); a test expected the wrong access cell for a shelf product", "elapsed_s": 138}
+{"at": "2026-11-23T08:01:51Z", "kind": "fixed", "text": "generator keeps a 3x3 open corner at start; test uses the nearest access cell", "elapsed_s": 138}
+{"at": "2026-11-23T08:01:51Z", "kind": "tried", "text": "tests.test_routeopt.BadInput: missing/unreadable/non-JSON/malformed map, blocked start, ragged grid, missing/empty/binary/malformed list, unknown id, name mismatch, bad gen args: one error line, exit 2, no traceback", "elapsed_s": 138, "attack": "bad-input"}
+{"at": "2026-11-23T08:01:51Z", "kind": "tried", "text": "tests.test_routeopt.Collisions: two products on one cell and a repeated id are all picked (3 picks, time recomputed); duplicate map ids fail only if requested", "elapsed_s": 138, "attack": "collision"}
+{"at": "2026-11-23T08:01:52Z", "kind": "tried", "text": "tests.test_routeopt.OneBadPart: malformed, out-of-map and walled-off products not on the list are ignored; each requested one fails clearly", "elapsed_s": 139, "attack": "one-bad-part"}
+{"at": "2026-11-23T08:01:52Z", "kind": "tried", "text": "tests.test_routeopt.Recount replays the trace with separate code: adjacency, walkable cells, distance, time and pick counts match reported KPIs", "elapsed_s": 139, "attack": "recount"}
+{"at": "2026-11-23T08:01:52Z", "kind": "tried", "text": "scale: 800x800 aisle store, 2000 products, 40 items: 24 s wall, saved 76.9% time; 1-item list saves 0% (expected)", "elapsed_s": 139}
+{"at": "2026-11-23T08:01:52Z", "kind": "open", "text": "heuristic (NN + 2-opt), not provably optimal; savings near 0 for lists of 1-3 items", "elapsed_s": 139}

@@ -1,0 +1,21 @@
+# customer list, in the order the customer wrote it
+P041:cocoa
+P008:salt
+P002:bread
+P048:shampoo
+P018:onions
+P016:lemons
+P015:bananas
+P009:oil
+P057:mayo
+P007:sugar
+P044:soda
+P052:sponge
+P035:oats
+P006:flour
+P038:jam
+P028:salmon
+P003:eggs
+P058:vinegar
+P047:soap
+P014:pears

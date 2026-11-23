@@ -462,6 +462,13 @@ def main():
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--worker":
         _, _, name, project, cp, op = sys.argv
-        WORKERS[name](Path(project), json.loads(Path(cp).read_text()), op)
+        if name.startswith("file:"):  # an adapter module: worker(project, canon) -> result dict
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("bench_adapter", name[5:])
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            json.dump(mod.worker(Path(project), json.loads(Path(cp).read_text())), open(op, "w"))
+        else:
+            WORKERS[name](Path(project), json.loads(Path(cp).read_text()), op)
         sys.exit(0)
     sys.exit(main())

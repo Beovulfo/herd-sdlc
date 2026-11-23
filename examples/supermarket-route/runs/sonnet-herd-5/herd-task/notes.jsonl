@@ -1,0 +1,8 @@
+{"at": "2026-11-23T08:04:17Z", "kind": "tried", "text": "BadInput tests: 15 malformed map cases, missing/dir/binary map and list files, empty list, unknown id, bad gen --out path, no args; each one error line exit 2, no traceback", "elapsed_s": 290, "attack": "bad-input"}
+{"at": "2026-11-23T08:04:17Z", "kind": "tried", "text": "Collision test: two products on one cell with same name, repeated list ids; all 4 picks counted (items=4/4)", "elapsed_s": 290, "attack": "collision"}
+{"at": "2026-11-23T08:04:17Z", "kind": "tried", "text": "OneBadPart tests: out-of-grid, id-only, non-dict, bad-type records and unreachable product not requested still run; requested broken or unreachable fails with id named", "elapsed_s": 290, "attack": "one-bad-part"}
+{"at": "2026-11-23T08:04:18Z", "kind": "tried", "text": "test_trace_recount: distance and time recomputed from the event trace with literal constants and a separate BFS, adjacency and wall checks", "elapsed_s": 291, "attack": "recount"}
+{"at": "2026-11-23T08:04:18Z", "kind": "tried", "text": "Hostile scale: 301x301 maze, 300x300 aisles and islands; 1-cell store; 150-item list on 100x150 aisles", "elapsed_s": 291}
+{"at": "2026-11-23T08:04:18Z", "kind": "found", "text": "Heuristic missed optimum by 2m on a 6-item list (open layout), found by brute-force test", "elapsed_s": 291}
+{"at": "2026-11-23T08:04:18Z", "kind": "fixed", "text": "Added exact Held-Karp order up to 10 stops; heuristic kept above, tested within 8% of optimum", "elapsed_s": 291}
+{"at": "2026-11-23T08:04:18Z", "kind": "open", "text": "150-item basket takes 23s (2-opt/or-opt is O(n^3) per pass); fine for baskets up to about 50 items", "elapsed_s": 291}

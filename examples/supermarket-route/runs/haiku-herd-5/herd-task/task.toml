@@ -1,0 +1,48 @@
+goal = "Build a route optimizer for supermarket picking: find the shortest delivery-guy route through any store layout, simulate it step by step with live KPIs time-to-prepare-basket and distance-covered, and compare against the list-order route, proving more than 30 percent time saved."
+
+test_budget = "Unit tests on generated and hand-made layouts (open hall, aisles, comb, dead ends), one 300x300 store with 40 items under a 60 s limit, seeded benchmark of 50 random baskets on a 200x200 store. Not tested: real supermarket maps, real pick times, stores above 300x300."
+
+known_limits = "The saving depends on the baseline: the list-order route is the customer's list order, shuffled in the benchmark. A list already in walking order saves much less. Pick time is a fixed constant, so it dilutes the saving. The 2-opt heuristic is not guaranteed optimal."
+
+[[criteria]]
+id = "C1"
+text = 'build a route optimizer that works inside any supermarket, even very big ones, whatever its layout.'
+source = "human"
+coverage = "Proves valid routes over generated inputs of 4 layout families (open hall, aisle grid, comb, dead ends) at several seeds and sizes, plus a scale run: 300x300 store, 40 items, under 60 s. Not real maps or stores above 300x300"
+check = "python3 -m unittest tests.test_layouts"
+
+[[criteria]]
+id = "C2"
+text = 'It uses as input the MAP of the supermarket with all the products localised in the map with the product ID and the short-name, and the list of products (id:short name) requested by a customer.'
+source = "human"
+coverage = "Proves the map and basket file formats load and bad files fail with one clear message; not other input formats"
+check = "python3 -m unittest tests.test_input"
+
+[[criteria]]
+id = "C3"
+text = 'The goal is to find the best route for the “delivery guy” that is preparing the basket and shipping the shopping list to the customer.'
+source = "human"
+coverage = "Proves each basket stop is visited once and the optimized walk is never longer than the list-order walk on generated layouts; does not prove global optimality"
+check = "python3 -m unittest tests.test_route"
+
+[[criteria]]
+id = "C4"
+text = 'Success looks like we can simulate step by step the route of the delivery guy, measuring in real time the KPIs: “time-to-prepare-basket” and “distance-covered”'
+source = "human"
+coverage = "Proves every step moves to a walkable neighbour and the live KPIs equal a separate recount from the trace; does not measure wall-clock real time"
+check = "python3 -m unittest tests.test_simulation"
+
+[[criteria]]
+id = "C5"
+text = 'compare it with the list-order route (not optimized) so we can demonstrate that our optimization algorithm successfully saves more than 30% of time for the basket to be ready'
+source = "human"
+coverage = "Proves the median and minimum time saving over 50 seeded random baskets are above 30 percent on a 200x200 store; not other stores or basket sizes"
+check = "python3 -m unittest tests.test_benchmark"
+timeout_s = 400
+
+[[criteria]]
+id = "C6"
+text = "Given a basket with a product that cannot be reached, when the route is planned, then it fails with one clear message and exit code 2, while unreachable products not in the basket do not block it"
+source = "agent-proposed"
+coverage = "Proves unreachable basket items fail cleanly and unrequested unreachable products are ignored; not other kinds of broken maps"
+check = "python3 -m unittest tests.test_edges"

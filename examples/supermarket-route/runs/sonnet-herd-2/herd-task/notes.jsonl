@@ -1,0 +1,9 @@
+{"at": "2026-11-23T08:01:23Z", "kind": "found", "text": "draft router.py existed before red run; hid it so checks failed for the right reason (all 6 failed)", "elapsed_s": 110}
+{"at": "2026-11-23T08:02:00Z", "kind": "tried", "text": "probed NaN speed, directory as map, unwritable gen path, negative/float coords, missing list arg, empty list", "elapsed_s": 147, "attack": "bad-input"}
+{"at": "2026-11-23T08:02:00Z", "kind": "found", "text": "NaN walk_speed accepted (json allows NaN); gen to unwritable path gave a traceback", "elapsed_s": 147}
+{"at": "2026-11-23T08:02:01Z", "kind": "fixed", "text": "NaN/inf rejected via isfinite; gen write errors caught; regression tests added", "elapsed_s": 148}
+{"at": "2026-11-23T08:03:17Z", "kind": "tried", "text": "test_collision_same_cell_and_duplicate_ids_all_counted: two products on one cell plus a repeated list id, 3 picks counted; duplicate map ids warn, first kept", "elapsed_s": 224, "attack": "collision"}
+{"at": "2026-11-23T08:03:17Z", "kind": "tried", "text": "test_one_bad_unrequested_product_does_not_reject_map (out-of-map, malformed, junk, float coords) and test_walled_in_requested_product_fails_clearly and disconnected-pocket test", "elapsed_s": 224, "attack": "one-bad-part"}
+{"at": "2026-11-23T08:03:18Z", "kind": "tried", "text": "replay() in tests recomputes steps, adjacency, walkability, pick location and time from the event stream with separate code; also brute-force optimality (C6)", "elapsed_s": 225, "attack": "recount"}
+{"at": "2026-11-23T08:03:18Z", "kind": "tried", "text": "scale: random 200x200 100 items 6s, islands 300x150 150 items 13s, open 250x250, aisles 400x60; savings 78-85%; corridor and single item saves 0% (open limit)", "elapsed_s": 225}
+{"at": "2026-11-23T08:03:18Z", "kind": "open", "text": "1 to 3 item lists can save under 30%; heuristic above 12 items; one pick cell per product", "elapsed_s": 225}

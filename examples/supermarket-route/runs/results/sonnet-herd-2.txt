@@ -1,0 +1,6 @@
+| sonnet-herd-2 | ok | clean error | ok | clean error | clean error | clean error | 6 of 6 |
+| S | 16 | 16 of 16 | 16 of 16 | 26.0% | 11.4% | 5 of 16 | 0.1 | +0.5%, +3.6% |
+| M | 16 | 16 of 16 | 16 of 16 | 68.5% | 40.1% | 16 of 16 | 1.1 | -10.0%, -1.4% |
+| L | 8 | 8 of 8 | 8 of 8 | 79.2% | 41.7% | 8 of 8 | 16.5 | -14.2%, -4.8% |
+| XL | 8 | 8 of 8 | 8 of 8 | 84.2% | 49.5% | 8 of 8 | 66.5 | -11.5%, -5.4% |
+RESULT: PASS (every instance finished in time with a valid route)

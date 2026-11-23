@@ -1,0 +1,42 @@
+goal = "Supermarket route optimizer: plan the delivery guy's shortest pick route through any supermarket layout, with step-by-step simulation, KPIs time-to-prepare-basket and distance-covered, and a comparison against the list-order route showing more than 30% time saved."
+
+test_budget = "Unit and generated-layout tests run in-process on synthetic maps (seeded random layouts of several shapes, plus one 200x200 scale run with a time limit). Not tested: real supermarket maps, real walking speed, GUI or wall-clock real-time playback."
+
+known_limits = "The 30% claim is a mean: over 100 seeded baskets on aisle layouts the mean saving is 42.2% but single baskets range from 23.9% to 69.7%, so some baskets save less than 30%. It is not a guarantee for a list already in a good order, nor for layouts the generator does not produce. Each product is picked from one fixed access cell, chosen nearest the entrance."
+
+[[criteria]]
+id = "C1"
+text = "build a route optimizer that works inside any supermarket, even very big ones, whatever its layout."
+source = "human"
+coverage = "Proves valid routes (walkable steps, every product picked, correct distance) on seeded layouts of several shapes. Largest size tried: 200x200 map, 60 products, time limit 60 s. Does not prove real store maps or layouts beyond the generator."
+check = "python3 -m unittest tests.test_layouts tests.test_scale"
+timeout_s = 240
+
+[[criteria]]
+id = "C2"
+text = "Success looks like we can simulate step by step the route of the delivery guy, measuring in real time the KPIs: \"time-to-prepare-basket\" and \"distance-covered\""
+source = "human"
+coverage = "Proves each simulated step has a position, the cumulative distance and the time-to-prepare-basket, and that the final KPIs match a recount from the trace. Does not prove wall-clock real-time playback, only the simulated clock."
+check = "python3 -m unittest tests.test_simulation"
+
+[[criteria]]
+id = "C3"
+text = "compare it with the list-order route (not optimized)"
+source = "human"
+coverage = "Proves the comparison reports both KPIs for the same basket, with the list-order route taken in the customer's list order. Does not prove the comparison on store data."
+check = "python3 -m unittest tests.test_compare"
+
+[[criteria]]
+id = "C4"
+text = "so we can demonstrate that our optimization algorithm successfully saves more than 30% of time for the basket to be ready"
+source = "human"
+coverage = "Proves the mean time saving over seeded benchmark baskets is above 30% and the optimized route is never slower than the list-order route. Does not prove the saving for every basket or every store layout."
+check = "python3 -m unittest tests.test_benchmark"
+timeout_s = 240
+
+[[criteria]]
+id = "C5"
+text = "Given a bad map or list (missing, malformed, unknown id, unreachable product), when the planner runs, then it prints one clear error and exits non-zero. Duplicate list lines still count."
+source = "agent-proposed"
+coverage = "Proves bad-input and unreachable-product failures print one message with a non-zero exit, and duplicate list lines and colliding products are each counted. Does not prove every malformed JSON shape."
+check = "python3 -m unittest tests.test_bad_input"

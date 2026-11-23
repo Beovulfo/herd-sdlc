@@ -1,0 +1,45 @@
+goal = "Supermarket route optimizer with step-by-step simulation and KPIs vs list-order"
+test_budget = "Unit/integration tests on generated maps (aisles, islands, random, open, disconnected; up to 200x200). Not tested: real store maps, congestion, multi-picker, shelf-side access choice, travel-time limits above 60s."
+known_limits = "Savings depend on list size: tiny lists (1 to 3 items) may save under 30 percent. Lists over 12 items use a heuristic (nearest neighbour + 2-opt + or-opt), not proven optimal. One pick cell per product (nearest to start). Unit-cost grid moves, no congestion."
+
+[[criteria]]
+id = "C1"
+text = "works inside any supermarket, even very big ones, whatever its layout"
+source = "human"
+coverage = "Proves valid walkable routes on 4 generated layout families, many sizes and seeds, a 200x200 map with 2000 products under 60s, and a disconnected map. Not real store maps."
+check = "python3 -m unittest tests.test_router.Layouts"
+
+[[criteria]]
+id = "C2"
+text = "uses as input the MAP of the supermarket with all the products localised in the map with the product ID and the short-name, and the list of products (id:short name) requested by a customer"
+source = "human"
+coverage = "Proves the CLI reads a JSON map file with id, name and x,y per product plus an id:name list file, and parses the list format. Not other map file formats."
+check = "python3 -m unittest tests.test_router.Inputs"
+
+[[criteria]]
+id = "C3"
+text = "simulate step by step the route of the delivery guy, measuring in real time the KPIs: “time-to-prepare-basket” and “distance-covered”"
+source = "human"
+coverage = "Proves one event per step and pick with running distance and time, monotonic, matching an independent replay recount; --trace prints each step. Not wall-clock pacing."
+check = "python3 -m unittest tests.test_router.Simulation"
+
+[[criteria]]
+id = "C4"
+text = "compare it with the list-order route (not optimized) so we can demonstrate that our optimization algorithm successfully saves more than 30% of time for the basket to be ready"
+source = "human"
+coverage = "Proves over 30 percent time saved on every one of 32 runs (4 layouts, 8 seeds, 20-item lists on 60x40, 200 products). Not tiny lists or real baskets."
+check = "python3 -m unittest tests.test_router.Savings"
+
+[[criteria]]
+id = "C5"
+text = "Given bad input (missing, malformed, unknown id, unreachable item), when the CLI runs, then it prints one error line and exits 2 with no traceback; unrequested broken products never reject a map"
+source = "agent-proposed"
+coverage = "Proves 14 bad-input cases at map and list entry points, collisions, and one-bad-part handling. Not huge files."
+check = "python3 -m unittest tests.test_router.BadInput"
+
+[[criteria]]
+id = "C6"
+text = "Given a list of 12 items or fewer, when planned, then the route length equals the brute-force optimum"
+source = "agent-proposed"
+coverage = "Proves optimality against permutation brute force for 6-item lists on 5 seeds. Not lists above 12 (heuristic)."
+check = "python3 -m unittest tests.test_router.Optimality"

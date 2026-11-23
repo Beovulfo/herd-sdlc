@@ -260,36 +260,37 @@ If the agent tries to finish while a check is failing, the Stop hook answers ins
   <img src="examples/supermarket-route/images/simulation.svg" alt="Animation: one basket walked in shopping-list order and on the optimized route, with time and distance bars running" width="860">
 </p>
 
-One short prompt, a route optimizer for picking a shopping list in a supermarket that "works for any layout, even very big ones", was given to the same model (Sonnet) twice: once with Herd and once with no workflow. Then each solution was checked by a hidden verifier it had never seen: 48 generated stores from eight layout families, up to 600 by 400 cells with 200 items, with every walk validated step by step.
+One short prompt, a route optimizer for picking a shopping list in a supermarket that "works for any layout, even very big ones", was given **6 times each** to four arms: Claude Sonnet 5.5 and Claude Haiku 5.5, each with **Herd 0.3.1** and with no workflow. Every solution was then checked by a hidden verifier it had never seen: 48 generated stores from eight layout families, up to 600 by 400 cells with 200 items, with every walk validated step by step, plus six bad-input scenarios.
 
 <p align="center">
   <img src="examples/supermarket-route/images/layouts.svg" alt="The optimized route on eight generated store layouts: parallel aisles, vertical aisles, islands, random obstacles, comb, L-shape, maze and departments" width="860">
 </p>
 
-| | With Herd | Without Herd |
-| --- | --- | --- |
-| Stores solved with a valid route | **48 of 48** | 38 of 48 |
-| Failure | none | crash when a shelf borders a disconnected pocket of floor |
-| Bad-input scenarios handled (unknown product, duplicate, empty list, unreachable product, malformed map) | **6 of 6** | 4 of 6 |
-| Test lines written | 119 | 20 |
-| Median time to plan a 600 by 400 store | 36.1 s | 72.7 s |
-| Time to a finished result | 3m 19s | 1m 03s |
-| Tokens | 87k | 73k |
+Mean ± standard deviation over 6 runs per arm:
+
+| | Sonnet + Herd | Sonnet, no workflow | Haiku + Herd | Haiku, no workflow |
+| --- | --- | --- | --- | --- |
+| Stores solved with a valid route, of 48 | **48.0 ± 0.0** | 45.2 ± 4.8 | 44.3 ± 2.0 | 41.7 ± 2.7 |
+| Runs with every store valid | **6 of 6** | 3 of 6 | 1 of 6 | 0 of 6 |
+| Bad-input scenarios handled, of 6 | **6.0 ± 0.0** | 3.5 ± 0.5 | **6.0 ± 0.0** | 4.3 ± 2.0 |
+| Time saved against list order, mid stores | 66.8 ± 1.3% | 66.7 ± 1.1% | 68.2 ± 1.8% | 66.8 ± 1.4% |
+| Time to a finished result | 4.2 ± 1.2 min | 1.1 ± 0.2 min | 10.3 ± 5.5 min | 2.7 ± 0.9 min |
+| Estimated cost per run, API list prices | $0.61 ± 0.09 | $0.29 ± 0.03 | $0.29 ± 0.09 | $0.04 ± 0.02 |
 
 <p align="center">
-  <img src="examples/supermarket-route/images/benchmark.svg" alt="Bars comparing with and without Herd on stores solved, bad inputs handled, test lines, time and tokens" width="760">
+  <img src="examples/supermarket-route/images/benchmark.svg" alt="Bars for the four arms: stores solved, bad inputs handled, cost per run and time to finish, each with its standard deviation" width="760">
 </p>
 
-- **More robust and better tested.** Without Herd, the code crashed on stores with disconnected floor pockets, on an unreachable product and on a malformed map. With Herd it handled all of them, and wrote six times as many test lines.
-- **The route itself is not better.** The optimizers found routes of similar length; the no-workflow routes were slightly shorter on mid-size and large stores.
-- **Herd said where the claim fails.** Its `known_limits` stated that the 30% saving does not hold for baskets of about 15 items or fewer. The hidden verifier confirmed it. The no-workflow run reported its best demo number.
-- **It costs more.** 3.2 times the time and 19 percent more tokens.
-- **No extra input from you.** Herd needs only the one message; it asked no questions.
+- **Sonnet with Herd never failed.** All 6 runs solved all 48 stores and handled all six bad inputs. Without Herd, 3 of 6 Sonnet runs lost stores (up to 12), and all six crashed on a malformed map.
+- **Bad input is safe with Herd on both models.** All 12 Herd runs handled 6 of 6 bad inputs; without Herd the average was 3.5 (Sonnet) and 4.3 (Haiku).
+- **The route itself is not better.** Once a store is solved, every arm saves about the same time against list order. Herd buys robustness and evidence, not a better optimizer.
+- **Haiku is cheaper but not as good.** Haiku with Herd costs half of Sonnet with Herd and matches it on bad input, but loses 3.7 stores per run, almost all to one bug (a product picked from a sealed side of its shelf). For the same $0.29 as Sonnet without a workflow, it is safer on bad input and solves about as many stores.
+- **It costs more.** Herd runs make about 4 times as many model requests: about 2 times the cost on Sonnet and 8 times on Haiku, and 4 times the time.
 
-One run per arm, one model: read it as strong evidence about robustness, not a precise cost figure. The Herd run was an emulation (a subagent following the skills, with no Stop hook and no reviewer), and its "all checks failed first" step was gamed: it moved its code aside for the first verify. The full method, every number and these limits are in [`examples/supermarket-route/BENCHMARK.md`](examples/supermarket-route/BENCHMARK.md). To reproduce the main check:
+One task, emulated Herd sessions (no Stop hook, no reviewer), costs estimated from each run's own token log at API list prices. The method, every number, the failure analysis and these limits are in [`examples/supermarket-route/BENCHMARK.md`](examples/supermarket-route/BENCHMARK.md). To score one run:
 
 ```bash
-python3 examples/supermarket-route/verifier/verify_general.py with_herd examples/supermarket-route/with-herd
+sh examples/supermarket-route/verifier/score_run.sh sonnet-herd-1
 ```
 
 ## Commands and skills

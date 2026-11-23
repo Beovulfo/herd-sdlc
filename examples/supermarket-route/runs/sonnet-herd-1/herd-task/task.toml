@@ -1,0 +1,38 @@
+goal = "build a route optimizer for any supermarket"
+test_budget = "Unit and CLI-level tests on synthetic stores (aisles, random blocks, open floor) with seeded random lists. Not tested: real store maps, one-way aisles, congestion, multiple pickers, weight or fragile ordering."
+known_limits = "Savings exceed 30% on lists of about 10 or more items (measured mean 35% at 10, 26% at 5, 16% at 3 on aisle stores). Short lists save less because pick time is fixed. Route is 2-opt plus relocate, not provably optimal. Time model: 1.2 m/s, 1 m cells, 8 s per pick, all adjustable."
+
+[[criteria]]
+id = "C1"
+text = "build a route optimizer that works inside any supermarket, even very big ones, whatever its layout"
+source = "human"
+coverage = "Proves valid routes on three generated layout families, scale: largest tried 300x300 cells (90000) with 40 items, limit 60 s (took about 6 s), and near-optimal on small lists. Not real maps or one-way aisles."
+check = "python3 -m unittest tests.test_routeopt.Scale tests.test_routeopt.Savings.test_near_optimal_vs_brute_force_on_small_lists tests.test_routeopt.Savings.test_never_worse_than_list_order_distance"
+
+[[criteria]]
+id = "C2"
+text = "we can simulate step by step the route of the delivery guy, measuring in real time the KPIs: \"time-to-prepare-basket\" and \"distance-covered\", and compare it with the list-order route (not optimized)"
+source = "human"
+coverage = "Proves one event per cell step with cumulative KPIs, recomputed from the trace by separate code, and a CLI that prints both routes step by step. Not wall-clock pacing beyond --delay."
+check = "python3 -m unittest tests.test_routeopt.Simulation tests.test_routeopt.Edges.test_cli_simulate_prints_each_step_with_live_kpis"
+
+[[criteria]]
+id = "C3"
+text = "demonstrate that our optimization algorithm successfully saves more than 30% of time for the basket to be ready"
+source = "human"
+coverage = "Proves mean time saved above 30% (and min above 20%) over 15 seeded lists of 25 items on each of three layouts. Not short lists under 10 items: see known_limits."
+check = "python3 -m unittest tests.test_routeopt.Savings.test_saves_over_30pct_time_on_every_layout_family"
+
+[[criteria]]
+id = "C4"
+text = "Given a malformed map or list, an unknown product or a bad option, when the tool runs, then it prints one error line and exits 2 with no traceback"
+source = "agent-proposed"
+coverage = "Proves 12 bad maps, 5 bad lists, a binary list and 3 bad options each fail cleanly. Not permissions errors on output."
+check = "python3 -m unittest tests.test_routeopt.Edges.test_bad_input_every_entry_point"
+
+[[criteria]]
+id = "C5"
+text = "Given products sharing a cell, repeated items, or an unrequested unreachable product, when routing, then every requested item is picked and only requested unreachable ones fail"
+source = "agent-proposed"
+coverage = "Proves 3 picks for shared cell plus repeat, unrequested cut-off product ignored, requested one rejected, single item at the entrance. Not very large collisions."
+check = "python3 -m unittest tests.test_routeopt.Edges"

@@ -638,10 +638,11 @@ class TestNarrowedClaims(Base):
         self.attacks_and_review()
         herd.add_note(self.root, "t1", "open", "only the first call is cached")
         ev = herd.verify(self.root, "t1")
-        line = "C1 says 'any', narrowed by: Calls with arguments are rejected."
+        line = "C1 says 'any'; narrowed by: Calls with arguments are rejected."
         self.assertIn(line, herd.report(ev))
         self.assertIn(line, herd.pr_body(self.root, "t1"))
-        self.assertIn("C1 says 'any', narrowed by: only the first call is cached", herd.report(ev))
+        self.assertNotIn("narrowed by: only the first call", herd.report(ev))  # open notes are listed already
+        self.assertIn("only the first call is cached", herd.report(ev))
         self.assertNotIn("narrowed by: Repeated calls are not timed", herd.report(ev))
         self.assertTrue(any("narrows it" in w for w in ev["warnings"]), ev["warnings"])
         self.assertEqual(herd.problems(self.root, "t1"), [])  # shown to the human, not blocked
@@ -663,7 +664,26 @@ class TestNarrowedClaims(Base):
                    {"results": human_any, "known_limits": ""}, {"results": [{"id": "C1"}], "known_limits": "only x"}):
             self.assertEqual(herd.narrowed_claims(ev, []), [], ev)
         self.assertEqual(herd.narrowed_claims({"results": human_any, "known_limits": "Only small maps."}, []),
-                         ["C1 says 'any', narrowed by: Only small maps."])
+                         ["C1 says 'any'; narrowed by: Only small maps."])
+
+    def test_sentences_split_only_at_sentence_ends(self):
+        human_any = [{"id": "C1", "source": "human", "text": "works whatever its layout"}]
+        lim = ("Random-wall layouts can cut products off; they are rejected. Speed is 1.5 cells per s. "
+               "Uses e.g. BFS. Unreachable products are dropped.")
+        self.assertEqual(herd.narrowed_claims({"results": human_any, "known_limits": lim}),
+                         ["C1 says 'whatever'; narrowed by: Random-wall layouts can cut products off; they are rejected.",
+                          "C1 says 'whatever'; narrowed by: Unreachable products are dropped."])
+
+    def test_several_claims_share_one_line_per_limit_and_the_list_is_capped(self):
+        claims = [{"id": f"C{i}", "source": "human", "text": "for all stores"} for i in (1, 2)]
+        lim = " ".join(f"Layout {i} is skipped." for i in range(7)) + " Layout 0 is skipped."
+        out = herd.narrowed_claims({"results": claims, "known_limits": lim})
+        self.assertEqual(out[0], "C1 says 'all', C2 says 'all'; narrowed by: Layout 0 is skipped.")
+        self.assertEqual(len(out), herd.MAX_NARROWED + 1)  # duplicates once, five lines, then the count
+        self.assertEqual(out[-1], "and 2 more narrowing limits in known_limits")
+        warn = [w for w in herd.coverage_warnings({"criteria": claims, "known_limits": lim}) if "narrow" in w]
+        self.assertEqual(len(warn), 1)
+        self.assertIn("C1 says 'all', C2 says 'all', but 7 known limits narrow it", warn[0])
 
     def test_no_narrowing_lines_without_a_human_any_claim(self):
         text = TASK.replace('"It must return 1 for any call"', '"It must return 1"').replace(

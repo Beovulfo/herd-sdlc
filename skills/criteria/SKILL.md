@@ -9,15 +9,15 @@ A task is done when its criteria pass, proven by commands. Criteria live in `.he
 
 ## Rules
 
-1. **Outcomes, not steps.** "Given X, when Y, then Z", observable from outside. 3 to 6 criteria. Your own: one sentence, about 25 words.
-2. **Every criterion has a `check`:** a shell command, exit 0 means pass: an existing test, a new test, or a probe. Under a minute each; slow ones set `timeout_s`.
+1. **Outcomes, not steps.** "Given X, when Y, then Z", observable from outside. 3 to 6 criteria. Your own: one sentence, under 25 words.
+2. **Every criterion has a `check`:** a shell command (a test or a probe), exit 0 means pass. Under a minute each; slow ones set `timeout_s`.
 3. **Human criteria are quoted, never changed.** Put the human's words in `text` exactly, with `source = "human"`. Never reword, drop or narrow them. Put your concrete scenario in a separate `agent-proposed` criterion.
-4. **Cover every word of a human criterion.** Quoting it while testing one example is still narrowing. `any`, `every`, `whatever`, `many` need generated cases of different shapes, random ones included. `big`, `huge`, `thousands` need a scale check with a time limit. Covering only part? Say so in `test_budget`; add `agent-proposed` criteria for the rest. Add `coverage`: what its check proves and misses, about 30 words.
-5. **Fill gaps, never block.** Write missing checks yourself. If nothing can run, set `check = ""`: `unchecked`, never counted as met.
+4. **Cover every word of a human criterion.** Testing one example is still narrowing. `any`, `every`, `all`, `whatever`, `many`, `each`, `arbitrary` need generated cases of different shapes, random ones included. `big`, `large`, `huge`, `thousands` need a scale check with a time limit. Covering only part? Say so in `test_budget`; add `agent-proposed` criteria for the rest. Add `coverage`: what its check proves and misses, about 30 words.
+5. **Fill gaps, never block.** Write missing checks yourself. If nothing can run, `check = ""`: unchecked, never met.
 6. **Include one edge or failure case:** wrong input, empty state, or what must not change. Take inputs as the human described them (a product on its shelf), not pre-computed.
 7. **Fail first.** Run `herd verify` before writing code; tighten any check that already passes. Human criteria are then frozen.
-8. **Say what is not tested** (medium and high risk). Top-level `test_budget = "..."`: what is tested at which level, and what is not. `known_limits = "..."`: when the claim may fail.
-9. **Validate.** `herd verify` warns about checks that run no project code, unquoted human criteria, vague `coverage`, limits that narrow an `any` claim, and long texts.
+8. **Say what is not tested** (medium and high risk). Top-level `test_budget = "..."`: what is and is not tested, at which level. `known_limits = "..."`: when the claim may fail.
+9. **Validate.** `herd check` (run by every `herd verify`) warns about checks that run no project code (`true`, `echo`, `test -f`), unquoted human criteria, vague `coverage` and limits that narrow an any/every claim.
 
 ## Format
 

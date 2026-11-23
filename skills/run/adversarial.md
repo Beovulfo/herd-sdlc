@@ -15,4 +15,4 @@ Try to break your own work on exactly what the request promises. Never skip it b
 3. Run them. If you can spawn a fresh-context subagent, give it only the request, the criteria and how to run the tool, and ask it to break it. Otherwise do it yourself and say it was not fresh.
 4. Log each attempt with `herd note --tried` (plus `--attack <name> --check "<command>"` for a standard attack; a later note for the same attack replaces a wrong command), each failure with `--found`, each fix with `--fixed`, each limit you leave with `--open`, as the run skill's Rules say.
 5. Turn each failure into a regression test, then fix it.
-6. A limit you leave that narrows a human any/every claim (only, first, rejected, assumed) is shown to the human as not proven. Prefer testing the claim under it, or lifting it.
+6. A known limit that narrows a human any/every claim (only, first, rejected, skipped, assumed) is shown to the human as not proven. Prefer testing the claim under it, or lifting it.

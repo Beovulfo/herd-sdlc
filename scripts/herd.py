@@ -93,21 +93,31 @@ ATTACKS = {"bad-input": "bad input at every entry point ends in a clear message,
            "one-bad-part": "one broken entry the request does not ask for does not reject the whole input, while a broken requested one still fails clearly",
            "recount": "every reported number recomputed from the output with separate code, on the generated and "
                       "collision inputs too"}
-RANDOM = re.compile(r"\b(random\w*|seed(s|ed)?|fuzz\w*|property|hypothesis)\b", re.I)
-UNIVERSAL = re.compile(r"\b(any|every|whatever|whichever|arbitrary)\b", re.I)  # a human claim over all inputs
+RANDOM = re.compile(r"\b(random\w*|seed(s|ed)?|fuzz\w*|property[- ]based|property tests?|hypothesis)\b", re.I)
+UNIVERSAL = re.compile(r"\b(any|every|all|whatever|whichever|arbitrary)\b", re.I)  # a human claim over all inputs
+# ponytail: a word list, so it misses limits worded otherwise and flags some harmless ones; it never blocks
 NARROWS = re.compile(r"\b(only|first|rejected|rejects?|refused|refuses?|cannot|can't|unsupported|not supported|"
-                     r"not handled|assumes?|assumed|ignored|ignores?|limited to|must be)\b", re.I)
+                     r"not handled|assumes?|assumed|ignored|ignores?|limited to|skipped|skips?|dropped|drops?|"
+                     r"excluded|excludes?|omitted|omits?|unreachable|not reached)\b", re.I)
+MAX_NARROWED = 5
 
 
-def narrowed_claims(ev, notes):
-    """Known limits and open notes that narrow a human any/every claim: shown as not proven, for the human."""
-    claims = [(r["id"], m.group(0)) for r in ev.get("results", [])
-              if r.get("source") == "human" and (m := UNIVERSAL.search(str(r.get("text", ""))))]
-    if not claims:
-        return []
-    texts = re.split(r"(?<=[.;])\s+", str(ev.get("known_limits") or "")) + [n["text"] for n in notes if n["kind"] == "open"]
-    hits = [s.strip() for s in texts if s.strip() and NARROWS.search(s)]
-    return [f"{cid} says '{word}', narrowed by: {s}" for cid, word in claims for s in hits[:5]]
+def narrowing(criteria, known_limits):
+    """(human any/every claims as 'C1 says "any"', known-limit sentences that narrow them). Open notes are left
+    out: the report already lists them under Not proven."""
+    claims = [f"{c.get('id', '?')} says '{m.group(0)}'" for c in criteria
+              if c.get("source") == "human" and (m := UNIVERSAL.search(str(c.get("text", ""))))]
+    sentences = re.split(r"(?<=[.!?])\s+(?=[A-Z])", str(known_limits or ""))  # not at ';', 'e.g.' or decimals
+    hits = list(dict.fromkeys(s.strip() for s in sentences if s.strip() and NARROWS.search(s)))
+    return (claims, hits) if claims else ([], [])
+
+
+def narrowed_claims(ev, notes=()):
+    """One line per known limit that narrows a human any/every claim: shown as not proven, for the human."""
+    claims, hits = narrowing(ev.get("results", []), ev.get("known_limits"))
+    out = [f"{', '.join(claims)}; narrowed by: {s}" for s in hits[:MAX_NARROWED]]
+    return out + ([f"and {len(hits) - MAX_NARROWED} more narrowing limits in known_limits"]
+                  if len(hits) > MAX_NARROWED else [])
 MAX_TEXT_WORDS, MAX_COVERAGE_WORDS = 40, 50  # advisory limits, see length_warnings
 WORKTREES = ".claude/worktrees"  # where `herd init --worktree` puts tasks; Claude Code's EnterWorktree can enter it
 OWN_FILES = (".", ":!.herd")  # pathspec: this checkout's work, not Herd's own state
@@ -439,12 +449,11 @@ def coverage_warnings(task):
         if sc and not SCALED.search(cov):
             out.append(f"{cid}: human criterion says '{sc.group(0)}' but its `coverage` has no scale statement "
                        "(largest size tried, time limit)")
-    claims = [(c.get("id", "?"), m.group(0)) for c in task.get("criteria", [])
-              if c.get("source") == "human" and (m := UNIVERSAL.search(str(c.get("text", ""))))]
-    for s in re.split(r"(?<=[.;])\s+", str(task.get("known_limits", ""))):
-        if claims and NARROWS.search(s):
-            out.append(f"{claims[0][0]} says '{claims[0][1]}' but `known_limits` narrows it: \"{s.strip()}\". "
-                       "Test the claim under that limit, or lift the limit; it is shown to the human as not proven")
+    claims, hits = narrowing(task.get("criteria", []), task.get("known_limits"))
+    if hits:
+        out.append(f"{', '.join(claims)}, but {len(hits)} known limit{'s' if len(hits) > 1 else ''} narrow"
+                   f"{'' if len(hits) > 1 else 's'} it (\"{hits[0]}\"): test the claim under each limit, or lift it; "
+                   "each is shown to the human as not proven")
     if task.get("route", "standard") != "quick" and not str(task.get("known_limits", "")).strip():
         out.append("no `known_limits`: say under what conditions the claim may fail or has not been shown")
     return out

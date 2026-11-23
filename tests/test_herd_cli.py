@@ -1,4 +1,5 @@
 import json
+import os
 import shlex
 import shutil
 import subprocess
@@ -907,6 +908,205 @@ class TestZeroTests(Base):
                            capture_output=True, text=True)
         self.assertEqual(p.returncode, 0)
         self.assertIn("C1 passing (ran zero tests)", p.stdout)
+
+
+FAKE_GH = """#!/bin/sh
+# Stand-in for gh: logs every call; a PR "exists" once `pr create` has run.
+printf 'ARGS %s\\n' "$*" >> "$FAKE_GH_DIR/log"
+case "$1 $2" in
+  "pr view") [ -f "$FAKE_GH_DIR/created" ] || exit 1; echo "https://github.com/o/r/pull/7" ;;
+  "pr create") cat > "$FAKE_GH_DIR/body"; touch "$FAKE_GH_DIR/created"; echo "https://github.com/o/r/pull/7" ;;
+  "pr edit") cat > "$FAKE_GH_DIR/body"; echo "https://github.com/o/r/pull/7" ;;
+  *) exit 3 ;;
+esac
+"""
+
+PR_TASK = TASK.replace('check = "test -f greet.txt"', 'check = "test -f greet.txt"\ncoverage = "Only that the file exists"')
+
+
+class TestPr(Base):
+    def setUp(self):
+        super().setUp()
+        self.gh = self.root.parent / (self.root.name + "-gh")
+        self.gh.mkdir()
+        (self.gh / "gh").write_text(FAKE_GH)
+        (self.gh / "gh").chmod(0o755)
+        self.origin = self.root.parent / (self.root.name + "-origin.git")
+        subprocess.run(["git", "init", "-q", "--bare", str(self.origin)], check=True)
+        git(self.root, "remote", "add", "origin", str(self.origin))
+        git(self.root, "switch", "-q", "-c", "herd/t1")
+        herd.init_task(self.root, "t1", "Add a greeting")
+        (self.root / ".herd/tasks/t1/task.toml").write_text(PR_TASK)
+        (self.root / "greet.txt").write_text("hello")
+        git(self.root, "add", "greet.txt")
+        git(self.root, "commit", "-q", "-m", "greet")
+
+    def tearDown(self):
+        shutil.rmtree(self.gh, ignore_errors=True)
+        shutil.rmtree(self.origin, ignore_errors=True)
+        shutil.rmtree(self.root.parent / (self.root.name + "-tools"), ignore_errors=True)
+        super().tearDown()
+
+    def herd(self, *args, path=True):
+        tools = self.root.parent / (self.root.name + "-tools")  # no gh here, so a real gh is never found
+        if not tools.exists():
+            tools.mkdir()
+            for name in ("git", "sh", "cat", "touch"):
+                (tools / name).symlink_to(shutil.which(name))
+        env = dict(os.environ, FAKE_GH_DIR=str(self.gh), PATH=(f"{self.gh}{os.pathsep}" if path else "") + str(tools))
+        return subprocess.run([sys.executable, str(Path(herd.__file__)), *args], cwd=self.root,
+                              capture_output=True, text=True, env=env)
+
+    def calls(self):
+        log = self.gh / "log"
+        return log.read_text().splitlines() if log.exists() else []
+
+    def test_refuses_without_opt_in(self):
+        p = self.herd("pr", "t1")
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("opt-in", p.stderr)
+        self.assertEqual(self.calls(), [])
+
+    def test_refuses_off_a_herd_branch(self):
+        git(self.root, "switch", "-q", "-c", "feature")
+        p = self.herd("pr", "t1", "--yes")
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("herd/", p.stderr)
+        self.assertEqual(self.calls(), [])
+
+    def test_refuses_with_uncommitted_changes(self):
+        (self.root / "greet.txt").write_text("not committed")
+        p = self.herd("pr", "t1", "--yes")
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("clean working tree", p.stderr)
+        self.assertEqual(self.calls(), [])
+
+    def test_refuses_without_gh(self):
+        p = self.herd("pr", "t1", "--yes", path=False)
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("gh", p.stderr)
+        self.assertEqual(self.pushed(), "")
+
+    def pushed(self):
+        return subprocess.run(["git", "branch", "--list"], cwd=self.origin, capture_output=True, text=True).stdout
+
+    def test_refuses_another_tasks_branch(self):
+        git(self.root, "switch", "-q", "-c", "herd/other")
+        p = self.herd("pr", "t1", "--yes")
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("herd/t1", p.stderr)
+        self.assertEqual((self.calls(), self.pushed()), ([], ""))
+
+    def test_pushes_and_creates_with_herd_toml_opt_in(self):
+        (self.root / "herd.toml").write_text("[pr]\nopen = true\n")
+        git(self.root, "add", "herd.toml")
+        git(self.root, "commit", "-qm", "opt in")
+        herd.verify(self.root, "t1")
+        p = self.herd("pr", "t1")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("https://github.com/o/r/pull/7", p.stdout)
+        heads = subprocess.run(["git", "branch", "--list"], cwd=self.origin, capture_output=True, text=True).stdout
+        self.assertIn("herd/t1", heads)
+        create = [c for c in self.calls() if c.startswith("ARGS pr create")]
+        self.assertEqual(len(create), 1)
+        self.assertIn("--head herd/t1", create[0])
+        self.assertIn("--title Add a greeting", create[0])
+
+    def test_updates_the_body_on_a_second_run(self):
+        herd.verify(self.root, "t1")
+        self.herd("pr", "t1", "--yes")
+        git(self.root, "rm", "-q", "greet.txt")  # the evidence changes between the two runs
+        git(self.root, "commit", "-qm", "drop greet")
+        herd.verify(self.root, "t1")
+        p = self.herd("pr", "t1", "--yes")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(sum(c.startswith("ARGS pr create") for c in self.calls()), 1)
+        self.assertEqual(sum(c.startswith("ARGS pr edit") for c in self.calls()), 1)
+        body = (self.gh / "body").read_text()
+        self.assertIn("C1 is failing", body.split("## What is not proven")[1])
+        self.assertNotIn("| C1 |", body)  # a failing criterion is never listed as proven
+
+    def test_never_merges(self):
+        herd.verify(self.root, "t1")
+        self.herd("pr", "t1", "--yes")
+        self.herd("pr", "t1", "--yes")
+        self.assertFalse([c for c in self.calls() if "merge" in c])
+
+    def test_body_puts_evidence_first(self):
+        (self.root / ".herd/tasks/t1/task.toml").write_text('known_limits = "Only ASCII names"\n' + PR_TASK)
+        herd.add_note(self.root, "t1", "open", "unicode names not tried")
+        herd.verify(self.root, "t1")
+        self.herd("pr", "t1", "--yes")
+        body = (self.gh / "body").read_text()
+        self.assertTrue(body.startswith("# Evidence: t1\n"))
+        order = ["**Result:** 1 of 2 criteria proven", "## What is proven", "| C1 |", "`test -f greet.txt`",
+                 "## What is not proven", "C2", "unchecked", "Only that the file exists", "Only ASCII names",
+                 "unicode names not tried", "## Run details", "## Reproduce", "test -f greet.txt", "never merges"]
+        at = 0
+        for s in order:  # each piece appears after the previous one
+            at = body.find(s, at)
+            self.assertNotEqual(at, -1, f"{s!r} missing or out of order")
+        self.assertIn("fresh", body.split("## What is proven")[0])
+
+    def test_body_has_no_output_tail_and_caps_the_caveat_list(self):
+        (self.root / ".herd/tasks/t1/task.toml").write_text(
+            PR_TASK.replace('check = ""', 'check = "python3 -c \\"print(\'SECRET_\' + \'TOKEN_VALUE\'); exit(1)\\""'))
+        git(self.root, "commit", "-q", "--allow-empty", "-m", "noop")
+        for i in range(herd.MAX_PR_NOTES + 5):
+            herd.add_note(self.root, "t1", "found", f"note {i} " + 900 * "x")
+        herd.verify(self.root, "t1")
+        self.herd("pr", "t1", "--yes")
+        body = (self.gh / "body").read_text()
+        self.assertNotIn("SECRET_TOKEN_VALUE", body)
+        self.assertIn("C2 is failing", body)
+        self.assertIn("and 5 more", body)
+        self.assertLess(len(body), 65536)
+
+    def test_body_says_when_evidence_is_missing_or_stale(self):
+        self.herd("pr", "t1", "--yes")
+        self.assertIn("No evidence yet", (self.gh / "body").read_text())
+        herd.verify(self.root, "t1")
+        (self.root / "greet.txt").write_text("changed")
+        git(self.root, "commit", "-qam", "change after verify")
+        self.herd("pr", "t1", "--yes")
+        body = (self.gh / "body").read_text()
+        self.assertIn("stale", body.split("## What")[0])
+        self.assertIn("before later changes", body)
+        self.assertNotIn("## What is proven", body)
+
+    def test_body_does_not_count_a_zero_test_pass_as_proven(self):
+        (self.root / ".herd/tasks/t1/task.toml").write_text(
+            PR_TASK.replace('check = ""', 'check = "python3 -c \\"print(\'Ran 0 tests\')\\""'))
+        git(self.root, "commit", "-q", "--allow-empty", "-m", "noop")
+        herd.verify(self.root, "t1")
+        self.herd("pr", "t1", "--yes")
+        body = (self.gh / "body").read_text()
+        self.assertIn("1 of 2 criteria proven", body)
+        self.assertNotIn("| C2 |", body)
+        self.assertIn("C2 passed but ran zero tests", body)
+
+    def test_backticks_in_a_check_cannot_break_the_markdown(self):
+        (self.root / ".herd/tasks/t1/task.toml").write_text(
+            PR_TASK.replace('test -f greet.txt', 'test -f greet.txt # `x` ```'))  # backticks in a comment: still passes
+        git(self.root, "commit", "-q", "--allow-empty", "-m", "noop")
+        herd.verify(self.root, "t1")
+        self.herd("pr", "t1", "--yes")
+        body = (self.gh / "body").read_text()
+        self.assertIn("````bash", body)
+        self.assertIn("| ```` test -f greet.txt # `x` ``` ```` exit 0 |", body)
+
+    def test_title_is_short_and_cut_at_a_word(self):
+        self.assertEqual(herd.pr_title("Add a greeting", "t1"), "Add a greeting")
+        long = "Opt-in PR step: a herd pr command pushes the branch and opens or updates a pull request"
+        title = herd.pr_title(long + "\nsecond line", "t1")
+        self.assertLessEqual(len(title), 72)
+        self.assertTrue(title.endswith("...") and long.startswith(title[:-3]) and long[len(title) - 3] == " ")
+        self.assertEqual(herd.pr_title("  \n", "t1"), "t1")
+
+    def test_cli_warns_when_the_evidence_is_not_done(self):
+        p = self.herd("pr", "t1", "--yes")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("warning: the pull request shows evidence that is not done", p.stderr)
 
 
 def _old_python():

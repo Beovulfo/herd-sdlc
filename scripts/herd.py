@@ -17,6 +17,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import tomllib
 from datetime import datetime, timezone
@@ -356,6 +357,7 @@ def load_evidence(root, slug):
 
 
 BATCH_S = 5
+MAX_PR_NOTES = 60  # keeps the PR description well under GitHub's 65,536-character limit
 
 
 def _largest_batch(notes):
@@ -422,6 +424,136 @@ def report(ev, notes=None):
     if s["unchecked"]:
         lines += ["", "Unchecked criteria have no runnable check and are never counted as met."]
     return "\n".join(lines) + "\n"
+
+
+# ---- pull request ---------------------------------------------------------
+
+def _cell(text):
+    return str(text or "").replace("|", "\\|").replace("\n", " ")
+
+
+def _ticks(text, least=1):
+    """A backtick run longer than any inside text, so a code span or fence cannot be broken by it."""
+    return "`" * max(least, max((len(m) for m in re.findall(r"`+", text)), default=0) + 1)
+
+
+def _code(text):
+    t = _ticks(text)
+    pad = " " if text.startswith("`") or text.endswith("`") else ""
+    return f"{t}{pad}{_cell(text)}{pad}{t}"
+
+
+def _stale(root, slug, ev):
+    return ev["task_sha"] != _task_sha(root, slug) or ev["fingerprint"] != fingerprint(root)
+
+
+def pr_body(root, slug):
+    """The PR description, evidence first: what is proven and by which check, then what is not, then how to re-run."""
+    task, ev, notes = load_task(root, slug), load_evidence(root, slug), load_notes(root, slug)
+    head = [f"# Evidence: {slug}", "", f"**Goal:** {task['goal']}", ""]
+    foot = ["", "---", "Opened by Herd with `herd pr`. Herd never merges: review the evidence above, then merge."]
+    if ev is None:
+        return "\n".join(head + ["No evidence yet: `herd verify` has not run. The next `herd pr` replaces this."]
+                         + foot) + "\n"
+    s, results = ev["summary"], ev["results"]
+    stale = _stale(root, slug, ev)
+    if stale:
+        fresh = ("**The evidence is stale:** the code or the task changed after the last `herd verify`, "
+                 "so these results may no longer hold.")
+    else:
+        fresh = (f"The evidence is fresh: the checks ran at {ev['at']} on commit `{ev['head'][:12]}`"
+                 + (" plus uncommitted changes." if ev.get("dirty") else "."))
+    proven = [r for r in results if r["status"] == "passing" and not r.get("zero_tests")]
+    zero = sum(bool(r.get("zero_tests")) for r in results)
+    lines = head + [f"**Result:** {len(proven)} of {len(results)} criteria proven by a passing check "
+                    f"({s['failing']} failing, {s['unchecked']} unchecked"
+                    + (f", {zero} passed without running any test" if zero else "") + ").", "", fresh, ""]
+    lines += [f"## What was proven at commit `{ev['head'][:12]}`, before later changes (stale: re-run `herd verify`)"
+              if stale else "## What is proven", ""]
+    passing = proven
+    if passing:
+        lines += ["| id | source | criterion | proof: the check that passed |", "| --- | --- | --- | --- |"]
+        lines += [f"| {r['id']} | {r['source']} | {_cell(r['text'])} | {_code(r['check'])} exit 0 |" for r in passing]
+    else:
+        lines.append("Nothing yet: no criterion has a passing check.")
+    gaps = [f"- {r['id']} is failing (exit {r['exit_code']}): {r['text']}" for r in results if r["status"] == "failing"]
+    gaps += [f"- {r['id']} is unchecked, never counted as met: {r['text']}" for r in results if r["status"] == "unchecked"]
+    gaps += [f"- {r['id']} passed but ran zero tests, so it proves nothing yet" for r in results if r.get("zero_tests")]
+    gaps += [f"- {cid} is a human criterion not quoted verbatim from the request" for cid in ev.get("human_not_verbatim") or []]
+    gaps += [f"- {r['id']}, what its check proves and does not: {r['coverage'].strip()}"
+             for r in results if r["source"] == "human" and str(r.get("coverage") or "").strip()]
+    if ev.get("known_limits"):
+        gaps.append(f"- Known limits: {ev['known_limits']}")
+    gaps += [f"- Open caveat: {n['text']}" for n in notes if n["kind"] == "open"]
+    if ev.get("route") != "quick" and not any(n["kind"] == "tried" for n in notes):
+        gaps.append("- No adversarial pass was recorded")
+    lines += ["", "## What is not proven", ""] + (gaps or ["- Nothing recorded, which is unusual: ask what the checks miss"])
+    details = [f"Route: {ev.get('route', 'standard')}"]
+    if ev.get("red"):
+        details.append(f"First verify: {ev['red']['failed']} of {ev['red']['total']} checks failed before the work")
+    if ev.get("timing"):
+        details.append(f"Elapsed: {fmt_duration(ev['timing']['elapsed_s'])} from `herd init` to the last verify")
+    if ev.get("test_budget"):
+        details.append(f"Test budget: {ev['test_budget']}")
+    tried = sum(n["kind"] == "tried" for n in notes)
+    if tried:
+        details.append(f"Adversarial pass: {tried} attempt{'s' if tried != 1 else ''} recorded")
+    lines += ["", "## Run details", ""] + [f"- {d}" for d in details]
+    # ponytail: output tails stay out of the PR (they can hold secrets); the reviewer re-runs the check instead
+    if notes:
+        shown = notes[:MAX_PR_NOTES]
+        lines += ["", "Caveats logged during the run:"]
+        lines += [f"- {fmt_duration(n['elapsed_s']) + ' ' if n.get('elapsed_s') is not None else ''}"
+                  f"{n['kind']}: {n['text']}" for n in shown]
+        if len(notes) > len(shown):
+            lines.append(f"- and {len(notes) - len(shown)} more: run `herd status {slug}`")
+    checks = [r["check"] for r in results if r["check"].strip()]
+    fence = _ticks("\n".join(checks), least=3)
+    lines += ["", "## Reproduce", "", "Run from the repository root:", "", fence + "bash"] + checks + [fence]
+    return "\n".join(lines + foot) + "\n"
+
+
+def pr_title(goal, slug, limit=72):
+    """The goal's first line, cut at a word boundary to fit a PR list."""
+    line = (str(goal).strip().splitlines() or [slug])[0].strip() or slug
+    if len(line) <= limit:
+        return line
+    cut = line[:limit - 3].rsplit(" ", 1)[0].rstrip(" ,;:")
+    return cut + "..."
+
+
+def open_pr(root, slug, yes=False):
+    """Push the task's herd/* branch and open or update its PR with the evidence. Opt-in; no other branch."""
+    try:
+        cfg = tomllib.loads((Path(root) / "herd.toml").read_text()).get("pr")
+    except (OSError, tomllib.TOMLDecodeError):
+        cfg = None
+    if not (yes or (isinstance(cfg, dict) and cfg.get("open") is True)):
+        raise ValueError("herd pr is opt-in: set `[pr] open = true` in herd.toml, or pass --yes when the request "
+                         "asks for a pull request")
+    branch = _git(root, "rev-parse", "--abbrev-ref", "HEAD").decode().strip()
+    if branch != f"herd/{slug}":
+        raise ValueError(f"herd pr pushes only the task's branch herd/{slug}; this is `{branch or 'no branch'}`")
+    if _git(root, "status", "--porcelain", "--", ".", ":!.herd").strip():
+        raise ValueError("herd pr needs a clean working tree: commit the work, run `herd verify`, then `herd pr`, "
+                         "so the pull request contains exactly the code the evidence is about")
+    if not shutil.which("gh"):
+        raise ValueError("herd pr needs the GitHub CLI `gh` on PATH")
+    body = pr_body(root, slug)
+    p = subprocess.run(["git", "push", "-u", "origin", branch], cwd=root, capture_output=True, text=True)
+    if p.returncode:
+        raise ValueError(f"git push failed: {p.stderr.strip()[-500:]}")
+    view = subprocess.run(["gh", "pr", "view", branch, "--json", "url,state", "-q", 'select(.state == "OPEN") | .url'],
+                          cwd=root, capture_output=True, text=True)
+    url = view.stdout.strip() if view.returncode == 0 else ""  # empty unless an open PR exists
+    if url:
+        cmd = ["gh", "pr", "edit", branch, "--body-file", "-"]
+    else:
+        cmd = ["gh", "pr", "create", "--head", branch, "--title", pr_title(load_task(root, slug)["goal"], slug), "--body-file", "-"]
+    p = subprocess.run(cmd, cwd=root, input=body, capture_output=True, text=True)
+    if p.returncode:
+        raise ValueError(f"`{' '.join(cmd[:3])}` failed: {(p.stderr or p.stdout).strip()[-500:]}")
+    return url or p.stdout.strip().splitlines()[-1]
 
 
 # ---- lint hook ------------------------------------------------------------
@@ -527,6 +659,7 @@ USAGE = {
     "status": "herd status [slug]",
     "done": "herd done [slug]",
     "cancel": 'herd cancel [slug] [--reason "text"]',
+    "pr": "herd pr [slug] [--yes]   (push the herd/* branch, open or update its PR with the evidence)",
     "gate": "herd gate   (the Stop hook, reads hook JSON on stdin)",
     "triage": 'herd triage "<text>"',
 }
@@ -626,6 +759,12 @@ def main(argv):
             (root / ".herd" / "active").unlink(missing_ok=True)
             print(text)
             print("done: evidence is fresh and passing")
+        elif cmd == "pr":
+            slug = _slug_arg(root, [a for a in args if a != "--yes"])
+            print(open_pr(root, slug, yes="--yes" in args))
+            probs = problems(root, slug)
+            if probs:
+                print("warning: the pull request shows evidence that is not done: " + "; ".join(probs), file=sys.stderr)
         elif cmd == "cancel":
             reason, args = _opt(args, "--reason")
             slug = _slug_arg(root, args)

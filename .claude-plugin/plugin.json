@@ -1,7 +1,7 @@
 {
   "name": "herd",
   "displayName": "Herd",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "description": "Autopilot SDLC harness: hand an agent a goal with success criteria, and it works until runnable checks prove the criteria pass.",
   "author": {
     "name": "Beovulfo"

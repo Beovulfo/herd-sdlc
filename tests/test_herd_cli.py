@@ -1180,7 +1180,7 @@ class TestAttackChecks(Base):
         probs = " ".join(herd.problems(self.root, "t1"))
         self.assertIn("bad-input", probs)
         self.assertIn("recount", probs)
-        self.assertNotIn("collision", probs)
+        self.assertNotIn("collision (", probs)  # passing, so not listed (the recount text names collision inputs)
         self.assertEqual(herd.gate(self.root, {})["decision"], "block")
         self.assertEqual(self.cli("done").returncode, 1)
         herd.add_note(self.root, "t1", "tried", "real recount", attack="recount", check=OK)

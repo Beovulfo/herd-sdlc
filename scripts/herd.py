@@ -91,7 +91,22 @@ ESCALATE_AFTER = 3  # consecutive failing verifies of one criterion before the a
 ATTACKS = {"bad-input": "bad input at every entry point ends in a clear message, never a traceback",
            "collision": "two inputs on the same key or position each still count",
            "one-bad-part": "one broken entry the request does not ask for does not reject the whole input, while a broken requested one still fails clearly",
-           "recount": "every reported number recomputed from the output with separate code"}
+           "recount": "every reported number recomputed from the output with separate code, on the generated and "
+                      "collision inputs too"}
+UNIVERSAL = re.compile(r"\b(any|every|whatever|whichever|arbitrary)\b", re.I)  # a human claim over all inputs
+NARROWS = re.compile(r"\b(only|first|rejected|rejects?|refused|refuses?|cannot|can't|unsupported|not supported|"
+                     r"not handled|assumes?|assumed|ignored|ignores?|limited to|must be)\b", re.I)
+
+
+def narrowed_claims(ev, notes):
+    """Known limits and open notes that narrow a human any/every claim: shown as not proven, for the human."""
+    claims = [(r["id"], m.group(0)) for r in ev.get("results", [])
+              if r.get("source") == "human" and (m := UNIVERSAL.search(str(r.get("text", ""))))]
+    if not claims:
+        return []
+    texts = re.split(r"(?<=[.;])\s+", str(ev.get("known_limits") or "")) + [n["text"] for n in notes if n["kind"] == "open"]
+    hits = [s.strip() for s in texts if s.strip() and NARROWS.search(s)]
+    return [f"{cid} says '{word}', narrowed by: {s}" for cid, word in claims for s in hits[:5]]
 MAX_TEXT_WORDS, MAX_COVERAGE_WORDS = 40, 50  # advisory limits, see length_warnings
 WORKTREES = ".claude/worktrees"  # where `herd init --worktree` puts tasks; Claude Code's EnterWorktree can enter it
 OWN_FILES = (".", ":!.herd")  # pathspec: this checkout's work, not Herd's own state
@@ -419,6 +434,12 @@ def coverage_warnings(task):
         if sc and not SCALED.search(cov):
             out.append(f"{cid}: human criterion says '{sc.group(0)}' but its `coverage` has no scale statement "
                        "(largest size tried, time limit)")
+    claims = [(c.get("id", "?"), m.group(0)) for c in task.get("criteria", [])
+              if c.get("source") == "human" and (m := UNIVERSAL.search(str(c.get("text", ""))))]
+    for s in re.split(r"(?<=[.;])\s+", str(task.get("known_limits", ""))):
+        if claims and NARROWS.search(s):
+            out.append(f"{claims[0][0]} says '{claims[0][1]}' but `known_limits` narrows it: \"{s.strip()}\". "
+                       "Test the claim under that limit, or lift the limit; it is shown to the human as not proven")
     if task.get("route", "standard") != "quick" and not str(task.get("known_limits", "")).strip():
         out.append("no `known_limits`: say under what conditions the claim may fail or has not been shown")
     return out
@@ -871,6 +892,7 @@ def _rule_lines(ev, notes):
     out += [f"{cid}: check changed after the first verify, so it was never seen failing"
             for cid in ev.get("checks_changed") or []]
     out += [f"{cid}: added after the first verify, so it was never seen failing" for cid in ev.get("added_after_red") or []]
+    out += narrowed_claims(ev, notes)
     if (ev.get("red") or {}).get("stashed"):
         out.append("Red first not proven: a git stash was made on this branch before the first verify")
     out += [f"Human criterion changed with the human's words, for you to confirm: {n['text']}"

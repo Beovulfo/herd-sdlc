@@ -14,7 +14,7 @@ OK = "python3 -c \"import json\""  # an attack command that passes and is not va
 REQUEST = "Add f() to app.py. It must return 1 for any call."
 APP_CHECK = "python3 -c \"import app; assert app.f() == 1\""
 TASK = f'''goal = "Add f() to app.py"
-known_limits = "Only the return value is checked."
+known_limits = "Repeated calls are not timed."
 
 [[criteria]]
 id = "C1"
@@ -232,7 +232,7 @@ class TestFinalReport(Base):
         self.assertIn("Proven: 2 of 2 criteria", out)
         self.assertIn("f takes no arguments; the request named none; add parameters in app.py", out)
         self.assertIn("f() returned None for no arguments", out)
-        self.assertIn("Limits: Only the return value is checked.", out)
+        self.assertIn("Limits: Repeated calls are not timed.", out)
         self.assertIn("Review: a fresh subagent: no Blocker or Major", out)
         self.assertIn("Not proven: nothing open", out)
         self.assertIn(".herd/tasks/t1/evidence.md", out)
@@ -624,6 +624,38 @@ class TestThirdReview(Base):
         (self.root / "tests").mkdir()
         (self.root / "tests/run").write_text("#!/bin/sh\n")
         self.assertFalse(herd.is_code("tests/run", self.root))
+
+
+
+class TestNarrowedClaims(Base):
+    """Lesson from 12 Haiku runs: a limit that narrows the human's any/every claim reaches the human."""
+
+    def test_a_limit_that_narrows_an_any_claim_is_not_proven_and_warned(self):
+        narrowed = TASK.replace('known_limits = "Repeated calls are not timed."',
+                                'known_limits = "Repeated calls are not timed. Calls with arguments are rejected."')
+        self.start(narrowed)
+        self.red_then_build()
+        self.attacks_and_review()
+        herd.add_note(self.root, "t1", "open", "only the first call is cached")
+        ev = herd.verify(self.root, "t1")
+        line = "C1 says 'any', narrowed by: Calls with arguments are rejected."
+        self.assertIn(line, herd.report(ev))
+        self.assertIn(line, herd.pr_body(self.root, "t1"))
+        self.assertIn("C1 says 'any', narrowed by: only the first call is cached", herd.report(ev))
+        self.assertNotIn("narrowed by: Repeated calls are not timed", herd.report(ev))
+        self.assertTrue(any("narrows it" in w for w in ev["warnings"]), ev["warnings"])
+        self.assertEqual(herd.problems(self.root, "t1"), [])  # shown to the human, not blocked
+        self.assertIn("narrowed by: Calls with arguments are rejected", self.cli("done").stdout)
+
+    def test_no_narrowing_lines_without_a_human_any_claim(self):
+        text = TASK.replace('"It must return 1 for any call"', '"It must return 1"').replace(
+            'known_limits = "Repeated calls are not timed."', 'known_limits = "Only one call is checked."').replace(
+            'text = "Given the module', 'text = "Given any module')  # an agent's "any" does not count
+        self.start(text)
+        self.red_then_build()
+        ev = herd.verify(self.root, "t1")
+        self.assertNotIn("narrowed by", herd.report(ev))
+        self.assertFalse(any("narrows it" in w for w in ev["warnings"]))
 
 
 if __name__ == "__main__":

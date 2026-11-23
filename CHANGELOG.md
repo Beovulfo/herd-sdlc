@@ -2,6 +2,14 @@
 
 All notable changes to Herd. Versions follow `.claude-plugin/plugin.json`.
 
+## 0.4.1
+
+Lessons from 12 Haiku runs of the supermarket benchmark (Herd 0.3.1 and 0.4.0), kept to changes that add little or no work per run. Every store they lost came from one bug class: a product reported as unreachable although another side of its shelf was open. Four of six 0.4.0 runs chose a map format that takes the pick cell instead of the shelf, and limits such as "rejected if walls cut it off" or "first neighbour only" contradicted the any-layout claim without reaching the human.
+
+- **Added:** a known limit or open note that narrows a human any/every claim (only, first, rejected, assumed, ignored and the like) is listed under Not proven in the report, the final report and the PR, and `herd verify` warns about it. It does not block: the human decides. The check is a word list, so it can miss a limit worded otherwise and flag a harmless one.
+- **Changed:** the `recount` attack also runs on the generated and collision inputs. A Haiku run recounted its own examples and missed a time that was short by one pick when two products shared a cell.
+- **Changed:** the adversarial pass asks for purely random inputs besides the shapes the agent designs, and the criteria skill says to take each input as the human described it (a product on its shelf), not in a pre-computed form.
+
 ## 0.4.0
 
 Seven rules of the run skill move from text into the CLI, so an agent that skips the text still meets them. Three fresh-context reviews of this release found holes; each is fixed and covered by a test.

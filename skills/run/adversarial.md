@@ -9,7 +9,7 @@ Try to break your own work on exactly what the request promises. Never skip it b
 2. Always run the four standard attacks, whatever the request says:
    - `--attack bad-input`: bad input at every entry point (each file, argument and record a user supplies): missing, unreadable, malformed, wrong type, unknown id, empty. Each must end with one clear message and a non-zero exit, never a traceback.
    - `--attack collision`: two inputs that land on the same key, position or slot (duplicates, shared locations, equal names). Each one must still be counted.
-   - `--attack one-bad-part`: a broken or unreachable entry that the request does not use must not reject the whole input.
+   - `--attack one-bad-part`: a broken or unreachable entry that the request does not ask for must not reject the whole input; a requested entry that is broken or unreachable must still fail with a clear message.
    - `--attack recount`: recompute every reported number (totals, times, counts) from the output itself, such as the trace or the rows, with separate code. Never check a number with the code that produced it.
    An existing test, such as a criterion's check, counts for an attack only if it meets that attack's rule above: every entry point for bad-input, separate code for recount. Log the test's name and what it covers. An attack that cannot apply gets a note that says why: `herd note --tried --attack collision "n/a: the tool takes one value"`.
 3. Run them. If you can spawn a fresh-context subagent, give it only the request, the criteria and how to run the tool, and ask it to break it. Otherwise do it yourself and say it was not fresh.

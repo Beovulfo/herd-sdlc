@@ -1013,6 +1013,12 @@ class TestSimplifiedAdversarial(Base):
         self.assertIn("malformed", bad)
         self.assertIn("empty", bad)
 
+    def test_one_bad_part_names_both_cases(self):
+        # a benchmark run applied it to a requested product and silently skipped it
+        rule = self.adv.split("--attack one-bad-part", 1)[1].split("\n", 1)[0]
+        self.assertIn("does not ask for must not reject the whole input", rule)
+        self.assertIn("a requested entry that is broken or unreachable must still fail with a clear message", rule)
+
     def test_existing_test_counts_only_if_it_meets_the_attack_rule(self):
         self.assertIn("counts for an attack only if it meets that attack's rule above", self.adv)
         self.assertIn("separate code for recount", self.adv)

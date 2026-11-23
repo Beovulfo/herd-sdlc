@@ -81,7 +81,7 @@ NOTE_KINDS = ("found", "fixed", "open", "tried")
 # the standard attacks of the adversarial pass (skills/run/adversarial.md): `herd done` needs a tried note for each
 ATTACKS = {"bad-input": "bad input at every entry point ends in a clear message, never a traceback",
            "collision": "two inputs on the same key or position each still count",
-           "one-bad-part": "one broken entry the request does not use does not reject the whole input",
+           "one-bad-part": "one broken entry the request does not ask for does not reject the whole input, while a broken requested one still fails clearly",
            "recount": "every reported number recomputed from the output with separate code"}
 MAX_TEXT_WORDS, MAX_COVERAGE_WORDS = 40, 50  # advisory limits, see length_warnings
 WORKTREES = ".claude/worktrees"  # where `herd init --worktree` puts tasks; Claude Code's EnterWorktree can enter it

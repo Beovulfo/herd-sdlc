@@ -472,11 +472,15 @@ def _stashed_since(root, epoch):
             and int(s.split("\t", 1)[0]) >= int(epoch) and f"on {branch}:" in s.split("\t", 1)[1].lower()]
 
 
+BUILT_EXT = (".pyc", ".pyo", ".class", ".o", ".so", ".dylib", ".dll", ".exe", ".log")
+BUILT_DIRS = {"__pycache__", "node_modules", ".pytest_cache", ".mypy_cache", ".ruff_cache", "build", "dist", "target"}
+
+
 def is_code(path, root=None):
     """A changed path that counts as code for red first: not Herd's own state, not docs, not tests."""
     parts = Path(path).parts
-    if not parts or parts[0] == ".herd" or path.lower().endswith(DOC_EXT):
-        return False
+    if not parts or parts[0] == ".herd" or path.lower().endswith(DOC_EXT + BUILT_EXT) or BUILT_DIRS & set(parts):
+        return False  # Herd's state, docs, config, and what running the code leaves behind
     name = parts[-1]
     if name.startswith("."):  # .gitignore, .editorconfig: setup, not code
         return False

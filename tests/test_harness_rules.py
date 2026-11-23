@@ -42,6 +42,7 @@ class Base(unittest.TestCase):
         git(self.root, "init", "-q")
         git(self.root, "config", "user.email", "t@example.com")
         git(self.root, "config", "user.name", "t")
+        git(self.root, "config", "core.excludesFile", "/dev/null")  # like CI: no global gitignore hides __pycache__
         (self.root / "README.md").write_text("x")
         git(self.root, "add", "-A")
         git(self.root, "commit", "-q", "-m", "init")
@@ -314,7 +315,8 @@ class TestReviewFindings(Base):
         self.assertEqual(herd.verify(self.root, "t1")["red"]["code_before"], [])
 
     def test_config_dotfiles_and_extensionless_files_are_not_code(self):
-        for f in ("pyproject.toml", "package.json", ".gitignore", "Makefile", "tests/test_x.py", ".herd/x.py"):
+        for f in ("pyproject.toml", "package.json", ".gitignore", "Makefile", "tests/test_x.py", ".herd/x.py",
+                  "__pycache__/app.cpython-312.pyc", "node_modules/x/index.js", "dist/app.js"):
             self.assertFalse(herd.is_code(f), f)
         self.assertTrue(herd.is_code("src/app.py"))
 

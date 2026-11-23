@@ -2,6 +2,17 @@
 
 All notable changes to Herd. Versions follow `.claude-plugin/plugin.json`.
 
+## 0.3.0
+
+Herd is short by default. Measured on this repository: the three skills went from 2,592 to 1,662 words (run: 1,286 to 777), a passing `herd verify` from one line per criterion to one line, and `herd done` from the full report (about 1,000 words) to two lines.
+
+- **Changed:** `herd verify` prints one summary line plus only the criteria that need attention (failing, unchecked, ran zero tests); `--verbose` lists all. `herd done` prints two lines (result and the path to `evidence.md`); `--verbose` prints the report. `herd triage` prints one line (`risk: high (auth/**)`, or the config error when `herd.toml` is broken); `--json` prints the full record.
+- **Changed:** the run skill is 777 words. The quick route, the worktree start, the adversarial pass and the PR step moved to reference files (`skills/run/quick.md`, `worktree.md`, `adversarial.md`, `pr.md`) that the agent reads only when the step applies. The criteria and evidence skills are under 450 words each.
+- **Added:** a fixed final report: seven lines (done, proven, not proven, caveats, decisions, limits, review), filled from `evidence.md`, that link the evidence instead of repeating it, and writing rules in the run skill (answer first, no recap, never drop a negation, numbers and commands exact).
+- **Changed:** the PR description shows the result, what is proven and what is not; run details, the caveat log and Reproduce are collapsed `<details>` blocks. Long check commands are cut to 60 characters in the table and kept in full under Reproduce.
+- **Added:** `herd check` warns when a criterion text is over 40 words or a coverage note over 50 words.
+- **Added:** budget tests (`TestBudgets`) keep these sizes from creeping back.
+
 ## 0.2.9
 
 - **Added:** `herd init <slug> "<goal>" --worktree` starts a task on a new `herd/<slug>` branch in its own git worktree at `.claude/worktrees/herd-<slug>`, cut from the local branch you are on. The task's files and active pointer live in that worktree, so several agents can run Herd tasks in one repository at once; a duplicate slug fails cleanly, and a failed init removes the worktree and branch it made. The base branch is recorded and `herd pr` targets it. Uncommitted changes left in the starting checkout are reported.

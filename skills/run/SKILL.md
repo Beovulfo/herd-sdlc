@@ -6,31 +6,48 @@ argument-hint: "<the task, one or two sentences>"
 
 # Herd run: goal in, evidence out
 
-Work the task to the end without waiting on the human. The human gave a goal (and maybe criteria). You deliver code plus **evidence** that the criteria pass. "Done" means `herd done` succeeded, not that you say so. A Stop hook enforces this while a task is active.
+Work the task to the end without waiting on the human. You deliver code plus **evidence** that the criteria pass. "Done" means `herd done` succeeded, not that you say so. A Stop hook enforces this while a task is active.
 
-Run `herd` commands from the project root (a git repository), or from the task's worktree when it has one, written out in full so they work in any shell:
-`python3 "${CLAUDE_PLUGIN_ROOT}/scripts/herd.py" <command>`. Below, `herd <command>` means exactly that. Check commands you write in `task.toml` also run from the project root.
+`herd <command>` means `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/herd.py" <command>`, written out in full, run from the project root (or the task's worktree). Checks in `task.toml` run from there too.
+
+Read a reference file only when its step applies: [quick.md](quick.md), [worktree.md](worktree.md), [adversarial.md](adversarial.md), [pr.md](pr.md).
 
 ## Steps
 
-1. **Intake.** Pick a short slug and a route.
-   - **Quick** for a trivial change: one file, no new behaviour surface, and an existing command that can fail first. Run `herd init <slug> "<goal>" --quick "<check>" --request "<the user's message, verbatim>"`. It refuses a `high` risk floor. Quick skips the criteria interview, the approval question and the fresh-context review. It still needs red first, `herd verify` and `herd done`. Skip steps 2, 4, 6 and 7 below; continue at step 3.
-   - **Standard** for everything else: run `herd init <slug> "<goal>" --request "<the user's message, verbatim>"`. The request is stored so `herd check` can confirm that human criteria quote the human.
-   - **Own worktree (opt-in).** Add `--worktree` to `herd init` when `herd.toml` has `[worktree] required = true`, when the user asks for it, or when other agents may work in the same repository. It creates the branch `herd/<slug>` in its own worktree at `.claude/worktrees/herd-<slug>`, cut from the branch you are on, and prints the path. Move into it before anything else: in Claude Code, call EnterWorktree with that path; otherwise `cd` into it. Run every later edit and command from there. If a `herd` command says the task lives in its worktree, you are in the wrong place: move there. Never start a second task in a checkout that already has an active one.
-   Then run `herd triage "<goal text>"` (standard route). Triage prints a risk floor from `herd.toml` path rules: `high` or `medium` if a rule matched, `medium` by default when the text names no path, `low` only if a maintainer labelled it. You may raise the risk, never lower it. Do not ask clarifying questions: fill gaps with stated assumptions.
-2. **Criteria.** Follow the `herd:criteria` skill, then run `herd check`. Run `herd detect` to find the project's real test command instead of guessing. If the user wants to plan the evidence together, point them to `/herd:evidence`.
-3. **Red.** Run `herd verify` once before building. It should report the checks failing. A check that already passes proves nothing: tighten it. If `herd verify` marks a check `(ran zero tests)`, its command found no tests: fix the command or the test path, never leave it, because it passes without proving anything.
-4. **Gate.** Risk `high`: show the criteria table and assumptions and ask one approval question before building. Risk `low` or `medium`: print the criteria table and assumptions and continue. If the user said to confirm criteria first, always ask.
-5. **Build.** Work on a branch named `herd/<slug>`. Tests first. If Superpowers is installed, use `superpowers:writing-plans`, `superpowers:test-driven-development` and `superpowers:subagent-driven-development`; otherwise do the same in short steps yourself. Keep changes minimal and within the goal.
-6. **Break it (adversarial pass, standard route).** Before review, try to break your own work on exactly what the request promises. Take the human's quantifier and size words (`any`, `every`, `whatever`, `many`, `big`, `very big`) and turn each into hostile inputs: generated cases from several different shapes or families, extremes (empty, huge, degenerate, disconnected, malformed), and a scale run with a time limit. Run them. If you can spawn a fresh-context subagent, give it only the request, the criteria and how to run the tool, and ask it to break it and report what fails; otherwise do it yourself and say it was not fresh. Record every attempt and result with `herd note`, each one the moment you find or fix it, one call at a time, never in a batch at the end (the report flags notes logged together, because their times then mean nothing): `herd note --tried "what you generated and ran"`, `herd note --found "what broke"`, `herd note --fixed "how"`, `herd note --open "a limit you did not fix"`. Turn each failure into a regression test and fix it. Never skip this step because the demo passes: the report shows when no pass was recorded.
-7. **Review (medium and high risk).** Get a review from a fresh context, never your own. Use `superpowers:requesting-code-review` or EGM's Goldfish agents (`egm:egm-zoom-out`, `egm:egm-implementation-readiness`) if installed. Otherwise spawn a plain subagent with only the goal, the criteria and the diff, and ask for bugs and missed criteria. If you cannot spawn a reviewer at all, do not stop to ask the human: say in your final report that the review was skipped and why, and treat the change as unreviewed. Include the task's `test_budget` if it has one: ask the reviewer whether the diff matches it, flagging missing coverage and low-value extra tests. Fix Blocker and Major findings; decline Nits with a one-line reason. At most 3 review rounds, then escalate.
-8. **Verify.** Run `herd verify` after every change. Fix every failing criterion and run it again. After 3 failed attempts on one criterion, escalate.
-9. **Escalate only when needed.** Stop and ask the human **one** question with 2 to 3 numbered options when: an action is irreversible, a real trade-off needs a human, or you are stuck after the caps above. Never stop for missing detail. If the human drops the task, run `herd cancel --reason "<their words>"`: the files stay as a record and the Stop gate stops blocking. Never cancel on your own to get past the gate.
-10. **Finish.** Commit the work on the task branch if the project allows it (otherwise say it is uncommitted; the evidence records that). Run `herd done`: it refuses unless evidence is fresh and passing, and prints `done: ...` on success. Then report in plain text: what changed, the evidence table, unchecked criteria (never counted as met), each autonomous decision in at most 3 lines (decision, reason, how to override), and the headline claim with its conditions and where it fails (the `known_limits` line), not just your best demo number. The report also lists the caveats you recorded with `herd note`, with when each was found.
-11. **Pull request (opt-in).** Only when the request asks for a pull request, or `herd.toml` has `[pr] open = true`. After committing, run `herd pr <slug>`, adding `--yes` when the request asked for the PR. It pushes the `herd/<slug>` branch and opens a PR whose description is the evidence: what is proven and by which check, what is not, and how to reproduce it. If a criterion needs the PR to exist, open it before the final `herd verify`. After `herd done`, run `herd pr <slug>` again so the description shows the final evidence, and put the PR link in your report. Never merge: the human reviews the evidence and merges.
+1. **Intake.** Pick a short slug. Trivial change (one file, no new behaviour, an existing check can fail first)? Take the quick route: [quick.md](quick.md). Otherwise run `herd init <slug> "<goal>" --request "<the user's message, verbatim>"`. Add `--worktree` when `herd.toml` has `[worktree] required = true`, the user asks for it, or other agents work in this repository: [worktree.md](worktree.md). Then run `herd triage "<goal text>"`. It prints the risk floor. You may raise it, never lower it. Do not ask clarifying questions: state assumptions.
+2. **Criteria.** Follow the `herd:criteria` skill, then run `herd check` and fix its warnings. Use `herd detect` for the real test command. To plan evidence with the user, point them to `/herd:evidence`.
+3. **Red.** Run `herd verify` before building. Checks must fail. A check that already passes proves nothing: tighten it. A check marked `(ran zero tests)` found no tests: fix its command.
+4. **Gate.** Risk `high`: show the criteria table and assumptions, ask one approval question, wait. Otherwise show them and continue. Always ask if the user said to confirm criteria first.
+5. **Build.** On branch `herd/<slug>`, tests first, minimal changes within the goal. Use Superpowers (`writing-plans`, `test-driven-development`, `subagent-driven-development`) when installed; otherwise work in short steps yourself.
+6. **Break it** (standard route). Attack exactly what the request promises: [adversarial.md](adversarial.md). Log each attempt and result with `herd note --tried|--found|--fixed|--open "..."` the moment you find or fix it, one call at a time, never in a batch at the end. Turn each failure into a regression test.
+7. **Review** (medium and high risk). Get a fresh-context review, never your own: `superpowers:requesting-code-review`, EGM Goldfish agents, or a plain subagent given only the goal, criteria, `test_budget` and diff. Ask for bugs, missed criteria, and test gaps or low-value tests against `test_budget`. Fix Blocker and Major findings; decline Nits in one line. At most 3 rounds. No reviewer available? Do not ask the human: say so in the report and treat the change as unreviewed.
+8. **Verify.** Run `herd verify` after every change. It prints one line, plus any criterion that needs attention. After 3 failed attempts on one criterion, escalate.
+9. **Escalate only when needed:** an irreversible action, a real trade-off, or stuck after the caps. Ask **one** question with 2 or 3 numbered options. Never stop for missing detail. If the human drops the task, run `herd cancel --reason "<their words>"`. Never cancel to get past the gate.
+10. **Finish.** Commit on the task branch if the project allows it; otherwise say it is uncommitted. If the request asked for a pull request or `herd.toml` has `[pr] open = true`, follow [pr.md](pr.md): it opens the PR before the final verify. Run `herd verify`, then `herd done`. Fill the final report from `evidence.md` (or `herd done --verbose`), not from memory.
+
+## Final report
+
+Use this template and nothing else. Do not repeat the evidence table: link it.
+
+```text
+Done: <what changed, one line>.
+Proven: <N of M criteria>; evidence in <evidence.md path or PR link>.
+Not proven: <failing, unchecked or zero-test criteria, open caveats; or "nothing open">.
+Caveats: <found and fixed notes with when found; or "none">.
+Decisions: <every decision, one line each: decision; reason; how to override>.
+Limits: <known_limits: where the claim fails, not your best demo number>.
+Review: <who reviewed, or "skipped: reason">.
+```
+
+## Writing
+
+- Answer first. No greeting, no recap, no closing offer.
+- One idea per sentence, 20 words at most. Active voice.
+- Short words; standard terms only, no invented abbreviations.
+- Never drop not, never, no, only or except. Numbers, paths and commands exact.
+- Quote command output, not "it works". Link files instead of pasting them.
 
 ## Rules
 
-- Human-written criteria and checks are never weakened to make them pass. If a check is wrong, say so and ask.
-- Evidence beats claims: quote command output, not "it works".
-- If the Stop hook blocks you, read its reason, fix the cause, run `herd verify`. Do not edit the evidence files by hand.
+- Never weaken human criteria or checks to make them pass. If a check is wrong, say so and ask.
+- If the Stop hook blocks you, fix the cause and run `herd verify`. Never edit evidence files by hand.

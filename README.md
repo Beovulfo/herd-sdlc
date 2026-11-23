@@ -45,6 +45,7 @@ You review evidence (command output, commit SHA, timestamps), not process.
 - **Caveats surface early.** The agent must say what each check does not prove, try to break its own work, and log what it finds, so problems appear during the run, not after it.
 - **Checks that test nothing are caught.** A check that exits 0 but ran zero tests is flagged instead of counted as proof.
 - **The pull request is the evidence (opt-in).** `herd pr` opens a PR whose description shows what is proven and by which check, what is not, and how to reproduce it. It never merges.
+- **Short by default.** Commands print a line or two, the agent ends with a seven-line report, and the pull request collapses its details. The full detail is one flag or one file away.
 - **Several tasks at once (opt-in).** `herd init --worktree` gives each task its own branch and git worktree, so several agents can work in one repository without touching each other.
 - **Light.** A small Python CLI on the standard library, no dependencies, plain-text task files. It reuses [Superpowers](https://github.com/obra/superpowers) and [EGM](https://github.com/google/elephant-goldfish-model) when they are installed.
 
@@ -190,10 +191,15 @@ Before any work, both checks fail, which proves they test something. After the w
 ```text
 $ herd verify
 2 passing, 0 failing, 0 unchecked
-  C1 passing: Given 'Hello, World!', when slugify runs, then it returns 'hello-world'
-  C2 passing: Given only punctuation, when slugify runs, then it returns an empty string
 
 $ herd done
+done: evidence is fresh and passing (2 of 2 criteria proven)
+report: .herd/tasks/slugify/evidence.md
+```
+
+`herd verify` lists a criterion only when it needs attention (failing, unchecked, or ran zero tests); `--verbose` lists all. The report in `evidence.md` (also `herd done --verbose`):
+
+```text
 # Evidence: slugify
 Result: 2 passing, 0 failing, 0 unchecked
 First verify: 2 of 2 checks failed before the work
@@ -203,7 +209,18 @@ Adversarial pass: 2 attempts recorded
 | id | status | source | check |
 | C1 | passing | human | `python3 -m unittest test_textutil.TestSlugify.test_basic` |
 | C2 | passing | agent-proposed | `python3 -m unittest test_textutil.TestSlugify.test_empty` |
-done: evidence is fresh and passing
+```
+
+The agent's final message to you is seven lines, filled from the report and linking it instead of repeating it:
+
+```text
+Done: added slugify(text) in textutil.py.
+Proven: 2 of 2 criteria; evidence in .herd/tasks/slugify/evidence.md.
+Not proven: accents and very long input (C1 coverage).
+Caveats: found that an empty string crashed (0m 50s), fixed (1m 10s).
+Decisions: none.
+Limits: ASCII text only; non-Latin scripts are not handled.
+Review: fresh-context subagent, no Blocker or Major findings.
 ```
 
 With `herd pr`, the same evidence becomes the pull request description (abridged):
@@ -223,9 +240,11 @@ The evidence is fresh: the checks ran at 2026-11-23T10:02:11Z on commit `4cd7bd8
 - C1, what its check proves and does not: proves the basic case and punctuation; does not prove accents or very long input
 - Known limits: ASCII text only; non-Latin scripts are not handled
 
-## Run details
-## Reproduce
+<details><summary>Run details and caveat log (2 tried, 0 found, 0 fixed)</summary> ... </details>
+<details><summary>Reproduce: run from the repository root</summary> ... </details>
 ```
+
+Long check commands are cut in the table and shown in full under Reproduce.
 
 If the agent tries to finish while a check is failing, the Stop hook answers instead:
 
@@ -282,13 +301,13 @@ python3 examples/supermarket-route/verifier/verify_general.py with_herd examples
 | `herd init <slug> "<goal>" --request "<message>"` | Create a task and make it active. `--request` stores the human's message verbatim so `herd check` can flag human criteria that are not quotes |
 | `herd init <slug> "<goal>" --quick "<check>"` | Quick route for a trivial change: one criterion, one check. Refused at a `high` risk floor |
 | `herd init <slug> "<goal>" --worktree` | Opt-in: start the task on a new `herd/<slug>` branch in its own worktree at `.claude/worktrees/herd-<slug>`, cut from the current local branch, so several agents can run tasks in one repository. `[worktree] required = true` in `herd.toml` makes it mandatory |
-| `herd check` | Validate `task.toml`; warns about checks that do not run project code, human criteria that are not quotes, missing `coverage` or `known_limits`, and quantifier or size words (`any`, `every`, `very big`) whose `coverage` does not say what varies or what scale was tried |
+| `herd check` | Validate `task.toml`; warns about criterion texts over 40 words, coverage notes over 50 words, checks that do not run project code, human criteria that are not quotes, missing `coverage` or `known_limits`, and quantifier or size words (`any`, `every`, `very big`) whose `coverage` does not say what varies or what scale was tried |
 | `herd detect` | Propose test and lint commands for Python, Node, Rust, Go and `make test` |
 | `herd note --found\|--fixed\|--open\|--tried "text"` | Log a caveat or an adversarial attempt with a timestamp; the report lists them |
-| `herd triage "<text>"` | Print the risk floor for a task description |
-| `herd verify` | Run all checks, store `evidence.json`; exit 1 if any fail; mark a passing check that ran zero tests |
+| `herd triage "<text>" [--json]` | Print the risk floor for a task description in one line (`risk: high (auth/**)`); `--json` prints the full record |
+| `herd verify [--verbose]` | Run all checks, store `evidence.json`; exit 1 if any fail. Prints one summary line plus only the criteria that need attention (failing, unchecked, ran zero tests); `--verbose` lists all |
 | `herd status` | Show evidence and whether the task is done |
-| `herd done` | Write `evidence.md`, close the task; refuses unless fresh and passing |
+| `herd done [--verbose]` | Write `evidence.md`, close the task; refuses unless fresh and passing. Prints two lines; `--verbose` prints the report too |
 | `herd cancel --reason "text"` | Abandon the task: keep its files, stop the Stop gate from blocking |
 | `herd pr [slug] [--yes]` | Opt-in: push the `herd/*` branch, open or update its PR with the evidence as the description; never merges |
 | `herd help` | List every command with its usage |
@@ -330,7 +349,7 @@ While a Herd task is active, each `Edit` or `Write` runs the command on that fil
 
 ## Status
 
-Version 0.2.9 (see the [changelog](CHANGELOG.md)). Working and covered by 226 unit tests on Python 3.11 to 3.13: the evidence harness (`scripts/herd.py`), the Stop gate, the quick route, project-type detection, the lint hook, the caveat log, zero-test flagging, the opt-in `herd pr` step, the opt-in worktree start for parallel tasks, and the risk-floor module. Releases 0.2.7 to 0.2.9 were each built with Herd itself; 0.2.8 and 0.2.9 were opened as pull requests by `herd pr`. Benchmarked on one task with Sonnet (above). Not yet done: many live runs through the installed plugin across different project types, and issue-to-pull-request automation on GitHub (labelled issue to reviewed spec), which is still design work. `herd pr` covers only the last step: a finished local task opens a pull request with its evidence.
+Version 0.3.0 (see the [changelog](CHANGELOG.md)). Working and covered by 241 unit tests on Python 3.11 to 3.13: the evidence harness (`scripts/herd.py`), the Stop gate, the quick route, project-type detection, the lint hook, the caveat log, zero-test flagging, the opt-in `herd pr` step, the opt-in worktree start for parallel tasks, short output by default, and the risk-floor module. Releases 0.2.7 to 0.3.0 were each built with Herd itself; 0.2.8 to 0.3.0 were opened as pull requests by `herd pr`. Benchmarked on one task with Sonnet (above). Not yet done: many live runs through the installed plugin across different project types, and issue-to-pull-request automation on GitHub (labelled issue to reviewed spec), which is still design work. `herd pr` covers only the last step: a finished local task opens a pull request with its evidence.
 
 ## The design behind it
 

@@ -1,4 +1,5 @@
 import json
+import re
 import os
 import shlex
 import shutil
@@ -553,7 +554,6 @@ class TestNotes(Base):
         self.assertIn("late finding", run("status").stdout)
         done = run("done")
         self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertIn("late finding", done.stdout)
         self.assertIn("late finding", (self.root / ".herd/tasks/t1/evidence.md").read_text())
 
     def test_cli_note_flags(self):
@@ -770,7 +770,7 @@ class TestCli(Base):
         self.assertEqual(json.loads(p.stdout)["decision"], "block")
 
     def test_triage(self):
-        rc, out, _ = self.run_cli("triage", "Change auth/session.py to rotate tokens")
+        rc, out, _ = self.run_cli("triage", "Change auth/session.py to rotate tokens", "--json")
         self.assertEqual(rc, 0)
         self.assertEqual(json.loads(out)["risk"]["floor"], "high")
 
@@ -1041,7 +1041,7 @@ class TestPr(Base):
         self.assertTrue(body.startswith("# Evidence: t1\n"))
         order = ["**Result:** 1 of 2 criteria proven", "## What is proven", "| C1 |", "`test -f greet.txt`",
                  "## What is not proven", "C2", "unchecked", "Only that the file exists", "Only ASCII names",
-                 "unicode names not tried", "## Run details", "## Reproduce", "test -f greet.txt", "never merges"]
+                 "unicode names not tried", "<summary>Run details", "<summary>Reproduce", "test -f greet.txt", "never merges"]
         at = 0
         for s in order:  # each piece appears after the previous one
             at = body.find(s, at)
@@ -1319,6 +1319,146 @@ class TestWorktree(Base):
             p = self.herd(*args)
             self.assertNotEqual(p.returncode, 0, args)
             self.assertIn(str(self.wt("t1")), p.stderr, args)
+
+
+SKILLS = Path(herd.__file__).resolve().parent.parent / "skills"
+
+
+def words(text):
+    return len(text.split())
+
+
+class TestBudgets(Base):
+    """Herd's own output stays short; the full detail is one flag or one file away."""
+
+    def setUp(self):
+        super().setUp()
+        herd.init_task(self.root, "t1", "Add a greeting")
+        (self.root / ".herd/tasks/t1/task.toml").write_text(PR_TASK.replace('check = ""', 'check = "test -n x"'))
+        (self.root / "greet.txt").write_text("hello")
+
+    def cli(self, *args):
+        p = subprocess.run([sys.executable, str(Path(herd.__file__)), *args], cwd=self.root,
+                           capture_output=True, text=True)
+        return p.returncode, p.stdout.strip().splitlines()
+
+    # (1) short CLI output
+    def test_cli_verify_prints_one_line_when_all_pass(self):
+        rc, out = self.cli("verify")
+        self.assertEqual((rc, out), (0, ["2 passing, 0 failing, 0 unchecked"]))
+
+    def test_cli_verify_lists_only_what_needs_attention(self):
+        (self.root / "greet.txt").unlink()
+        rc, out = self.cli("verify")
+        self.assertEqual(rc, 1)
+        self.assertEqual(len(out), 2)
+        self.assertIn("C1 failing", out[1])
+
+    def test_cli_verify_still_lists_unchecked_and_zero_test_criteria(self):
+        (self.root / ".herd/tasks/t1/task.toml").write_text(
+            PR_TASK.replace('check = ""', 'check = "python3 -c \\"print(\'Ran 0 tests\')\\""')
+            + '\n[[criteria]]\nid = "C3"\ntext = "Looks right"\nsource = "agent-proposed"\ncheck = ""\n')
+        rc, out = self.cli("verify")
+        self.assertEqual(len(out), 3)
+        self.assertIn("C2 passing (ran zero tests)", out[1])
+        self.assertIn("C3 unchecked", out[2])
+
+    def test_cli_triage_names_a_broken_config(self):
+        (self.root / "herd.toml").write_text('floor = "oops')
+        rc, out = self.cli("triage", "Change docs")
+        self.assertIn("fallback", out[0])
+        self.assertIn("herd.toml", out[0])
+
+    def test_cli_verify_verbose_lists_every_criterion(self):
+        rc, out = self.cli("verify", "--verbose")
+        self.assertEqual(len(out), 3)
+        self.assertIn("C2 passing", out[2])
+
+    def test_cli_done_is_at_most_three_lines_and_points_to_the_report(self):
+        self.cli("verify")
+        rc, out = self.cli("done")
+        self.assertEqual(rc, 0)
+        self.assertLessEqual(len(out), 3)
+        self.assertIn("evidence.md", " ".join(out))
+        self.assertIn("2 of 2", " ".join(out))
+        self.assertIn("# Evidence: t1", (self.root / ".herd/tasks/t1/evidence.md").read_text())
+
+    def test_cli_done_verbose_prints_the_report(self):
+        self.cli("verify")
+        rc, out = self.cli("done", "--verbose")
+        self.assertIn("# Evidence: t1", out)
+
+    def test_cli_triage_is_one_line_and_json_on_request(self):
+        rc, out = self.cli("triage", "Change auth/session.py")
+        self.assertEqual(len(out), 1)
+        self.assertIn("risk: high", out[0])
+        self.assertIn("auth/**", out[0])
+        rc, out = self.cli("triage", "Change auth/session.py", "--json")
+        self.assertEqual(json.loads("\n".join(out))["risk"]["floor"], "high")
+
+    # (2) capped final report
+    def test_report_template_is_at_most_120_words(self):
+        text = (SKILLS / "run/SKILL.md").read_text()
+        template = text.split("## Final report", 1)[1].split("```text", 1)[1].split("```", 1)[0]
+        self.assertLessEqual(words(template), 120)
+        for part in ("\nProven:", "Not proven:", "Caveats:", "Decisions:", "Limits:", "Review:"):
+            self.assertIn(part, template)
+        self.assertIn("evidence.md", text.split("## Final report")[0])  # filled from the report, not memory
+
+    # (3) short skills, rare parts in reference files read only when needed
+    def test_skill_word_budgets(self):
+        budget = {"run": 800, "criteria": 450, "evidence": 450}
+        for name, limit in budget.items():
+            self.assertLessEqual(words((SKILLS / name / "SKILL.md").read_text()), limit, name)
+
+    def test_skill_reference_files_exist_and_are_linked(self):
+        run = (SKILLS / "run/SKILL.md").read_text()
+        refs = sorted(p.name for p in (SKILLS / "run").glob("*.md") if p.name != "SKILL.md")
+        self.assertGreaterEqual(len(refs), 3)
+        for name in refs:
+            self.assertIn(name, run)
+
+    # (4) PR description: visible part short, the rest collapsed but kept
+    def test_pr_body_visible_part_is_short_and_nothing_is_dropped(self):
+        herd.add_note(self.root, "t1", "tried", "fed it an empty name")
+        herd.add_note(self.root, "t1", "found", "an empty name crashed")
+        herd.add_note(self.root, "t1", "fixed", "empty names now rejected")
+        herd.add_note(self.root, "t1", "open", "unicode names not tried")
+        herd.verify(self.root, "t1")
+        body = herd.pr_body(self.root, "t1")
+        visible = re.sub(r"<details>.*?</details>", "", body, flags=re.S)
+        self.assertLessEqual(words(visible), 150, visible)
+        self.assertIn("unicode names not tried", visible)  # open caveats stay in view
+        for kept in ("fed it an empty name", "empty names now rejected", "test -f greet.txt", "Route: standard"):
+            self.assertIn(kept, body)
+            self.assertNotIn(kept, visible.split("## What is proven")[0])
+        self.assertGreaterEqual(body.count("<details>"), 2)
+
+    def test_pr_table_clips_long_checks_and_reproduce_keeps_them(self):
+        long_check = "test -f greet.txt && " + " && ".join(["true"] * 20)
+        (self.root / ".herd/tasks/t1/task.toml").write_text(PR_TASK.replace("test -f greet.txt", long_check))
+        herd.verify(self.root, "t1")
+        body = herd.pr_body(self.root, "t1")
+        table = body.split("## What is not proven")[0]
+        self.assertNotIn(long_check, table)
+        self.assertIn("...", table)
+        self.assertIn(long_check, body.split("<summary>Reproduce")[1])
+
+    def test_check_warns_about_long_criterion_and_coverage_text(self):
+        task = {"criteria": [{"id": "C1", "text": "word " * 41, "source": "agent-proposed", "coverage": "x " * 51},
+                             {"id": "C2", "text": "short", "source": "agent-proposed"}]}
+        warnings = herd.length_warnings(task)
+        self.assertEqual(len(warnings), 2)
+        self.assertTrue(all(w.startswith("C1") for w in warnings))
+        human = {"criteria": [{"id": "H1", "text": "word " * 80, "source": "human"}]}
+        self.assertEqual(herd.length_warnings(human), [])  # the human's own words are never pushed shorter
+
+    # (5) writing rules
+    def test_rules_section_in_the_run_skill(self):
+        text = (SKILLS / "run/SKILL.md").read_text()
+        rules = text.split("## Writing", 1)[1].split("\n## ", 1)[0]
+        for rule in ("Answer first", "never drop", "exact", "No recap"):
+            self.assertIn(rule.lower(), rules.lower())
 
 
 def _old_python():

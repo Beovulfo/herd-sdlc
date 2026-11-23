@@ -14,7 +14,7 @@ Sleep 1s
 Type "/herd:run Add slugify(text) to textutil.py for blog URLs. It must work for any title: 'Hello, World!' becomes 'hello-world' and 'Café Ñandú' becomes 'cafe-nandu'. Use the full workflow, not a quick fix."
 Sleep 500ms
 Enter
-Sleep 8m
+Sleep 16m
 Screenshot end.png
 Ctrl+C
 Ctrl+C

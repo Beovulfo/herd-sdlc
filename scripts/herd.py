@@ -200,7 +200,7 @@ def init_task(root, slug, goal, quick_check=None, request=None):
     head = _git(root, "rev-parse", "HEAD").decode().strip() or None  # red first: what changed since here
     # ponytail: hashes every uncommitted file once at init (about 1 s per 20k small files); a git stat cache if slower
     changed = changed_since(root, head) or []
-    edits = _take_preinit(root, changed)  # what this session edited before init is the agent's, uncommitted or not
+    edits = _take_preinit(root, slug, changed)  # what this session edited before init is the agent's, uncommitted or not
     dirty = {f: _file_sha(root, f) for f in changed if f not in edits}  # already there: not the agent's,
     (d / "start.json").write_text(json.dumps({"head": head, "risk": risk, "dirty": dirty,  # while unchanged
                                               "stashes": _stash_shas(root)} | ({"agent_edits": edits} if edits else {}))
@@ -468,57 +468,86 @@ def coverage_warnings(task):
 
 # ---- evidence -------------------------------------------------------------
 
-PREINIT_MAX_AGE = 3600  # seconds: a record older than this belongs to an earlier run
-INIT_CMD = re.compile(r"herd\.py[\"']?\s+init\b")
+PREINIT_MAX_AGE = 600  # seconds: the hook runs right before `herd init`; an older record is another run's
 EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 
 
-def _preinit_path(root):
-    """Where the PreToolUse hook leaves its record for `herd init`: inside .git, shared by worktrees, never committed."""
+def _preinit_path(root, slug):
+    """The hook's record for one task, inside .git (shared by worktrees, never committed)."""
     common = _git(root, "rev-parse", "--git-common-dir").decode().strip()
-    return (Path(root) / common).resolve() / "herd-preinit.json" if common else None
+    return (Path(root) / common).resolve() / f"herd-preinit-{slug}.json" if common and SLUG.fullmatch(slug) else None
+
+
+def _init_target(command, cwd):
+    """(folder, slug) when a Bash command runs `herd.py init <slug>`, else None. Follows a leading `cd <dir> &&`."""
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return None
+    where = Path(cwd)
+    if len(words) > 2 and words[0] == "cd" and words[2] in ("&&", ";"):
+        where = (where / words[1]).resolve()
+    for i, w in enumerate(words[:-2]):
+        if w.endswith("herd.py") and words[i + 1] == "init":
+            slug = next((x for x in words[i + 2:] if not x.startswith("-")), "")
+            return (where, slug) if SLUG.fullmatch(slug) else None
+    return None
+
+
+def _edited_files(log):
+    """Absolute paths the session (and its subagents) edited with Edit, Write, MultiEdit or NotebookEdit."""
+    logs = [log] + sorted((log.parent / log.stem / "subagents").glob("*.jsonl"))
+    files = set()
+    for f in logs:
+        for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                content = json.loads(line).get("message", {}).get("content", [])
+            except (ValueError, AttributeError):
+                continue
+            for c in content if isinstance(content, list) else []:
+                inp = c.get("input") if isinstance(c, dict) and c.get("type") == "tool_use" else None
+                if c.get("name") in EDIT_TOOLS and isinstance(inp, dict):
+                    path = inp.get("file_path") or inp.get("notebook_path")
+                    if isinstance(path, str) and path:
+                        files.add(path)
+    return files
 
 
 def preinit(hook):
-    """PreToolUse hook on Bash. Before `herd init`, record the files this session edited with Edit or Write
-    (from the session log), so red first counts them as the agent's even if they are uncommitted at init.
-    Never blocks and prints nothing; any other command returns at once. ponytail: edits made through Bash
-    (sed, cat >) are not in the log as edits, so they are not seen."""
-    if not isinstance(hook, dict) or not INIT_CMD.search(str((hook.get("tool_input") or {}).get("command", ""))):
+    """PreToolUse hook on Bash. Right before `herd init <slug>`, record the files this session (and its subagents)
+    edited, from the session log, so red first counts them as the agent's even if they are uncommitted at init.
+    The record is per task and always written, so another task's init never reads it. Never blocks, prints
+    nothing; other commands return at once. ponytail: edits made through Bash (sed, cat >) are not seen."""
+    if not isinstance(hook, dict):
         return
-    log, cwd = Path(str(hook.get("transcript_path") or "")), Path(str(hook.get("cwd") or "."))
-    top = _git(cwd, "rev-parse", "--show-toplevel").decode().strip()
-    if not top or not log.is_file():
+    cwd = Path(str(hook.get("cwd") or "."))
+    target = _init_target(str((hook.get("tool_input") or {}).get("command", "")), cwd)
+    if not target:
         return
-    files = set()
-    for line in log.read_text(errors="replace").splitlines():
-        try:
-            content = json.loads(line).get("message", {}).get("content", [])
-        except (ValueError, AttributeError):
-            continue
-        for c in content if isinstance(content, list) else []:
-            if isinstance(c, dict) and c.get("type") == "tool_use" and c.get("name") in EDIT_TOOLS:
-                path = (c.get("input") or {}).get("file_path") or (c.get("input") or {}).get("notebook_path")
-                if path:
-                    full = (cwd / path).resolve()
-                    if full.is_relative_to(Path(top).resolve()):
-                        files.add(str(full))
-    target = _preinit_path(top)
-    if files and target:
-        target.write_text(json.dumps({"at": datetime.now(timezone.utc).timestamp(), "files": sorted(files)}))
+    where, slug = target
+    log = Path(str(hook.get("transcript_path") or ""))
+    files = _edited_files(log) if log.is_file() else set()
+    record = _preinit_path(where, slug)
+    if record:
+        record.write_text(json.dumps({"at": datetime.now(timezone.utc).timestamp(),
+                                      "files": sorted(str((cwd / f).resolve()) for f in files)}))
 
 
-def _take_preinit(root, changed):
-    """The hook's record, consumed: changed paths (relative to root) this session edited before init."""
-    target = _preinit_path(root)
+def _take_preinit(root, slug, changed):
+    """The hook's record for this task, consumed: changed paths (relative to root) the session edited before init."""
+    target = _preinit_path(root, slug)
     if not target or not target.exists():
         return []
     rec = _state(target, {})
     target.unlink(missing_ok=True)
-    if datetime.now(timezone.utc).timestamp() - float(rec.get("at") or 0) > PREINIT_MAX_AGE:
+    try:
+        if datetime.now(timezone.utc).timestamp() - float(rec.get("at") or 0) > PREINIT_MAX_AGE:
+            return []
+        base = Path(root).resolve()
+        edited = {str(Path(f).relative_to(base)) for f in rec.get("files") or []
+                  if isinstance(f, str) and Path(f).is_relative_to(base)}
+    except (TypeError, ValueError):  # a hand-edited record never stops `herd init`
         return []
-    base = Path(root).resolve()
-    edited = {str(Path(f).relative_to(base)) for f in rec.get("files") or [] if Path(f).is_relative_to(base)}
     return sorted(f for f in changed if f in edited)
 
 

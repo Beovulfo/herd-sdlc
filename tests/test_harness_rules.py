@@ -1,6 +1,7 @@
 """Rules the run skill used to state only in text, now enforced or recorded by the CLI (0.4.0)."""
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -700,16 +701,18 @@ class TestNarrowedClaims(Base):
 class TestPreInitEdits(Base):
     """An agent that edits code and only then runs `herd init` is flagged: the PreToolUse hook reads the session log."""
 
-    def session_log(self, *paths):
-        """A Claude Code session log (JSONL) in which the agent edited these files with Edit or Write."""
-        log = self.root.parent / f"{self.root.name}-session.jsonl"
+    def session_log(self, *paths, tools=("Edit", "Write"), log=None):
+        """A Claude Code session log (JSONL) in which the agent edited these files with these tools, in turn."""
+        log = log or self.root.parent / f"{self.root.name}-session.jsonl"
         lines = [{"type": "user", "message": {"role": "user", "content": "build it"}}]
         for i, path in enumerate(paths):
-            tool = "Write" if i % 2 else "Edit"
+            tool = tools[i % len(tools)]
+            key = "notebook_path" if tool == "NotebookEdit" else "file_path"
             lines.append({"type": "assistant", "message": {"role": "assistant", "content": [
                 {"type": "text", "text": "editing"},
-                {"type": "tool_use", "id": f"t{i}", "name": tool, "input": {"file_path": str(path)}}]}})
-        log.write_text("\n".join(json.dumps(x) for x in lines) + "\n")
+                {"type": "tool_use", "id": f"t{i}", "name": tool, "input": {key: str(path)}}]}})
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text("\n".join(json.dumps(x) for x in lines) + "\n", encoding="utf-8")
         return log
 
     def hook(self, command, log=None, raw=None):
@@ -754,12 +757,61 @@ class TestPreInitEdits(Base):
     def test_a_record_from_another_checkout_or_an_old_one_is_not_used(self):
         (self.root / "app.py").write_text("def f():\n    return 1\n")
         self.hook(self.INIT, self.session_log(self.root / "app.py"))
-        rec = herd._preinit_path(self.root)
+        rec = herd._preinit_path(self.root, "t1")
         data = json.loads(rec.read_text())
-        rec.write_text(json.dumps(dict(data, at=data["at"] - 3 * 3600)))  # hours old: another run's
+        rec.write_text(json.dumps(dict(data, at=data["at"] - herd.PREINIT_MAX_AGE - 60)))  # another run's
         self.start()
         self.assertFalse(rec.exists())  # init always consumes it
         self.assertEqual(herd.verify(self.root, "t1")["red"]["code_before"], [])
+
+    def test_a_refused_or_mentioned_init_never_leaks_into_another_task(self):
+        (self.root / "human.py").write_text("x = 1\n")  # the human's
+        log = self.session_log(self.root / "human.py")  # session A touched it, then its init for task a is refused
+        self.hook(f'python3 "{Path(herd.__file__)}" init a "goal"', log)
+        self.hook('grep "herd.py init" README.md', log)  # only mentions it
+        self.start()  # task t1, by the human or another session with no record of its own
+        self.assertNotIn("agent_edits", json.loads((self.root / ".herd/tasks/t1/start.json").read_text()))
+        self.assertTrue(herd._preinit_path(self.root, "a").exists())  # left for task a alone, and it expires
+
+    def test_an_init_with_no_edits_overwrites_an_older_record(self):
+        (self.root / "app.py").write_text("x = 1\n")
+        self.hook(self.INIT, self.session_log(self.root / "app.py"))
+        self.hook(self.INIT, self.session_log())  # a later session for the same task edited nothing
+        self.start()
+        self.assertNotIn("agent_edits", json.loads((self.root / ".herd/tasks/t1/start.json").read_text()))
+
+    def test_subagent_edits_and_every_edit_tool_count(self):
+        for f in ("a.py", "b.py", "c.ipynb", "d.py"):
+            (self.root / f).write_text("x = 1\n")
+        log = self.session_log(self.root / "a.py", self.root / "b.py", self.root / "c.ipynb",
+                               tools=("MultiEdit", "Edit", "NotebookEdit"))
+        self.session_log(self.root / "d.py", log=log.parent / log.stem / "subagents" / "agent-1.jsonl")
+        self.hook(self.INIT, log)
+        self.start()
+        edits = json.loads((self.root / ".herd/tasks/t1/start.json").read_text())["agent_edits"]
+        self.assertEqual(edits, ["a.py", "b.py", "c.ipynb", "d.py"])
+
+    def test_cd_before_init_is_followed(self):
+        sub = self.root / "proj"
+        sub.mkdir()
+        (sub / "app.py").write_text("x = 1\n")
+        elsewhere = self.root.parent / f"{self.root.name}-cwd"
+        elsewhere.mkdir()
+        hook = json.dumps({"cwd": str(elsewhere), "transcript_path": str(self.session_log(sub / "app.py")),
+                           "tool_input": {"command": f'cd {self.root} && python3 "{Path(herd.__file__)}" init t1 "g"'}})
+        p = subprocess.run([sys.executable, str(Path(herd.__file__)), "preinit"], cwd=elsewhere, input=hook,
+                           capture_output=True, text=True)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(herd._preinit_path(self.root, "t1").exists())
+
+    def test_a_corrupt_record_never_stops_init(self):
+        (self.root / "app.py").write_text("x = 1\n")
+        for bad in ('["a list"]', '{"at": "soon", "files": ["app.py"]}', '{"at": 1e12, "files": [3, null]}', "{x"):
+            herd._preinit_path(self.root, "t1").write_text(bad)
+            herd.init_task(self.root, "t1", "g")
+            self.assertFalse(herd._preinit_path(self.root, "t1").exists(), bad)
+            herd.cancel_task(self.root, "t1")
+            shutil.rmtree(self.root / ".herd/tasks/t1")
 
     def test_the_hook_is_registered_and_safe_on_old_python(self):
         hooks = json.loads((Path(herd.__file__).parent.parent / "hooks/hooks.json").read_text())["hooks"]

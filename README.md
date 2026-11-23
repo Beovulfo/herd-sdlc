@@ -322,7 +322,7 @@ sh examples/supermarket-route/verifier/score_run.sh sonnet-herd-1
 | `herd pr [slug] [--yes]` | Opt-in: push the `herd/*` branch, open or update its PR with the evidence as the description; never merges |
 | `herd help` | List every command with its usage |
 | `herd gate` | The Stop hook (reads hook JSON on stdin) |
-| `herd preinit` | The PreToolUse hook on Bash: when the agent runs `herd init`, it records the files this session already edited with Edit or Write, read from the session log, so red first counts them as the agent's even if they are uncommitted. Any other command returns at once (about 10 ms over Python's start-up) |
+| `herd preinit` | The PreToolUse hook on Bash: when the agent runs `herd init <slug>`, it records the files this session and its subagents already edited with Edit, Write, MultiEdit or NotebookEdit, read from the session log, so red first counts them as the agent's even if they are uncommitted. The record is per task and expires after 10 minutes. Not seen: files changed through Bash (`sed`, `cat >`); a file you edit after the agent did counts as the agent's. Like the other hooks, it does nothing when `python3` is older than 3.11. Any other command returns at once (about 10 ms over Python's start-up) |
 | `herd lint` | The optional PostToolUse lint hook; `herd lint --suggest` prints a `[lint]` block for `herd.toml` |
 
 `herd` is `python3 scripts/herd.py`. Inside the plugin it is `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/herd.py"`.
@@ -360,7 +360,7 @@ While a Herd task is active, each `Edit` or `Write` runs the command on that fil
 
 ## Status
 
-Version 0.4.1 (see the [changelog](CHANGELOG.md)). Working and covered by 333 unit tests on Python 3.11 to 3.13: the evidence harness (`scripts/herd.py`), the Stop gate, the run rules (red first, risk and review, frozen human criteria, the final report, commit before done), the quick route, project-type detection, the lint hook, the caveat log, zero-test flagging, the opt-in `herd pr` step, the opt-in worktree start for parallel tasks, short output by default, and the risk-floor module. Releases 0.2.7 to 0.3.0 were each built with Herd itself; 0.2.8 to 0.3.0 were opened as pull requests by `herd pr`. Benchmarked on one task with Sonnet (above). Not yet done: many live runs through the installed plugin across different project types, and issue-to-pull-request automation on GitHub (labelled issue to reviewed spec), which is still design work. `herd pr` covers only the last step: a finished local task opens a pull request with its evidence.
+Version 0.4.1 (see the [changelog](CHANGELOG.md)). Working and covered by 338 unit tests on Python 3.11 to 3.13: the evidence harness (`scripts/herd.py`), the Stop gate, the run rules (red first, risk and review, frozen human criteria, the final report, commit before done), the quick route, project-type detection, the lint hook, the caveat log, zero-test flagging, the opt-in `herd pr` step, the opt-in worktree start for parallel tasks, short output by default, and the risk-floor module. Releases 0.2.7 to 0.3.0 were each built with Herd itself; 0.2.8 to 0.3.0 were opened as pull requests by `herd pr`. Benchmarked on one task with Sonnet (above). Not yet done: many live runs through the installed plugin across different project types, and issue-to-pull-request automation on GitHub (labelled issue to reviewed spec), which is still design work. `herd pr` covers only the last step: a finished local task opens a pull request with its evidence.
 
 ## The design behind it
 

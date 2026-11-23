@@ -77,7 +77,13 @@ VARIES = re.compile(r"\b(vary|varies|varied|varying|variation|generated?|random\
                     r"parametri[sz]ed|families|several|multiple|across|sizes?)\b", re.I)
 SCALED = re.compile(r"\b(scales?|sizes?|largest?|big|biggest|huge|time limit|timed|timing|seconds|performance|"
                     r"runtime|latency|up to \d+)\b", re.I)
-NOTE_KINDS = ("found", "fixed", "open", "tried")
+NOTE_KINDS = ("found", "fixed", "open", "tried", "decision", "late-red", "review")
+# red first: files that do not count as code written before the first verify
+DOC_EXT = (".md", ".rst", ".txt")
+TEST_DIRS = {"test", "tests", "spec", "specs", "__tests__", "testdata", "fixtures"}
+TEST_FILE = re.compile(r"^test_.*|.*_test\.[^.]+$|.*\.(test|spec)\.[^.]+$|.*_spec\.[^.]+$|^conftest\.py$")
+LEVELS = ("low", "medium", "high")
+ESCALATE_AFTER = 3  # consecutive failing verifies of one criterion before the agent must ask the human
 # the standard attacks of the adversarial pass (skills/run/adversarial.md): `herd done` needs a tried note for each
 ATTACKS = {"bad-input": "bad input at every entry point ends in a clear message, never a traceback",
            "collision": "two inputs on the same key or position each still count",
@@ -155,6 +161,11 @@ def init_task(root, slug, goal, quick_check=None, request=None):
     d.mkdir(parents=True)
     (d / "task.toml").write_text(text)
     (d / "started").write_text(now() + "\n")
+    toml_path = Path(root) / "herd.toml"
+    risk = herd_triage.build_record("task", 0, goal + "\n" + (request or ""), {},
+                                    toml_path.read_text() if toml_path.exists() else "")["risk"]["effective"]
+    head = _git(root, "rev-parse", "HEAD").decode().strip() or None  # red first: what changed since here
+    (d / "start.json").write_text(json.dumps({"head": head, "risk": risk}) + "\n")
     if request is not None:
         (d / "request.md").write_text(request)
     (Path(root) / ".herd" / "active").write_text(slug + "\n")
@@ -432,6 +443,41 @@ def _task_sha(root, slug):
     return hashlib.sha1((_dir(root, slug) / "task.toml").read_bytes()).hexdigest()
 
 
+def is_code(path):
+    """A changed path that counts as code for red first: not Herd's own state, not docs, not tests."""
+    parts = Path(path).parts
+    if not parts or parts[0] == ".herd" or path.lower().endswith(DOC_EXT):
+        return False
+    return not (TEST_DIRS & {s.lower() for s in parts[:-1]} or TEST_FILE.match(parts[-1]))
+
+
+def changed_since(root, head):
+    """Paths (relative to root) changed since commit head, tracked or new; None when that cannot be told."""
+    if not head:
+        return None
+    p = subprocess.run(["git", "diff", "--name-only", "--relative", head], cwd=root, capture_output=True, text=True)
+    if p.returncode:
+        return None
+    new = _git(root, "ls-files", "--others", "--exclude-standard").decode().splitlines()
+    return sorted({x for x in p.stdout.splitlines() + new if x and not x.startswith(".herd/")})
+
+
+def risk_of(root, start, changed):
+    """Effective risk: the higher of the level stored at init and the level the changed files match."""
+    toml_path = Path(root) / "herd.toml"
+    try:
+        rules, _ = herd_triage._rules_from(toml_path.read_text() if toml_path.exists() else "")
+    except (OSError, ValueError, tomllib.TOMLDecodeError):  # unreadable rules fail closed
+        return {"start": start.get("risk"), "changed": "high", "effective": "high", "rules": ["herd.toml unreadable"]}
+    level, matched = "low", []
+    if changed:
+        found, matched, _src = herd_triage.floor(changed, {}, rules)
+        level = found if matched else "low"
+    begin = start.get("risk") if start.get("risk") in LEVELS else "medium"
+    effective = max(begin, level, key=LEVELS.index)
+    return {"start": begin, "changed": level, "effective": effective, "rules": matched}
+
+
 def run_check(root, check, timeout, full=False):
     """Exit code (None on timeout) and the output tail; with full=True, the whole output instead."""
     try:
@@ -479,14 +525,33 @@ def verify(root, slug):
         attacks.append(a)
     head = _git(root, "rev-parse", "HEAD").decode().strip() or "none"
     dirty = bool(_git(root, "status", "--porcelain", "--", *OWN_FILES).strip())
-    red_path = _dir(root, slug) / "red.json"
+    d = _dir(root, slug)
+    start = json.loads((d / "start.json").read_text()) if (d / "start.json").exists() else {}
+    changed = changed_since(root, start.get("head"))
+    red_path = d / "red.json"
     checked = [r for r in results if r["status"] != "unchecked"]
     if not red_path.exists() and checked:  # first verify with a runnable check: how many were red
-        red_path.write_text(json.dumps({"at": now(), "failed": sum(r["status"] == "failing" for r in checked),
-                                        "total": len(checked)}))
+        red_path.write_text(json.dumps({
+            "at": now(), "failed": sum(r["status"] == "failing" for r in checked), "total": len(checked),
+            "code_before": None if changed is None else [f for f in changed if is_code(f)],
+            "criteria": {c["id"]: {"text": c["text"], "source": c["source"], "check": c["check"]}
+                         for c in task["criteria"]}}))
     red = json.loads(red_path.read_text()) if red_path.exists() else None
-    req_path = _dir(root, slug) / "request.md"
-    human_not_verbatim = human_unquoted(task, req_path.read_text() if req_path.exists() else None)
+    frozen = (red or {}).get("criteria") or {}
+    now_by_id = {c["id"]: c for c in task["criteria"]}
+    human_changed = [(cid, "removed" if cid not in now_by_id else "changed") for cid, c in frozen.items()
+                     if c["source"] == "human" and (cid not in now_by_id or now_by_id[cid]["text"] != c["text"]
+                                                    or now_by_id[cid]["source"] != "human")]
+    checks_changed = [cid for cid, c in now_by_id.items() if frozen and cid in frozen and c["check"] != frozen[cid]["check"]]
+    added = [cid for cid in now_by_id if frozen and cid not in frozen]
+    req_path = d / "request.md"
+    request_text = req_path.read_text() if req_path.exists() else None
+    human_not_verbatim = human_unquoted(task, request_text)
+    warnings = check_warnings(task, request_text) + coverage_warnings(task) + length_warnings(task)
+    fails_path = d / "fails.json"  # consecutive failing verifies per criterion, for the escalation rule
+    fails = json.loads(fails_path.read_text()) if fails_path.exists() else {}
+    fails = {r["id"]: fails.get(r["id"], 0) + 1 if r["status"] == "failing" else 0 for r in results}
+    fails_path.write_text(json.dumps(fails))
     timing, started_path = None, _dir(root, slug) / "started"
     if started_path.exists():  # wall clock from `herd init`, so it includes any waiting on the human
         started = started_path.read_text().strip()
@@ -496,8 +561,11 @@ def verify(root, slug):
     ev = {"task": slug, "goal": task["goal"], "at": now(), "head": head, "dirty": dirty,
           "route": task.get("route", "standard"), "test_budget": task.get("test_budget"),
           "known_limits": task.get("known_limits"), "notes": load_notes(root, slug),
-          "red": {"failed": red["failed"], "total": red["total"]} if red else None, "timing": timing,
-          "human_not_verbatim": human_not_verbatim,
+          "red": {"failed": red["failed"], "total": red["total"], "code_before": red.get("code_before")}
+          if red else None, "timing": timing,
+          "human_not_verbatim": human_not_verbatim, "risk": risk_of(root, start, changed),
+          "human_changed": human_changed, "checks_changed": checks_changed, "added_after_red": added,
+          "warnings": warnings, "escalate": [cid for cid, n in fails.items() if n >= ESCALATE_AFTER],
           "fingerprint": fingerprint(root), "task_sha": _task_sha(root, slug),
           "results": results, "summary": summary, "attacks": attacks}
     (_dir(root, slug) / "evidence.json").write_text(json.dumps(ev, indent=2))
@@ -534,6 +602,45 @@ def add_note(root, slug, kind, text, attack=None, check=None, timeout=None):
         rec["timeout_s"] = timeout
     with open(d / "notes.jsonl", "a") as f:
         f.write(json.dumps(rec) + "\n")
+
+
+def add_review(root, slug, by=None, text="", skipped=False):
+    """Record the fresh-context review: who reviewed and what they found, or why it was skipped."""
+    if not text.strip() or bool(by and by.strip()) == bool(skipped):
+        raise ValueError('use `herd review --by "<reviewer>" "<what they found>"` or `herd review --skipped "<why>"`')
+    add_note(root, slug, "review", text)
+    p = _dir(root, slug) / "notes.jsonl"
+    lines = p.read_text().splitlines()
+    rec = json.loads(lines[-1])
+    rec.update({"skipped": True} if skipped else {"by": by.strip()})
+    p.write_text("\n".join(lines[:-1] + [json.dumps(rec)]) + "\n")
+
+
+def final_report(root, slug, ev, notes):
+    """The run skill's seven-line final report, filled from the evidence and the notes."""
+    results = ev["results"]
+    proven = [r for r in results if r["status"] == "passing" and not r.get("zero_tests")]
+    branch = _branch(root) or "no branch"
+    done = (f"{ev['goal']}; committed on {branch} at {ev['head'][:7]}" if not ev.get("dirty")
+            else f"{ev['goal']}; not committed, on {branch}")
+    pr = _dir(root, slug) / "pr"
+    where = str((_dir(root, slug) / "evidence.md").relative_to(root)) + (f" and {pr.read_text().strip()}" if pr.exists() else "")
+    gaps = [f"{r['id']} {r['status']}" for r in results if r["status"] != "passing"]
+    gaps += [f"{r['id']} ran zero tests" for r in results if r.get("zero_tests")]
+    gaps += [n["text"] for n in notes if n["kind"] == "open"] + _rule_lines(ev, notes)
+    review = _review(notes)
+    if ev.get("route") != "quick" and (review is None or review.startswith("skipped:")):
+        gaps.append("unreviewed")
+    caveats = [f"{n['kind']}" + (f" at {fmt_duration(n['elapsed_s'])}" if n.get("elapsed_s") is not None else "")
+               + f": {n['text']}" for n in notes if n["kind"] in ("found", "fixed")]
+    decisions = [n["text"] for n in notes if n["kind"] == "decision"]
+    return [f"Done: {done}.",
+            f"Proven: {len(proven)} of {len(results)} criteria; evidence in {where}.",
+            f"Not proven: {'; '.join(gaps) if gaps else 'nothing open'}.",
+            f"Caveats: {'; '.join(caveats) if caveats else 'none'}.",
+            f"Decisions: {' | '.join(decisions) if decisions else 'none recorded'}.",
+            f"Limits: {ev.get('known_limits') or 'none stated'}",
+            f"Review: {review or ('not needed (quick route)' if ev.get('route') == 'quick' else 'none recorded')}."]
 
 
 def load_notes(root, slug):
@@ -590,6 +697,31 @@ def _attack_line(notes, attacks):
             + (f"; {'; '.join(parts)}" if parts else "") + (f"; missing: {', '.join(missing)}" if missing else ""))
 
 
+def _review(notes):
+    """The latest review note as one phrase: "<who>: <what>", "skipped: <why>", or None."""
+    rv = [n for n in notes if n["kind"] == "review"]
+    if not rv:
+        return None
+    n = rv[-1]
+    return f"skipped: {n['text']}" if n.get("skipped") else f"{n.get('by', 'reviewer')}: {n['text']}"
+
+
+def _rule_lines(ev, notes):
+    """What the run-rule checks found, one line each: red first, criteria changes, review, warnings."""
+    out = []
+    code = (ev.get("red") or {}).get("code_before")
+    if code:
+        why = [n["text"] for n in notes if n["kind"] == "late-red"]
+        out.append(f"Red first not proven: {', '.join(code[:5])}{' and more' if len(code) > 5 else ''} changed "
+                   "before the first verify" + (f". Reason: {why[-1]}" if why else ""))
+    out += [f"{cid} was removed after the first verify" if how == "removed" else f"{cid} changed after the first verify"
+            for cid, how in ev.get("human_changed") or []]
+    out += [f"{cid}: check changed after the first verify, so it was never seen failing"
+            for cid in ev.get("checks_changed") or []]
+    out += [f"{cid}: added after the first verify, so it was never seen failing" for cid in ev.get("added_after_red") or []]
+    return out
+
+
 def report(ev, notes=None):
     s = ev["summary"]
     notes = ev.get("notes") or [] if notes is None else notes
@@ -614,6 +746,14 @@ def report(ev, notes=None):
         lines.append(f"Known limits: {ev['known_limits']}")
     if ev.get("route") != "quick":
         lines.append(_attack_line(notes, ev.get("attacks")) or "Adversarial pass: not recorded")
+    if ev.get("risk"):
+        rk = ev["risk"]
+        lines.append(f"Risk: {rk['effective']}" + (f" (changed files match {', '.join(rk['rules'])})" if rk["rules"] else ""))
+    if ev.get("route") != "quick":
+        lines.append(f"Review: {_review(notes) or 'none recorded'}")
+    lines += _rule_lines(ev, notes)
+    if ev.get("warnings"):
+        lines += ["", "Warnings from herd check:"] + [f"- {w}" for w in ev["warnings"]]
     lines += ["", "| id | status | source | check |", "| --- | --- | --- | --- |"]
     for r in ev["results"]:
         lines.append(f"| {r['id']} | {r['status']} | {r['source']} | `{r['check'] or '-'}` |")
@@ -721,6 +861,14 @@ def pr_body(root, slug):
                     .get(best[a][0], "")) for a in ATTACKS if best.get(a, ("none",))[0] not in ("passing", "na")]
         if bad:
             gaps.append("- Standard attacks without a passing command: " + ", ".join(bad))
+    gaps += [f"- {line}" for line in _rule_lines(ev, notes)]
+    review = _review(notes)
+    if ev.get("route") != "quick" and (review is None or review.startswith("skipped:")):
+        gaps.append(f"- The change is unreviewed: {review[len('skipped: '):] if review else 'no review recorded'}")
+    if ev.get("warnings"):
+        w = ev["warnings"]
+        gaps.append(f"- {len(w)} `herd check` warning{'s' if len(w) != 1 else ''}"
+                    + (f", first: {w[0]}" if len(w) > 1 else f": {w[0]}"))
     lines += ["", "## What is not proven", ""] + (gaps or ["- Nothing recorded, which is unusual: ask what the checks miss"])
     details = [f"Route: {ev.get('route', 'standard')}"]
     if ev.get("red"):
@@ -759,6 +907,15 @@ def pr_title(goal, slug, limit=72):
         return line
     cut = line[:limit - 3].rsplit(" ", 1)[0].rstrip(" ,;:")
     return cut + "..."
+
+
+def pr_wanted(root):
+    """True when herd.toml has `[pr] open = true`."""
+    try:
+        cfg = tomllib.loads((Path(root) / "herd.toml").read_text()).get("pr")
+    except (OSError, tomllib.TOMLDecodeError):
+        return False
+    return isinstance(cfg, dict) and cfg.get("open") is True
 
 
 def open_pr(root, slug, yes=False):
@@ -852,6 +1009,17 @@ def problems(root, slug):
     out = [f"{r['id']} is failing: {r['text']}" for r in ev["results"] if r["status"] == "failing"]
     if not ev["summary"]["passing"] and not out:
         out.append("no passing criterion: give at least one criterion a runnable check")
+    notes = load_notes(root, slug)
+    code = (ev.get("red") or {}).get("code_before")
+    if code and not any(n["kind"] == "late-red" for n in notes):
+        out.append(f"red first not proven: {', '.join(code[:5])} changed before the first verify. If that was "
+                   "deliberate, say why with `herd note --late-red \"<why>\"`; it shows in the report and the PR")
+    out += [f"human criterion {cid} {'was removed' if how == 'removed' else 'changed'} after the first verify: "
+            "restore it exactly as the human wrote it (only the human may change it)" for cid, how in ev.get("human_changed") or []]
+    risk = (ev.get("risk") or {}).get("effective")
+    if ev.get("route") != "quick" and risk in ("medium", "high") and not any(n["kind"] == "review" for n in notes):
+        out.append(f"review missing: risk is {risk}. Get a fresh-context review, then record it with "
+                   "`herd review --by \"<reviewer>\" \"<what they found>\"`, or `herd review --skipped \"<why>\"`")
     if ev.get("route") != "quick":
         ran = {(a["at"], a["text"], a.get("check")) for a in ev.get("attacks") or []}
         if any(n["kind"] == "tried" and n.get("attack") and (n["at"], n["text"], n.get("check")) not in ran
@@ -917,7 +1085,8 @@ def _slug_arg(root, args):
 USAGE = {
     "init": 'herd init <slug> "<goal>" [--request "<message>"] [--quick "<check>"] [--worktree]',
     "check": "herd check [slug]",
-    "note": 'herd note --found|--fixed|--open|--tried [--attack bad-input|collision|one-bad-part|recount --check "<command>" [--timeout S]] "text"',
+    "note": 'herd note --found|--fixed|--open|--decision|--late-red|--tried [--attack bad-input|collision|one-bad-part|recount --check "<command>" [--timeout S]] "text"',
+    "review": 'herd review --by "<reviewer>" "<what they found>"  |  herd review --skipped "<why>"',
     "detect": "herd detect",
     "lint": "herd lint [--suggest]   (without --suggest: the PostToolUse hook, reads hook JSON on stdin)",
     "verify": "herd verify [slug] [--verbose]",
@@ -990,7 +1159,8 @@ def main(argv):
                 print(f"warning: {w}")
             return 1 if errs else 0
         elif cmd == "note":
-            kinds = {"--found": "found", "--fixed": "fixed", "--open": "open", "--tried": "tried"}
+            kinds = {"--found": "found", "--fixed": "fixed", "--open": "open", "--tried": "tried",
+                     "--decision": "decision", "--late-red": "late-red"}
             attack, args = _opt(args, "--attack")
             check, args = _opt(args, "--check")
             timeout, args = _opt(args, "--timeout")
@@ -1036,6 +1206,12 @@ def main(argv):
             for name, (state, what) in states.items():  # attacks like criteria: only what needs attention
                 if verbose or state != "passing":
                     print(f"  attack {name} {words[state]}: {what}")
+            if ev.get("warnings"):  # one line here; the full list is in the report (`herd status`)
+                w = ev["warnings"]
+                print(f"  {len(w)} herd check warning{'s' if len(w) != 1 else ''}: {w[0]}"
+                      + (" (and more: `herd check` lists them)" if len(w) > 1 else ""))
+            for cid in ev.get("escalate") or []:
+                print(f"  {cid} failed {ESCALATE_AFTER} times in a row: ask the human one question (see the run skill)")
             return 1 if s["failing"] or any(st == "failing" for st, _ in states.values()) else 0
         elif cmd == "status":
             slug = _slug_arg(root, args)
@@ -1047,6 +1223,14 @@ def main(argv):
                 return 0
             probs = problems(root, slug)
             print("not done: " + "; ".join(probs) if probs else "done: evidence is fresh and passing")
+        elif cmd == "review":
+            skipped, args = _opt(args, "--skipped")
+            by, args = _opt(args, "--by")
+            if (skipped is None) == (by is None) or len(args) != (0 if skipped is not None else 1):
+                raise UsageError
+            add_review(root, _slug_arg(root, []), by=by, text=skipped if skipped is not None else args[0],
+                       skipped=skipped is not None)
+            print("review recorded" + (" as skipped" if skipped is not None else f" by {by}"))
         elif cmd == "done":
             verbose = "--verbose" in args
             slug = _slug_arg(root, [a for a in args if a != "--verbose"])
@@ -1054,8 +1238,16 @@ def main(argv):
             if probs:
                 print("not done: " + "; ".join(probs), file=sys.stderr)
                 return 1
+            if _git(root, "status", "--porcelain", "--", *OWN_FILES).strip():  # work outside a commit
+                if pr_wanted(root) or (_dir(root, slug) / "pr").exists():
+                    print("not done: commit the work first: pull requests are on, and the pull request must hold "
+                          "exactly the verified code (commit, `herd verify`, then `herd done`)", file=sys.stderr)
+                    return 1
+                print("warning: uncommitted work: the evidence names the commit plus uncommitted changes; "
+                      "commit on the task branch if the project allows it", file=sys.stderr)
             ev = load_evidence(root, slug)
-            text = report(ev, load_notes(root, slug))
+            notes = load_notes(root, slug)
+            text = report(ev, notes)
             (_dir(root, slug) / "evidence.md").write_text(text)
             (root / ".herd" / "active").unlink(missing_ok=True)
             if verbose:
@@ -1063,6 +1255,8 @@ def main(argv):
             proven = sum(r["status"] == "passing" and not r.get("zero_tests") for r in ev["results"])
             print(f"done: evidence is fresh and passing ({proven} of {len(ev['results'])} criteria proven)")
             print(f"report: {(_dir(root, slug) / 'evidence.md').relative_to(root)}")
+            print("final report (paste it as written):")
+            print("\n".join(final_report(root, slug, ev, notes)))
             if (_dir(root, slug) / "pr").exists():  # a PR exists: its description must show the final evidence
                 try:
                     print(f"pr: description updated with the final evidence: {open_pr(root, slug, yes=True)}")

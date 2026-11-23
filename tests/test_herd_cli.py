@@ -56,9 +56,10 @@ class Base(unittest.TestCase):
             self.attacks()
 
     def attacks(self, slug="t1", root=None):
-        """Record the standard adversarial attacks, which `herd done` needs on the standard route."""
+        """Record the standard attacks and a review, which `herd done` needs on the standard route."""
         for a in herd.ATTACKS:
             herd.add_note(root or self.root, slug, "tried", f"{a} attack", attack=a, check=OK)
+        herd.add_review(root or self.root, slug, by="a fresh subagent", text="no Blocker or Major")
 
 
 class TestTask(Base):
@@ -238,19 +239,19 @@ class TestBudgetAndRed(Base):
     def test_red_recorded_on_first_verify_only(self):
         self.task()
         ev = herd.verify(self.root, "t1")  # C1 fails, C2 unchecked
-        self.assertEqual(ev["red"], {"failed": 1, "total": 1})
+        self.assertEqual((ev["red"]["failed"], ev["red"]["total"]), (1, 1))
         self.assertTrue((self.root / ".herd/tasks/t1/red.json").exists())
         (self.root / "greet.txt").write_text("hello")
         ev = herd.verify(self.root, "t1")
         self.assertEqual(ev["summary"]["passing"], 1)
-        self.assertEqual(ev["red"], {"failed": 1, "total": 1})  # still the first run
+        self.assertEqual((ev["red"]["failed"], ev["red"]["total"]), (1, 1))  # still the first run
         self.assertIn("First verify: 1 of 1 checks failed before the work", herd.report(ev))
 
     def test_green_from_the_start_is_visible(self):
         self.task()
         (self.root / "greet.txt").write_text("hello")
         ev = herd.verify(self.root, "t1")
-        self.assertEqual(ev["red"], {"failed": 0, "total": 1})
+        self.assertEqual((ev["red"]["failed"], ev["red"]["total"]), (0, 1))
         self.assertIn("First verify: 0 of 1 checks failed before the work", herd.report(ev))
 
     def test_red_does_not_make_evidence_stale(self):
@@ -763,6 +764,7 @@ class TestCli(Base):
         self.assertEqual(self.run_cli("check")[0], 0)
         for a in herd.ATTACKS:
             self.assertEqual(self.run_cli("note", "--tried", "--attack", a, "--check", OK, f"{a} attack")[0], 0)
+        self.assertEqual(self.run_cli("review", "--by", "a fresh subagent", "no Blocker or Major")[0], 0)
         self.assertEqual(self.run_cli("verify")[0], 1)  # C1 failing
         (self.root / "greet.txt").write_text("hello")
         rc, out, _ = self.run_cli("verify")
@@ -957,6 +959,7 @@ class TestAttacks(Base):
         self.assertIn("collision", probs)
         for a in ("collision", "one-bad-part", "recount"):
             self.assertEqual(self.run_cli("note", "--tried", "--attack", a, f"n/a: {a} explained").returncode, 0)
+        self.assertEqual(self.run_cli("review", "--skipped", "no reviewer in this test").returncode, 0)
         herd.verify(self.root, "t1")
         self.assertEqual(herd.problems(self.root, "t1"), [])
         self.assertEqual(self.run_cli("done").returncode, 0)
@@ -1105,6 +1108,7 @@ class TestAttackChecks(Base):
 
     def ready(self):
         self.task()
+        herd.add_review(self.root, "t1", by="a fresh subagent", text="no Blocker or Major")  # these tests are about attacks
         (self.root / "greet.txt").write_text("hello")
 
     def test_attack_needs_a_command(self):
@@ -1113,10 +1117,10 @@ class TestAttackChecks(Base):
             p = self.cli("note", "--tried", "--attack", a, "tried it")
             self.assertEqual(p.returncode, 1, a)
             self.assertIn("--check", p.stderr)
-        self.assertEqual(herd.load_notes(self.root, "t1"), [])
+        self.assertEqual([n for n in herd.load_notes(self.root, "t1") if n["kind"] != "review"], [])
         p = self.cli("note", "--tried", "--attack", "bad-input", "--check", "test -f greet.txt", "malformed map")
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertEqual(herd.load_notes(self.root, "t1")[0]["check"], "test -f greet.txt")
+        self.assertEqual(herd.load_notes(self.root, "t1")[-1]["check"], "test -f greet.txt")
         self.assertEqual(self.cli("note", "--found", "--check", OK, "x").returncode, 1)  # only with --attack
         self.assertEqual(self.cli("note", "--tried", "--attack", "recount", "--check", " ", "x").returncode, 1)
 
@@ -1747,7 +1751,12 @@ class TestBudgets(Base):
     def cli(self, *args):
         p = subprocess.run([sys.executable, str(Path(herd.__file__)), *args], cwd=self.root,
                            capture_output=True, text=True)
-        return p.returncode, p.stdout.strip().splitlines()
+        out = p.stdout.strip().splitlines()
+        if args[:1] == ("verify",):  # 0.4.0: one summary line for `herd check` warnings, budgeted on its own
+            warn = [line for line in out if "herd check warning" in line]
+            self.assertLessEqual(len(warn), 1, out)
+            out = [line for line in out if line not in warn]
+        return p.returncode, out
 
     # (1) short CLI output
     def test_cli_verify_prints_one_line_when_all_pass(self):
@@ -1786,7 +1795,9 @@ class TestBudgets(Base):
         self.cli("verify")
         rc, out = self.cli("done")
         self.assertEqual(rc, 0)
-        self.assertLessEqual(len(out), 3)
+        self.assertLessEqual(len(out), 11)  # 0.4.0: the result, the report path and the seven-line final report
+        self.assertEqual(sum(line.startswith(("Done:", "Proven:", "Not proven:", "Caveats:", "Decisions:",
+                                              "Limits:", "Review:")) for line in out), 7, out)
         self.assertIn("evidence.md", " ".join(out))
         self.assertIn("2 of 2", " ".join(out))
         self.assertIn("# Evidence: t1", (self.root / ".herd/tasks/t1/evidence.md").read_text())
@@ -1812,7 +1823,7 @@ class TestBudgets(Base):
         self.assertLessEqual(words(template), 120)
         for part in ("\nProven:", "Not proven:", "Caveats:", "Decisions:", "Limits:", "Review:"):
             self.assertIn(part, template)
-        self.assertIn("evidence.md", text.split("## Final report")[0])  # filled from the report, not memory
+        self.assertIn("`herd done`. It prints the final report, filled from the evidence", text.split("## Final report")[0])  # 0.4.0: written by the CLI, not from memory
 
     # (3) short skills, rare parts in reference files read only when needed
     def test_skill_word_budgets(self):
@@ -1845,7 +1856,7 @@ class TestBudgets(Base):
         herd.verify(self.root, "t1")
         body = herd.pr_body(self.root, "t1")
         visible = re.sub(r"<details>.*?</details>", "", body, flags=re.S)
-        self.assertLessEqual(words(visible), 165, visible)  # 0.3.2: +1 line for attacks without a passing command
+        self.assertLessEqual(words(visible), 200, visible)  # 0.4.0: + unreviewed and `herd check` warning lines
         self.assertIn("unicode names not tried", visible)  # open caveats stay in view
         for kept in ("fed it an empty name", "empty names now rejected", "test -f greet.txt", "Route: standard"):
             self.assertIn(kept, body)

@@ -2,6 +2,19 @@
 
 All notable changes to Herd. Versions follow `.claude-plugin/plugin.json`.
 
+## 0.4.0
+
+Seven rules of the run skill move from text into the CLI, so an agent that skips the text still meets them.
+
+- **Added:** red first is checked. `herd init` records the starting commit; the first `herd verify` records which code files (not tests, docs or `.herd/`) had already changed. If any had, the report and the PR say "red first not proven", and `herd done` and the Stop gate refuse until the agent explains it with `herd note --late-red "<why>"`. Benchmark runs often wrote the code first and moved it aside for the first verify.
+- **Added:** risk and review are recorded. `herd init` stores the risk floor of the goal and the request; `herd verify` raises it when the changed files match a `[floor]` rule. `herd review --by "<reviewer>" "<what they found>"` or `herd review --skipped "<why>"` records the fresh-context review, and `herd done` refuses medium and high risk on the standard route without one. A skipped review shows the change as unreviewed in the report and the PR.
+- **Added:** human criteria are frozen at the first verify. `herd done` refuses when one is changed or removed afterwards; a changed check, or a criterion added later, is shown as never seen failing.
+- **Changed:** `herd done` prints the seven-line final report itself, filled from the evidence and the notes. Decisions are logged as they happen with `herd note --decision "<decision>; <reason>; <how to override>"`.
+- **Added:** `herd verify` runs the `herd check` warnings every time, stores them in the evidence, prints one summary line, and lists them in the report and the PR.
+- **Added:** `herd verify` counts consecutive failures per criterion and says to ask the human after 3 in a row.
+- **Added:** `herd done` refuses uncommitted work when pull requests are on (`[pr] open = true`, or a PR opened by `herd pr`) and warns otherwise.
+- **Changed:** the run and criteria skills say less where the CLI now enforces the rule.
+
 ## 0.3.2
 
 - **Changed:** each standard attack names a command. `herd note --tried --attack <name>` needs `--check "<command>"`, usually a regression test, or text starting `n/a:` when the attack cannot apply. `herd verify` runs these commands like criterion checks and stores their exit code and output. `herd done` and the Stop gate count an attack only when its command passed at the last verify (one that ran zero tests or was logged after the last verify does not count), or when it is marked `n/a:`. Commands rerun at every verify, so one failing command blocks its attack however many others pass. An attack note with no command counts only as a stated `n/a:`, so notes from 0.3.1 or a hand-edited log do not pass the gate. `herd verify` prints attacks that need attention (all of them with `--verbose`) and exits 1 when one fails. The latest note for an attack decides, so a mistyped or renamed command can be replaced; earlier commands that now fail stay listed in the PR. A command that runs no project code (`true`, `echo`, `test -f`) warns and does not count. `--timeout S` sets an attack command's time limit; each distinct command runs once per verify. Before, a note was only text: a benchmark run logged three attacks as tried before running them, and the gate accepted them.

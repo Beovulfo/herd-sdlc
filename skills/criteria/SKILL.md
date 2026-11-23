@@ -15,9 +15,9 @@ A task is done when its criteria pass, proven by commands. Criteria live in `.he
 4. **Cover every word of a human criterion.** Quoting it while testing one example is still narrowing. `any`, `every`, `whatever`, `many`, `each`, `arbitrary` need generated cases of different shapes. `big`, `large`, `huge`, `thousands` need a scale check with a time limit. Covering only part? Name it in `test_budget`; add `agent-proposed` criteria for the rest. Add `coverage` to each: what its check proves and misses, about 30 words.
 5. **Fill gaps, never block.** Write missing checks yourself. If nothing can run, set `check = ""`: `unchecked`, never counted as met.
 6. **Include one edge or failure case:** wrong input, empty state, or what must not change.
-7. **Fail first.** Run `herd verify` before building. A check that already passes proves nothing: tighten it.
+7. **Fail first.** Run `herd verify` before writing code; tighten any check that already passes. Human criteria are then frozen.
 8. **Say what is not tested** (medium and high risk). Top-level `test_budget = "..."`: what is tested at which level, and what is not. `known_limits = "..."`: when the claim may fail.
-9. **Validate.** `herd check` warns about checks that run no project code (`true`, `echo`, `test -f`), unquoted human criteria, missing or vague `coverage`, and your texts over 40 or coverage over 50 words (human quotes exempt). `herd detect` proposes the test command.
+9. **Validate.** `herd check` (also run by every `herd verify`) warns about checks that run no project code (`true`, `echo`, `test -f`), unquoted human criteria, missing or vague `coverage`, and long texts (human quotes exempt).
 
 ## Format
 

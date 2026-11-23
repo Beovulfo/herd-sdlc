@@ -251,6 +251,15 @@ def setting(root, table, key):
     return value
 
 
+def no_worktree_reason(root):
+    """Why a worktree cannot be cut here, or None: it needs git, a commit and a branch."""
+    if not _git(root, "rev-parse", "--verify", "-q", "HEAD").strip():
+        return "this is not a git repository or it has no commit yet"
+    if _branch(root) == "HEAD":
+        return "HEAD is detached, so there is no branch to cut one from"
+    return None
+
+
 def check_worktree_rule(root, slug):
     """Each task in its own linked worktree on herd/<slug>, unless `[worktree] required = false`.
 
@@ -260,8 +269,9 @@ def check_worktree_rule(root, slug):
     required = setting(root, "worktree", "required")
     if required is False:
         return None
-    if required is not True and not _git(root, "rev-parse", "--verify", "-q", "HEAD").strip():
-        return "no worktree: this is not a git repository or it has no commit yet, so the task starts in this folder"
+    reason = no_worktree_reason(root)
+    if required is not True and reason:
+        return f"no worktree: {reason}, so the task starts in this folder"
     linked = _gitpath(root, "--git-dir") != _gitpath(root, "--git-common-dir")
     if not linked or _branch(root) != f"herd/{slug}":
         raise ValueError(f"each task runs in its own worktree on herd/{slug} by default: run "
@@ -687,8 +697,8 @@ def pr_body(root, slug):
     """The PR description, evidence first: what is proven and by which check, then what is not, then how to re-run."""
     task, ev, notes = load_task(root, slug), load_evidence(root, slug), load_notes(root, slug)
     head = [f"# Evidence: {slug}", "", f"**Goal:** {task['goal']}", ""]
-    foot = ["", "---", "Opened by Herd with `herd pr` as a draft. Herd never marks it ready and never merges: review the "
-            "evidence above, then mark it ready and merge."]
+    foot = ["", "---", "Herd opens pull requests as drafts, never marks one ready and never merges: review the evidence "
+            "above, then mark it ready and merge."]
     if ev is None:
         return "\n".join(head + ["No evidence yet: `herd verify` has not run. The next `herd pr` replaces this."]
                          + foot) + "\n"
@@ -776,7 +786,7 @@ def pr_title(goal, slug, limit=72):
 
 def open_pr(root, slug, yes=False):
     """Push the task's herd/* branch and open (as a draft) or update its PR with the evidence; no other branch."""
-    if not yes and setting(root, "pr", "open") is False:
+    if setting(root, "pr", "open") is False and not yes:
         raise ValueError("herd.toml has `[pr] open = false`: pass --yes when the request asks for a pull request")
     branch = _git(root, "rev-parse", "--abbrev-ref", "HEAD").decode().strip()
     if branch != f"herd/{slug}":
@@ -1084,7 +1094,8 @@ def main(argv):
             if len(args) != 2:
                 raise UsageError
             setting(root, "pr", "open")  # a bad value fails now, not at the end of the task
-            setting(root, "worktree", "required")
+            if setting(root, "worktree", "required") is not True and worktree and no_worktree_reason(root):
+                worktree = False  # the default steps aside: the plain init below says why
             if worktree:
                 path, base, left = init_worktree(root, args[0], args[1], quick_check=quick, request=request)
                 print(f"created worktree {path} on branch herd/{args[0]}, cut from {base}. Work from there: in Claude "
@@ -1229,6 +1240,8 @@ def main(argv):
             print(f"skills: {skills}/herd-run, herd-criteria, herd-evidence")
             print(f"rules: {agents} (the Herd block; agents without a Stop hook rely on it)")
             print(f"Stop gate: {hooks}; trust it once in Codex with /hooks")
+            print("tasks run in their own worktree by default, where this gate cannot see them: start Codex in the "
+                  "worktree (`codex -C <path>`), or set `[worktree] required = false` in herd.toml to keep tasks here")
             if not args:
                 print("they name this Herd copy by absolute path, so AGENTS.md, .codex/hooks.json and the skill folders "
                       "are in .git/info/exclude: git no longer shows them, even your own content in them")

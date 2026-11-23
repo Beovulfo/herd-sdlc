@@ -1645,7 +1645,8 @@ class TestWorktree(Base):
         self.assertIn("uncommitted", p.stderr)
         self.assertEqual((self.wt("t1") / "base.txt").read_text(), "from work")
 
-    def test_base_refuses_a_detached_head(self):
+    def test_base_refuses_a_detached_head_when_required(self):
+        self.required()  # explicit: never steps aside
         git(self.root, "checkout", "-q", "--detach")
         p = self.herd("init", "t1", "Write out.txt", "--worktree")
         self.assertEqual(p.returncode, 1)

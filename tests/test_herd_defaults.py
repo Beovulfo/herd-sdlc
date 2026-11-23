@@ -76,6 +76,14 @@ class TestWorktreeDefault(cli.Base):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertTrue((self.root / ".claude/worktrees/herd-t1/.herd/tasks/t1").exists())
 
+    def test_detached_head_starts_here_with_a_note(self):
+        cli.git(self.root, "switch", "-q", "--detach")
+        for slug, extra in (("t1", []), ("t2", ["--worktree"])):
+            p = run(self.root, "init", slug, "Write out.txt", *extra)
+            self.assertEqual(p.returncode, 0, p.stderr)
+            self.assertIn("no worktree: HEAD is detached", p.stderr)
+            herd.cancel_task(self.root, slug)
+
     def test_explicit_true_still_refuses(self):
         self.toml("[worktree]\nrequired = true\n")
         self.refused("init", "t1", "Write out.txt")
@@ -92,10 +100,12 @@ class TestWorktreeDefaultWithoutGit(unittest.TestCase):
         self.tmp.cleanup()
 
     def plain_init_works_with_a_note(self):
-        p = run(self.root, "init", "t1", "Write out.txt")
-        self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertTrue((self.root / ".herd/tasks/t1/task.toml").exists())
-        self.assertRegex(p.stderr, r"no worktree: .*(not a git repository|no commit)")
+        for slug, extra in (("t1", []), ("t2", ["--worktree"])):  # the skills always pass --worktree
+            p = run(self.root, "init", slug, "Write out.txt", *extra)
+            self.assertEqual(p.returncode, 0, p.stderr)
+            self.assertTrue((self.root / f".herd/tasks/{slug}/task.toml").exists())
+            self.assertRegex(p.stderr, r"no worktree: .*(not a git repository|no commit)")
+            herd.cancel_task(self.root, slug)
 
     def test_outside_git(self):
         self.plain_init_works_with_a_note()
@@ -109,6 +119,9 @@ class TestWorktreeDefaultWithoutGit(unittest.TestCase):
         p = run(self.root, "init", "t1", "Write out.txt")
         self.assertEqual(p.returncode, 1)
         self.assertIn("--worktree", p.stderr)
+        p = run(self.root, "init", "t1", "Write out.txt", "--worktree")
+        self.assertEqual(p.returncode, 1)
+        self.assertFalse((self.root / ".herd/tasks/t1").exists())
 
 
 class TestSkillsAndDocs(unittest.TestCase):

@@ -85,7 +85,7 @@ Then, inside your project, in a new session:
 
 Herd creates the task, writes criteria with checks and shows them to you, runs them once to see them fail, builds on a `herd/<slug>` branch, tries to break the result, gets a fresh-context review, verifies, and ends with a seven-line report that links the full evidence in `evidence.md`. High-risk changes get one approval question before building. For a trivial change, say "quick fix": one check, no ceremony. To plan with Herd how to prove a change for your project type, run `/herd:evidence`.
 
-By default the task runs on a new branch in its own worktree, cut from the branch you are on, and ends with a draft pull request whose description is the evidence. You review it, mark it ready and merge. To turn either off, set `[worktree] required = false` or `[pr] open = false` in `herd.toml` ([settings](#project-settings-herdtoml)). Outside git, or before the first commit, the task starts in the current folder instead; with no `origin` remote or no `gh`, `herd pr` says why and the task still finishes.
+By default the task runs on a new branch in its own worktree, cut from the branch you are on, and ends with a draft pull request whose description is the evidence. You review it, mark it ready and merge. To turn either off, set `[worktree] required = false` or `[pr] open = false` in `herd.toml` ([settings](#project-settings-herdtoml)). Outside git, before the first commit, or on a detached HEAD, the task starts in the current folder instead; with no `origin` remote or no `gh`, `herd pr` says why and the task still finishes.
 
 ## Other agents
 
@@ -155,7 +155,7 @@ created worktree <repo>/.claude/worktrees/herd-export-json on branch herd/export
 - **Its own state.** The task's files and Stop gate live in the worktree. Other agents can start other tasks from the same branch at the same time; each gate sees only its own task, and a duplicate task name fails without touching the first.
 - **A forgotten move fails loudly.** `herd` commands run from the starting checkout for a task that lives in a worktree refuse and name the worktree.
 - **Clean main checkout.** Herd adds `/.claude/worktrees/` and `.herd/` to the repository's own `.git/info/exclude` (never committed), so other tasks never show up in `git status` or a `git add -A`.
-- **The rule by default.** A plain `herd init` refuses outside a matching worktree and names the fix. `[worktree] required = false` in `herd.toml` turns this off. Outside git, or before the first commit, a plain init works and says why.
+- **The rule by default.** A plain `herd init` refuses outside a matching worktree and names the fix. `[worktree] required = false` in `herd.toml` turns this off. Outside git, before the first commit, or on a detached HEAD, `herd init` (also with `--worktree`) starts the task in the current folder and says why. A session that already runs in a worktree on another branch gets a new one inside it.
 - **Clean up after the merge** with `git worktree remove .claude/worktrees/herd-<slug>`. Uncommitted changes in the starting checkout are not carried over; Herd warns when there are some.
 
 ## Architecture
@@ -381,7 +381,7 @@ While a Herd task is active, each `Edit` or `Write` runs the command on that fil
 
 ## Status
 
-Version 0.4.0 (see the [changelog](CHANGELOG.md)). Working and covered by 314 unit tests on Python 3.11 to 3.13: the evidence harness (`scripts/herd.py`), the Stop gate, the quick route, project-type detection, the lint hook, the caveat log, zero-test flagging, the `herd pr` step that opens a draft pull request and a worktree per task (both on by default), short output by default, `herd setup` for Codex and other agents, and the risk-floor module. Releases 0.2.7 to 0.3.0 were each built with Herd itself; 0.2.8 to 0.3.0 were opened as pull requests by `herd pr`. Benchmarked on one task with Sonnet (above). Not yet done: many live runs through the installed plugin across different project types, and issue-to-pull-request automation on GitHub (labelled issue to reviewed spec), which is still design work. `herd pr` covers only the last step: a finished local task opens a pull request with its evidence.
+Version 0.4.0 (see the [changelog](CHANGELOG.md)). Working and covered by 315 unit tests on Python 3.11 to 3.13: the evidence harness (`scripts/herd.py`), the Stop gate, the quick route, project-type detection, the lint hook, the caveat log, zero-test flagging, the `herd pr` step that opens a draft pull request and a worktree per task (both on by default), short output by default, `herd setup` for Codex and other agents, and the risk-floor module. Releases 0.2.7 to 0.3.0 were each built with Herd itself; 0.2.8 to 0.3.0 were opened as pull requests by `herd pr`. Benchmarked on one task with Sonnet (above). Not yet done: many live runs through the installed plugin across different project types, and issue-to-pull-request automation on GitHub (labelled issue to reviewed spec), which is still design work. `herd pr` covers only the last step: a finished local task opens a pull request with its evidence.
 
 ## The design behind it
 

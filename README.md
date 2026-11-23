@@ -154,7 +154,7 @@ flowchart LR
         RR["start, red, frozen, green, fails .json<br/>run-rule state"]
     end
     S -->|instruct the agent to run| CLI
-    H -->|gate, lint| CLI
+    H -->|gate, preinit, lint| CLI
     CLI --> T
     CLI --> D
     CLI --> G

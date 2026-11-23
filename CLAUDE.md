@@ -6,7 +6,7 @@ review the evidence. Requirements: [`docs/PRD.md`](docs/PRD.md). Changes: [`CHAN
 
 ## Layout
 - `.claude-plugin/`: plugin manifest and marketplace. `hooks/hooks.json`: the Stop gate and the lint hook. `skills/{run,criteria,evidence}/SKILL.md`: the skills.
-- `scripts/herd.py`: the CLI (init, check, detect, verify, status, done, cancel, gate, lint, triage, note). It uses `herd_detect.py` and `herd_triage.py`.
+- `scripts/herd.py`: the CLI (init, check, detect, verify, status, done, cancel, pr, gate, lint, triage, note). It uses `herd_detect.py` and `herd_triage.py`.
 - `scripts/herd_arbiter.py`, `scripts/herd_escalation.py`: tested building blocks for the planned GitHub automation, not wired into the CLI yet.
 - `tests/`: one `test_*.py` per module.
 - `docs/designs/`: specs, written with the Elephant-Goldfish Model (Herd dogfoods its own method). `docs/spikes/`: experiments. `docs/backlog.md`: deferred ideas.

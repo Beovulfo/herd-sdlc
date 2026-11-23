@@ -99,6 +99,7 @@ flowchart LR
 4. **Break it, then review.** The agent tries to break its own work on exactly what the request promises: the words `any`, `every`, `very big` become generated cases of different shapes and a scale run. Each attempt, failure and fix is logged with `herd note`. For medium and high risk, a fresh-context reviewer then looks at the diff.
 5. **Verify.** `herd verify` runs every check and stores evidence: status, exit code, output tail, commit SHA, a fingerprint of the workspace, a timestamp, how many checks failed on the first run (a check that was green before any work is visible), and the wall-clock time since `herd init`. A check that exits 0 but whose output says it ran zero tests (`Ran 0 tests`, `no tests ran`, `[no test files]` and the like) is marked in the evidence and the report warns about it. The warning is advisory: the Stop gate does not change.
 6. **Stop gate.** While a task is active, a Stop hook refuses to let the agent finish unless the evidence is fresh and passing. Edit a file after verifying and the evidence is stale. After 3 blocked attempts the gate lets the agent stop so it can ask you one question instead of looping. To drop a task, `herd cancel` closes it and keeps its files as a record.
+7. **Pull request (opt-in).** When the request asks for a PR, or `herd.toml` has `[pr] open = true`, `herd pr` pushes the task's `herd/<slug>` branch and opens a pull request whose description is the evidence: the result, what is proven and by which check, what is not proven (failing or unchecked criteria, coverage gaps, known limits, open caveats), the run details and the commands to reproduce. A second `herd pr` refreshes the description. It needs a clean working tree, so the PR holds exactly the verified code. It leaves check output out of the description (it can hold secrets) but publishes the check commands, the criteria and the notes as written, so never put a secret in them. It pushes no other branch and never merges: you review the evidence and merge.
 
 ## Architecture
 
@@ -235,6 +236,7 @@ python3 examples/supermarket-route/verifier/verify_general.py with_herd examples
 | `herd status` | Show evidence and whether the task is done |
 | `herd done` | Write `evidence.md`, close the task; refuses unless fresh and passing |
 | `herd cancel --reason "text"` | Abandon the task: keep its files, stop the Stop gate from blocking |
+| `herd pr [slug] [--yes]` | Opt-in: push the `herd/*` branch, open or update its PR with the evidence as the description; never merges |
 | `herd help` | List every command with its usage |
 | `herd gate` | The Stop hook (reads hook JSON on stdin) |
 | `herd lint` | The optional PostToolUse lint hook; `herd lint --suggest` prints a `[lint]` block for `herd.toml` |

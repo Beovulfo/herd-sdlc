@@ -742,7 +742,7 @@ def final_report(root, slug, ev, notes):
             f"Caveats: {'; '.join(caveats) if caveats else 'none'}.",
             f"Decisions: {' | '.join(decisions) if decisions else 'none recorded'}.",
             f"Limits: {(ev.get('known_limits') or 'none stated').rstrip('.')}.",
-            f"Review: {review or ('not needed (quick route)' if ev.get('route') == 'quick' else 'none recorded')}."]
+            f"Review: {review or ('not needed (quick route)' if ev.get('route') == 'quick' else 'none recorded')}".rstrip('.') + "."]
 
 
 def load_notes(root, slug):

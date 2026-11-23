@@ -762,10 +762,21 @@ class TestGate(Base):
         herd.verify(self.root, "t1")
         self.assertIn("evidence passes", self.gate()["reason"])
         self.assertFalse((self.root / ".herd/tasks/t1/gate_blocks").exists())
-        for _ in range(herd.MAX_BLOCKS + 1):  # it never gives up: `herd done` is one command away
-            self.assertEqual(self.gate()["decision"], "block")
-        self.assertEqual(self.run_done(), 0)
+        self.assertEqual(self.run_done(), 0)  # `herd done` ends it
         self.assertIsNone(self.gate())
+
+    def test_a_passing_task_that_done_refuses_never_traps_the_agent(self):
+        (self.root / "herd.toml").write_text("[pr]\nopen = true\n")
+        git(self.root, "add", "herd.toml")
+        git(self.root, "commit", "-q", "-m", "prs on")
+        self.task(attacks=True)
+        (self.root / "greet.txt").write_text("hello")  # verified, but not committed, and the agent may not commit
+        herd.verify(self.root, "t1")
+        for _ in range(herd.MAX_BLOCKS):
+            out = self.gate()
+            self.assertIn("Commit first", out["reason"])
+        self.assertNotEqual(self.run_done(), 0)
+        self.assertIsNone(self.gate())  # after MAX_BLOCKS it lets the agent stop and say why
 
     def run_done(self):
         return subprocess.run(["python3", str(Path(herd.__file__)), "done"], cwd=self.root,

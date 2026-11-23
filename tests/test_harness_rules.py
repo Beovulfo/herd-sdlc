@@ -108,7 +108,7 @@ class TestOwnStateFiles(Base):
         self.red_then_build()
         d = self.root / ".herd/tasks/t1"
         (d / "red.json").write_text("{bad")
-        self.assertEqual(self.cli("verify").returncode, 0)  # a corrupt red.json counts as no first run on record
+        self.assertEqual(self.cli("verify").returncode, 0)  # it still runs; problems() then blocks
         for name in ("fails.json", "start.json"):
             (d / name).write_text("{bad")
         (d / "red.json").write_text(json.dumps({"at": "2026-11-23T10:00:00Z", "failed": 2, "total": 2}))  # 0.3.x shape
@@ -248,7 +248,10 @@ class TestFinalReport(Base):
         ev = json.loads((self.root / ".herd/tasks/t1/evidence.json").read_text())
         notes = [json.loads(x) for x in (self.root / ".herd/tasks/t1/notes.jsonl").read_text().splitlines()]
         lines = herd.final_report(self.root, "t1", ev, notes)
-        proven = sum(r["status"] == "passing" and not r.get("zero_tests") for r in ev["results"])  # recount by hand
+        task = herd.load_task(self.root, "t1")  # recount by running each check again, apart from Herd
+        proven = sum(bool(c["check"]) and subprocess.run(c["check"], shell=True, cwd=self.root,
+                                                         capture_output=True).returncode == 0 for c in task["criteria"])
+        self.assertEqual(proven, 2)
         self.assertEqual(lines[1].split(";")[0], f"Proven: {proven} of {len(ev['results'])} criteria")
         self.assertEqual(lines[3].count("found"), sum(n["kind"] == "found" for n in notes))
         self.assertEqual(lines[3].count("fixed"), sum(n["kind"] == "fixed" for n in notes))
@@ -300,9 +303,6 @@ class TestCommitBeforeDone(Base):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn("uncommitted", p.stderr)
 
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class TestReviewFindings(Base):
@@ -370,11 +370,11 @@ class TestReviewFindings(Base):
         (self.root / ".herd/tasks/t1/task.toml").write_text(narrowed)
         herd.verify(self.root, "t1")
         self.assertIn("--human-change", " ".join(herd.problems(self.root, "t1")))
-        self.assertEqual(self.cli("note", "--human-change", "C1: one call is enough, said the human").returncode, 0)
+        self.assertEqual(self.cli("note", "--human-change", "C1: the human said: It must return 1 for one call").returncode, 0)
         ev = herd.verify(self.root, "t1")
         self.assertEqual(herd.problems(self.root, "t1"), [])
-        self.assertIn("one call is enough, said the human", herd.report(ev))
-        self.assertIn("one call is enough, said the human", herd.pr_body(self.root, "t1"))
+        self.assertIn("the human said: It must return 1 for one call", herd.report(ev))
+        self.assertIn("the human said: It must return 1 for one call", herd.pr_body(self.root, "t1"))
 
     def test_human_criteria_are_frozen_even_before_any_check_runs(self):
         self.start(TASK.replace(f"check = {json.dumps(APP_CHECK)}", 'check = ""'))
@@ -392,10 +392,114 @@ class TestReviewFindings(Base):
         (self.root / ".herd/tasks/t1/red.json").write_text("{broken")
         ev = herd.verify(self.root, "t1")
         self.assertTrue(ev["red_unreadable"])
-        self.assertIn("is unreadable", " ".join(herd.problems(self.root, "t1")))
+        self.assertIn("red.json in", " ".join(herd.problems(self.root, "t1")))
 
     def test_the_red_run_does_not_count_toward_escalation(self):
         self.start()
         for _ in range(3):
             out = self.cli("verify").stdout
         self.assertNotIn("in a row", out)  # the red run plus two failed attempts
+
+
+class TestSecondReview(Base):
+    """The holes a second fresh-context review found."""
+
+    def ready(self, text=TASK):
+        self.start(text)
+        self.red_then_build()
+        self.attacks_and_review()
+        herd.verify(self.root, "t1")
+        self.assertEqual(herd.problems(self.root, "t1"), [])
+
+    def test_deleting_start_json_blocks(self):
+        self.start()
+        (self.root / ".herd/tasks/t1/start.json").unlink()
+        (self.root / "app.py").write_text("def f():\n    return 1\n")
+        self.attacks_and_review()
+        herd.verify(self.root, "t1")
+        self.assertIn("start.json", " ".join(herd.problems(self.root, "t1")))
+
+    def test_deleting_frozen_json_does_not_refreeze_an_edited_criterion(self):
+        self.ready()
+        narrowed = TASK.replace('text = "It must return 1 for any call"', 'text = "It must return 1 for one call"')
+        (self.root / ".herd/tasks/t1/task.toml").write_text(narrowed)
+        (self.root / ".herd/tasks/t1/frozen.json").unlink()
+        herd.verify(self.root, "t1")
+        self.assertFalse((self.root / ".herd/tasks/t1/frozen.json").exists())
+        self.assertIn("frozen.json", " ".join(herd.problems(self.root, "t1")))
+
+    def test_a_criterion_the_human_dropped_can_be_closed(self):
+        self.ready()
+        removed = TASK.split("[[criteria]]")[0] + "[[criteria]]" + TASK.split("[[criteria]]")[2]
+        (self.root / ".herd/tasks/t1/task.toml").write_text(removed)
+        herd.verify(self.root, "t1")
+        self.assertIn("C1 was removed", " ".join(herd.problems(self.root, "t1")))
+        herd.add_note(self.root, "t1", "human-change", "C1: drop it, said the human")
+        herd.verify(self.root, "t1")
+        self.assertEqual(herd.problems(self.root, "t1"), [])
+
+    def test_a_weakened_check_on_a_human_criterion_blocks(self):
+        self.ready()
+        weak = TASK.replace(json.dumps(APP_CHECK), json.dumps("python3 -c \"import app; app.f()\""))
+        self.assertNotEqual(weak, TASK)
+        (self.root / ".herd/tasks/t1/task.toml").write_text(weak)
+        herd.verify(self.root, "t1")
+        self.assertIn("the check of human criterion C1 changed", " ".join(herd.problems(self.root, "t1")))
+        herd.add_note(self.root, "t1", "human-change", "C1: It must return 1 for any call; any call is fine")
+        herd.verify(self.root, "t1")
+        self.assertEqual(herd.problems(self.root, "t1"), [])
+
+    def test_a_human_change_note_must_quote_the_new_wording(self):
+        self.ready()
+        herd.add_note(self.root, "t1", "human-change", "C1: whatever")
+        narrowed = TASK.replace('text = "It must return 1 for any call"', 'text = "It must return 1 for one call"')
+        (self.root / ".herd/tasks/t1/task.toml").write_text(narrowed)
+        herd.verify(self.root, "t1")
+        self.assertIn("C1 changed", " ".join(herd.problems(self.root, "t1")))
+
+    def test_code_stashed_for_the_red_run_is_flagged(self):
+        git(self.root, "checkout", "-q", "-b", "herd/t1")
+        self.start()
+        (self.root / "app.py").write_text("def f():\n    return 1\n")
+        git(self.root, "stash", "push", "-q", "-u", "--", "app.py")
+        herd.verify(self.root, "t1")
+        git(self.root, "stash", "pop", "-q")
+        self.attacks_and_review()
+        herd.verify(self.root, "t1")
+        self.assertIn("a git stash was made", " ".join(herd.problems(self.root, "t1")))
+
+    def test_an_agent_edit_to_a_file_dirty_at_init_counts(self):
+        (self.root / "app.py").write_text("x = 1\n")
+        self.start()
+        (self.root / "app.py").write_text("def f():\n    return 1\n")
+        self.assertEqual(herd.verify(self.root, "t1")["red"]["code_before"], ["app.py"])
+
+    def test_an_executable_script_without_an_extension_is_code(self):
+        (self.root / "bin").mkdir()
+        (self.root / "bin/deploy").write_text("#!/bin/sh\necho hi\n")
+        self.assertTrue(herd.is_code("bin/deploy", self.root))
+        self.assertFalse(herd.is_code("Makefile", self.root))
+
+    def test_at_high_risk_a_review_counts_only_for_the_code_it_saw(self):
+        (self.root / "auth").mkdir()
+        self.start()
+        self.red_then_build()
+        (self.root / "auth/session.py").write_text("x = 1\n")
+        for a in herd.ATTACKS:
+            herd.add_note(self.root, "t1", "tried", f"{a} attack", attack=a, check=OK)
+        herd.verify(self.root, "t1")
+        herd.add_review(self.root, "t1", by="a fresh subagent", text="no Blocker or Major")
+        self.assertEqual(herd.problems(self.root, "t1"), [])
+        (self.root / "auth/session.py").write_text("x = 2\n")
+        herd.verify(self.root, "t1")
+        self.assertIn("the code changed after the review", " ".join(herd.problems(self.root, "t1")))
+
+    def test_the_gate_reason_says_to_escalate(self):
+        self.start()
+        for _ in range(4):
+            herd.verify(self.root, "t1")
+        self.assertIn("failed 3 times in a row", herd.gate(self.root, {})["reason"])
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -492,8 +492,11 @@ class TestNotes(Base):
         self.assertIn("Adversarial pass: not recorded", text)
         herd.add_note(self.root, "t1", "tried", "8 layout families at 3 sizes")
         text = herd.report(herd.verify(self.root, "t1"))
-        self.assertIn("Adversarial pass: 1 attempt recorded", text)
+        self.assertIn("Adversarial pass: 1 attempt recorded; standard attacks missing: bad-input, collision", text)
         self.assertNotIn("not recorded", text)
+        self.attacks()
+        text = herd.report(herd.verify(self.root, "t1"))
+        self.assertIn("Adversarial pass: 5 attempts recorded; standard attacks all logged", text)
 
     def test_quick_route_has_no_adversarial_line(self):
         herd.init_task(self.root, "q1", "Fix a typo", quick_check="python3 -V")

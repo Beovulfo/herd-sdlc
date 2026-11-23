@@ -512,6 +512,17 @@ def _largest_batch(notes):
     return best
 
 
+def _attack_line(notes):
+    """`Adversarial pass: ...` with the standard attacks covered and missing; None when nothing was tried."""
+    tried = [n for n in notes if n["kind"] == "tried"]
+    if not tried:
+        return None
+    covered = {n.get("attack") for n in tried}
+    missing = [a for a in ATTACKS if a not in covered]
+    return (f"Adversarial pass: {len(tried)} attempt{'s' if len(tried) != 1 else ''} recorded; standard attacks "
+            + (f"missing: {', '.join(missing)}" if missing else "all logged"))
+
+
 def report(ev, notes=None):
     s = ev["summary"]
     notes = ev.get("notes") or [] if notes is None else notes
@@ -535,9 +546,7 @@ def report(ev, notes=None):
     if ev.get("known_limits"):
         lines.append(f"Known limits: {ev['known_limits']}")
     if ev.get("route") != "quick":
-        tried = sum(n["kind"] == "tried" for n in notes)
-        lines.append(f"Adversarial pass: {tried} attempt{'s' if tried != 1 else ''} recorded" if tried
-                     else "Adversarial pass: not recorded")
+        lines.append(_attack_line(notes) or "Adversarial pass: not recorded")
     lines += ["", "| id | status | source | check |", "| --- | --- | --- | --- |"]
     for r in ev["results"]:
         lines.append(f"| {r['id']} | {r['status']} | {r['source']} | `{r['check'] or '-'}` |")
@@ -644,9 +653,8 @@ def pr_body(root, slug):
         details.append(f"Elapsed: {fmt_duration(ev['timing']['elapsed_s'])} from `herd init` to the last verify")
     if ev.get("test_budget"):
         details.append(f"Test budget: {ev['test_budget']}")
-    tried = sum(n["kind"] == "tried" for n in notes)
-    if tried:
-        details.append(f"Adversarial pass: {tried} attempt{'s' if tried != 1 else ''} recorded")
+    if _attack_line(notes):
+        details.append(_attack_line(notes))
     # the reviewer's view ends here; the rest is collapsed, nothing is dropped
     count = {k: sum(n["kind"] == k for n in notes) for k in NOTE_KINDS}
     lines += ["", "<details><summary>Run details and caveat log "

@@ -206,7 +206,7 @@ Result: 2 passing, 0 failing, 0 unchecked
 First verify: 2 of 2 checks failed before the work
 Elapsed: 2m 05s from herd init to this verify; first verify at 0m 40s (wall clock, includes any waiting on the human)
 Known limits: ASCII text only; non-Latin scripts are not handled
-Adversarial pass: 2 attempts recorded
+Adversarial pass: 5 attempts recorded; standard attacks all logged
 | id | status | source | check |
 | C1 | passing | human | `python3 -m unittest test_textutil.TestSlugify.test_basic` |
 | C2 | passing | agent-proposed | `python3 -m unittest test_textutil.TestSlugify.test_empty` |
@@ -363,7 +363,7 @@ Herd is built with its own method, using the [Elephant-Goldfish Model](https://g
 
 ## Roadmap
 
-- **Now (v0.3):** local autopilot with evidence, short output by default, the Stop gate, a quick route, project-type detection, an opt-in lint hook, an adversarial pass, the evidence-planning skill, zero-test flagging, an opt-in, evidence-first pull request step (`herd pr`) and an opt-in worktree start so several agents can run tasks in one repository.
+- **Now (v0.3):** local autopilot with evidence, short output by default, the Stop gate, a quick route, project-type detection, an opt-in lint hook, an adversarial pass whose standard attacks `herd done` enforces, the evidence-planning skill, zero-test flagging, an opt-in, evidence-first pull request step (`herd pr`) and an opt-in worktree start so several agents can run tasks in one repository.
 - **Next:** GitHub automation: a labelled issue becomes a reviewed spec, then a pull request, with the Arbiter and Escalation modules.
 - **Later:** a release gate for high-risk changes, and other agent harnesses.
 

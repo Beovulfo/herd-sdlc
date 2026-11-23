@@ -10,7 +10,7 @@ Work the task to the end without waiting on the human. You deliver code plus **e
 
 `herd <command>` means `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/herd.py" <command>`, written out in full, run from the project root (or the task's worktree). Checks in `task.toml` run from there too.
 
-Read a reference file only when its step applies: [quick.md](quick.md), [worktree.md](worktree.md), [adversarial.md](adversarial.md), [pr.md](pr.md).
+Reference files hold the detail of a step. When a step names one, open it and read all of it before you act on that step. A summary in this file never replaces it: [quick.md](quick.md) (quick route), [worktree.md](worktree.md) (own worktree), [adversarial.md](adversarial.md) (every standard-route task), [pr.md](pr.md) (pull request).
 
 ## Steps
 
@@ -19,7 +19,7 @@ Read a reference file only when its step applies: [quick.md](quick.md), [worktre
 3. **Red.** Run `herd verify` before building. Checks must fail. A check that already passes proves nothing: tighten it. A check marked `(ran zero tests)` found no tests: fix its command.
 4. **Gate.** Risk `high`: show the criteria table and assumptions, ask one approval question, wait. Otherwise show them and continue. Always ask if the user said to confirm criteria first.
 5. **Build.** On branch `herd/<slug>`, tests first, minimal changes within the goal. Use Superpowers (`writing-plans`, `test-driven-development`, `subagent-driven-development`) when installed; otherwise work in short steps yourself.
-6. **Break it** (standard route). Attack exactly what the request promises: [adversarial.md](adversarial.md). Log each attempt and result with `herd note --tried|--found|--fixed|--open "..."` the moment you find or fix it, one call at a time, never in a batch at the end. Turn each failure into a regression test.
+6. **Break it** (standard route, never skipped). Read [adversarial.md](adversarial.md) now. Attack exactly what the request promises, and always run its four standard attacks: bad input at every entry point, collisions, one bad part, and a recount of every reported number. `herd done` refuses until each has a `herd note --tried --attack <name>`. Log each attempt and result with `herd note --tried|--found|--fixed|--open "..."` the moment you find or fix it, one call at a time, never in a batch at the end. Turn each failure into a regression test.
 7. **Review** (medium and high risk). Get a fresh-context review, never your own: `superpowers:requesting-code-review`, EGM Goldfish agents, or a plain subagent given only the goal, criteria, `test_budget` and diff. Ask for bugs, missed criteria, and test gaps or low-value tests against `test_budget`. Fix Blocker and Major findings; decline Nits in one line. At most 3 rounds. No reviewer available? Do not ask the human: say so in the report and treat the change as unreviewed.
 8. **Verify.** Run `herd verify` after every change. It prints one line, plus any criterion that needs attention. After 3 failed attempts on one criterion, escalate.
 9. **Escalate only when needed:** an irreversible action, a real trade-off, or stuck after the caps. Ask **one** question with 2 or 3 numbered options. Never stop for missing detail. If the human drops the task, run `herd cancel --reason "<their words>"`. Never cancel to get past the gate.

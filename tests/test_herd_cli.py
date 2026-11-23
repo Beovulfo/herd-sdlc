@@ -46,9 +46,16 @@ class Base(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def task(self, text=TASK):
+    def task(self, text=TASK, attacks=False):
         herd.init_task(self.root, "t1", "Add a greeting")
         (self.root / ".herd/tasks/t1/task.toml").write_text(text)
+        if attacks:
+            self.attacks()
+
+    def attacks(self, slug="t1", root=None):
+        """Record the standard adversarial attacks, which `herd done` needs on the standard route."""
+        for a in herd.ATTACKS:
+            herd.add_note(root or self.root, slug, "tried", f"{a} attack", attack=a)
 
 
 class TestTask(Base):
@@ -244,7 +251,7 @@ class TestBudgetAndRed(Base):
         self.assertIn("First verify: 0 of 1 checks failed before the work", herd.report(ev))
 
     def test_red_does_not_make_evidence_stale(self):
-        self.task()
+        self.task(attacks=True)
         (self.root / "greet.txt").write_text("hello")
         herd.verify(self.root, "t1")
         self.assertEqual(herd.problems(self.root, "t1"), [])
@@ -259,6 +266,7 @@ class TestVerbatim(Base):
     def test_init_records_request(self):
         herd.init_task(self.root, "t1", "g", request=self.REQUEST)
         self.assertEqual((self.root / ".herd/tasks/t1/request.md").read_text(), self.REQUEST)
+        herd.cancel_task(self.root, "t1")
         herd.init_task(self.root, "t2", "g")
         self.assertFalse((self.root / ".herd/tasks/t2/request.md").exists())
 
@@ -302,6 +310,7 @@ class TestVerbatim(Base):
         ev = herd.verify(self.root, "t1")
         self.assertEqual(ev["human_not_verbatim"], [])
         self.assertNotIn("verbatim", herd.report(ev))
+        herd.cancel_task(self.root, "t1")
         herd.init_task(self.root, "t2", "g")  # no request recorded
         (self.root / ".herd/tasks/t2/task.toml").write_text(
             'goal = "g"\n[[criteria]]\nid = "C1"\ntext = "x"\nsource = "human"\ncheck = "true"\n')
@@ -536,18 +545,18 @@ class TestNotes(Base):
         self.assertIn("never in a batch", text)
 
     def test_notes_are_in_evidence_and_do_not_make_it_stale(self):
-        self.task()
+        self.task(attacks=True)
         herd.add_note(self.root, "t1", "found", "x")
         (self.root / "greet.txt").write_text("hello")
         ev = herd.verify(self.root, "t1")
-        self.assertEqual(ev["notes"][0]["text"], "x")
+        self.assertIn("x", [n["text"] for n in ev["notes"]])
         herd.add_note(self.root, "t1", "fixed", "y")
         self.assertEqual(herd.problems(self.root, "t1"), [])
 
     def test_notes_added_after_the_last_verify_still_reach_done_and_status(self):
         run = lambda *a: subprocess.run(["python3", str(Path(herd.__file__)), *a], cwd=self.root,
                                         capture_output=True, text=True)
-        self.task()
+        self.task(attacks=True)
         (self.root / "greet.txt").write_text("hello")
         self.assertEqual(run("verify").returncode, 0)
         self.assertEqual(run("note", "--found", "late finding").returncode, 0)
@@ -578,6 +587,7 @@ class TestSlugFallback(Base):
     def finish_one(self, slug="t1"):
         herd.init_task(self.root, slug, "g")
         (self.root / f".herd/tasks/{slug}/task.toml").write_text(TASK)
+        self.attacks(slug)
         (self.root / "greet.txt").write_text("hello")
         self.assertEqual(self.run_cli("verify", slug).returncode, 0)
         self.assertEqual(self.run_cli("done", slug).returncode, 0)
@@ -622,6 +632,7 @@ class TestTiming(Base):
         with self.at("10:00:00"):
             herd.init_task(self.root, "t1", "g")
         self.assertEqual((self.root / ".herd/tasks/t1/started").read_text().strip(), "2026-11-22T10:00:00Z")
+        herd.cancel_task(self.root, "t1")
         with self.at("10:00:05"):
             herd.init_task(self.root, "q1", "g", quick_check="true")
         self.assertTrue((self.root / ".herd/tasks/q1/started").exists())
@@ -659,7 +670,7 @@ class TestTiming(Base):
         self.assertNotIn("first verify at", herd.report(ev))
 
     def test_timing_does_not_make_evidence_stale(self):
-        self.task()
+        self.task(attacks=True)
         (self.root / "greet.txt").write_text("hello")
         herd.verify(self.root, "t1")
         self.assertEqual(herd.problems(self.root, "t1"), [])
@@ -693,7 +704,7 @@ class TestGate(Base):
         self.assertIn("herd verify", out["reason"])
 
     def test_blocks_failing_then_allows_passing(self):
-        self.task()
+        self.task(attacks=True)
         herd.verify(self.root, "t1")
         self.assertIn("C1", self.gate()["reason"])
         (self.root / "greet.txt").write_text("hello")
@@ -701,7 +712,7 @@ class TestGate(Base):
         self.assertIsNone(self.gate())
 
     def test_blocks_stale_evidence(self):
-        self.task()
+        self.task(attacks=True)
         (self.root / "greet.txt").write_text("hello")
         herd.verify(self.root, "t1")
         self.assertIsNone(self.gate())
@@ -723,7 +734,7 @@ class TestGate(Base):
         self.assertIsNone(self.gate())  # allows, so a stuck agent can stop and escalate
 
     def test_block_counter_resets_when_passing(self):
-        self.task()
+        self.task(attacks=True)
         self.gate()
         (self.root / "greet.txt").write_text("hello")
         herd.verify(self.root, "t1")
@@ -742,6 +753,8 @@ class TestCli(Base):
         self.assertEqual(rc, 0)
         (self.root / ".herd/tasks/t1/task.toml").write_text(TASK)
         self.assertEqual(self.run_cli("check")[0], 0)
+        for a in herd.ATTACKS:
+            self.assertEqual(self.run_cli("note", "--tried", "--attack", a, f"{a} attack")[0], 0)
         self.assertEqual(self.run_cli("verify")[0], 1)  # C1 failing
         (self.root / "greet.txt").write_text("hello")
         rc, out, _ = self.run_cli("verify")
@@ -895,6 +908,7 @@ class TestZeroTests(Base):
 
     def test_done_is_unchanged_and_report_is_quiet_without_it(self):
         self.task("python3 -c \"print('Ran 0 tests'); print('OK')\"")
+        self.attacks()
         herd.verify(self.root, "t1")
         self.assertEqual(herd.problems(self.root, "t1"), [])  # advisory: the gate does not block on it
         p = subprocess.run(["python3", str(Path(herd.__file__)), "done"], cwd=self.root, capture_output=True, text=True)
@@ -908,6 +922,63 @@ class TestZeroTests(Base):
                            capture_output=True, text=True)
         self.assertEqual(p.returncode, 0)
         self.assertIn("C1 passing (ran zero tests)", p.stdout)
+
+
+class TestAttacks(Base):
+    """On the standard route `herd done` needs a recorded attempt for each standard attack."""
+
+    def run_cli(self, *args):
+        return subprocess.run([sys.executable, str(Path(herd.__file__)), *args], cwd=self.root,
+                              capture_output=True, text=True)
+
+    def test_done_and_gate_refuse_until_every_attack_is_recorded(self):
+        self.task()
+        (self.root / "greet.txt").write_text("hello")
+        herd.verify(self.root, "t1")
+        probs = " ".join(herd.problems(self.root, "t1"))
+        for a in herd.ATTACKS:
+            self.assertIn(a, probs)
+        self.assertIn("never a traceback", probs)  # the gate itself teaches the attacks
+        self.assertEqual(herd.gate(self.root, {})["decision"], "block")
+        self.assertEqual(self.run_cli("done").returncode, 1)
+        herd.add_note(self.root, "t1", "tried", "fed it a malformed map", attack="bad-input")
+        herd.add_note(self.root, "t1", "tried", "an unscoped attempt")  # no --attack: counts for none
+        probs = " ".join(herd.problems(self.root, "t1"))
+        self.assertNotIn("bad-input", probs)
+        self.assertIn("collision", probs)
+        for a in ("collision", "one-bad-part", "recount"):
+            self.assertEqual(self.run_cli("note", "--tried", "--attack", a, f"{a}: n/a, explained").returncode, 0)
+        self.assertEqual(herd.problems(self.root, "t1"), [])
+        self.assertEqual(self.run_cli("done").returncode, 0)
+
+    def test_quick_route_needs_no_attacks(self):
+        herd.init_task(self.root, "q1", "Fix typo", quick_check="true")
+        herd.verify(self.root, "q1")
+        self.assertEqual(herd.problems(self.root, "q1"), [])
+
+    def test_attack_flag_is_validated(self):
+        self.task()
+        self.assertEqual(self.run_cli("note", "--tried", "--attack", "bogus", "x").returncode, 1)
+        self.assertEqual(self.run_cli("note", "--found", "--attack", "recount", "x").returncode, 1)
+        self.assertEqual(self.run_cli("note", "--tried", "--attack").returncode, 1)
+        self.assertEqual(herd.load_notes(self.root, "t1"), [])
+
+    def test_attacks_match_the_skill(self):
+        text = (Path(herd.__file__).parent.parent / "skills/run/adversarial.md").read_text()
+        for a in herd.ATTACKS:
+            self.assertIn(f"--attack {a}", text)
+
+
+class TestOneActiveTask(Base):
+    def test_second_init_in_one_checkout_is_refused_until_the_first_ends(self):
+        herd.init_task(self.root, "t1", "g")
+        with self.assertRaisesRegex(ValueError, "t1 is still active.*--worktree"):
+            herd.init_task(self.root, "t2", "g")
+        self.assertFalse((self.root / ".herd/tasks/t2").exists())
+        self.assertEqual((self.root / ".herd/active").read_text().strip(), "t1")
+        herd.cancel_task(self.root, "t1")
+        herd.init_task(self.root, "t2", "g")
+        self.assertEqual((self.root / ".herd/active").read_text().strip(), "t2")
 
 
 FAKE_GH = """#!/bin/sh
@@ -1011,6 +1082,24 @@ class TestPr(Base):
         self.assertEqual(len(create), 1)
         self.assertIn("--head herd/t1", create[0])
         self.assertIn("--title Add a greeting", create[0])
+
+    def test_done_refreshes_the_pr_description(self):
+        self.attacks()
+        herd.verify(self.root, "t1")
+        self.herd("pr", "t1", "--yes")
+        self.assertTrue((self.root / ".herd/tasks/t1/pr").exists())
+        herd.add_note(self.root, "t1", "found", "a late finding")  # after the PR, before done
+        p = self.herd("done")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("pr: description updated", p.stdout)
+        self.assertEqual(sum(c.startswith("ARGS pr edit") for c in self.calls()), 1)
+        self.assertIn("a late finding", (self.gh / "body").read_text())
+
+    def test_done_without_a_pr_never_calls_gh(self):
+        self.attacks()
+        herd.verify(self.root, "t1")
+        self.assertEqual(self.herd("done").returncode, 0)
+        self.assertEqual(self.calls(), [])
 
     def test_updates_the_body_on_a_second_run(self):
         herd.verify(self.root, "t1")
@@ -1237,6 +1326,7 @@ class TestWorktree(Base):
         self.assertEqual(self.herd("init", "t1", "Write out.txt", "--worktree").returncode, 0)
         path = self.wt("t1")
         (path / ".herd/tasks/t1/task.toml").write_text(WT_TASK)
+        self.attacks(root=path)
         self.assertEqual(self.herd("check", cwd=path).returncode, 0)
         self.assertEqual(self.herd("verify", cwd=path).returncode, 1)  # red first
         (path / "out.txt").write_text("done")
@@ -1252,6 +1342,7 @@ class TestWorktree(Base):
         # a main-checkout task with fresh evidence must stay fresh while others start worktree tasks
         herd.init_task(self.root, "home", "Home task")
         (self.root / ".herd/tasks/home/task.toml").write_text(WT_TASK.replace("test -f out.txt", "test -f base.txt"))
+        self.attacks("home")
         herd.verify(self.root, "home")
         slugs = [f"t{i}-{os.urandom(3).hex()}" for i in range(6)]
         procs = [subprocess.Popen([sys.executable, str(Path(herd.__file__)), "init", s, f"Goal {s}", "--worktree"],
@@ -1375,6 +1466,7 @@ class TestBudgets(Base):
         self.assertIn("C2 passing", out[2])
 
     def test_cli_done_is_at_most_three_lines_and_points_to_the_report(self):
+        self.attacks()
         self.cli("verify")
         rc, out = self.cli("done")
         self.assertEqual(rc, 0)
@@ -1384,6 +1476,7 @@ class TestBudgets(Base):
         self.assertIn("# Evidence: t1", (self.root / ".herd/tasks/t1/evidence.md").read_text())
 
     def test_cli_done_verbose_prints_the_report(self):
+        self.attacks()
         self.cli("verify")
         rc, out = self.cli("done", "--verbose")
         self.assertIn("# Evidence: t1", out)
@@ -1407,7 +1500,8 @@ class TestBudgets(Base):
 
     # (3) short skills, rare parts in reference files read only when needed
     def test_skill_word_budgets(self):
-        budget = {"run": 800, "criteria": 450, "evidence": 450}
+        # quality first: 0.3.1 raised run from 800 when the break-it attacks moved back into it
+        budget = {"run": 900, "criteria": 450, "evidence": 450}
         for name, limit in budget.items():
             self.assertLessEqual(words((SKILLS / name / "SKILL.md").read_text()), limit, name)
 
@@ -1420,8 +1514,11 @@ class TestBudgets(Base):
 
     def test_adversarial_pass_keeps_the_standard_attacks(self):
         text = (SKILLS / "run/adversarial.md").read_text()
-        for attack in ("Bad input at every entry point", "never a traceback", "Collisions", "One bad part", "Recount"):
+        for attack in ("bad input at every entry point", "never a traceback", "same key", "does not use", "recompute"):
             self.assertIn(attack, text)
+        run = (SKILLS / "run/SKILL.md").read_text()
+        self.assertIn("Read [adversarial.md](adversarial.md) now", run)  # 0.3.0 runs skipped the optional file
+        self.assertIn("read all of it before you act", run)
 
     # (4) PR description: visible part short, the rest collapsed but kept
     def test_pr_body_visible_part_is_short_and_nothing_is_dropped(self):

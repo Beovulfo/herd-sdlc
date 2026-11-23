@@ -4,7 +4,12 @@ All notable changes to Herd. Versions follow `.claude-plugin/plugin.json`.
 
 ## 0.3.1
 
-- **Changed:** the adversarial pass (`skills/run/adversarial.md`) always tries four attacks, whatever the request says: bad input at every entry point (missing, malformed, wrong type, unknown id, empty) must end in one clear message and a non-zero exit, never a traceback; collisions (two inputs on the same key or position) must each still count; one broken entry the request does not use must not reject the whole input; and every reported number is recomputed from the output with separate code. A benchmark rerun with 0.3.0 missed all four kinds of bug. A test keeps these attacks in the file.
+Quality first. A benchmark rerun with 0.3.0 was 3% cheaper than 0.2.4 but scored 45 of 48 on the hidden verifier and 0 of 6 on the robustness probe (0.2.4: 48 and 6). Its agent never opened `adversarial.md`, which 0.3.0 had made an optional reference file. A rerun with a first draft of this version, whose agent did read the file, scored 48 of 48 and 6 of 6.
+
+- **Added:** on the standard route, `herd done` and the Stop gate refuse until each of four standard attacks has a recorded attempt, `herd note --tried --attack <name> "..."`: `bad-input` (bad input at every entry point ends in one clear message and a non-zero exit, never a traceback), `collision` (two inputs on the same key or position each still count), `one-bad-part` (a broken entry the request does not use does not reject the whole input) and `recount` (every reported number recomputed from the output with separate code). The refusal lists the missing attacks, so an agent that skipped the skill file still learns them. An attack that cannot apply is logged with the reason.
+- **Changed:** the run skill makes reading a reference file mandatory when its step applies, and step 6 names the four attacks inline. Its word budget goes from 800 to 900.
+- **Added:** a plain `herd init` refuses while another task in the same checkout is active (finish it, cancel it, or use `--worktree`). Before, it silently replaced the active task.
+- **Added:** `herd pr` records the PR, and `herd done` updates its description with the final evidence. Before, the agent had to remember to run `herd pr` again.
 - **Fixed:** parallel `herd init --worktree` calls could fail with `failed to read .git/worktrees/.../commondir`, because git reads every worktree's admin files while another add is half done. The `git worktree add` call now takes a file lock in the git directory (Unix; Windows has no `flock`). This made one CI run on main fail.
 
 ## 0.3.0

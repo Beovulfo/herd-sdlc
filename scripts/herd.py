@@ -78,6 +78,11 @@ VARIES = re.compile(r"\b(vary|varies|varied|varying|variation|generated?|random\
 SCALED = re.compile(r"\b(scales?|sizes?|largest?|big|biggest|huge|time limit|timed|timing|seconds|performance|"
                     r"runtime|latency|up to \d+)\b", re.I)
 NOTE_KINDS = ("found", "fixed", "open", "tried")
+# the standard attacks of the adversarial pass (skills/run/adversarial.md): `herd done` needs a tried note for each
+ATTACKS = {"bad-input": "bad input at every entry point ends in a clear message, never a traceback",
+           "collision": "two inputs on the same key or position each still count",
+           "one-bad-part": "one broken entry the request does not use does not reject the whole input",
+           "recount": "every reported number recomputed from the output with separate code"}
 MAX_TEXT_WORDS, MAX_COVERAGE_WORDS = 40, 50  # advisory limits, see length_warnings
 WORKTREES = ".claude/worktrees"  # where `herd init --worktree` puts tasks; Claude Code's EnterWorktree can enter it
 OWN_FILES = (".", ":!.herd")  # pathspec: this checkout's work, not Herd's own state
@@ -143,6 +148,10 @@ def init_task(root, slug, goal, quick_check=None, request=None):
         if rec["risk"]["floor"] == "high":
             raise ValueError("risk floor is high: use the full criteria flow, not --quick")
         text = QUICK.format(goal=json.dumps(goal), check=json.dumps(quick_check))
+    other = active_slug(root)
+    if other and _dir(root, other).exists() and not cancelled(root, other):
+        raise ValueError(f"task {other} is still active in this checkout: finish it (`herd done`), cancel it, "
+                         f"or start this one in its own worktree with --worktree")
     d.mkdir(parents=True)
     (d / "task.toml").write_text(text)
     (d / "started").write_text(now() + "\n")
@@ -460,16 +469,22 @@ def verify(root, slug):
     return ev
 
 
-def add_note(root, slug, kind, text):
-    """Append a caveat to the task's log: found, fixed, open (a known limit) or tried (adversarial attempt)."""
+def add_note(root, slug, kind, text, attack=None):
+    """Append a caveat to the task's log: found, fixed, open (a known limit) or tried (adversarial attempt).
+
+    attack names which standard attack a tried note covers (one of ATTACKS)."""
     if kind not in NOTE_KINDS:
         raise ValueError(f"note kind must be one of {NOTE_KINDS}")
+    if attack is not None and (kind != "tried" or attack not in ATTACKS):
+        raise ValueError(f"--attack goes with --tried and is one of: {', '.join(ATTACKS)}")
     if not text.strip():
         raise ValueError("note text is empty")
     d, started = _dir(root, slug), _dir(root, slug) / "started"
     t = now()
     rec = {"at": t, "kind": kind, "text": text.strip(),
            "elapsed_s": _secs(started.read_text().strip(), t) if started.exists() else None}
+    if attack:
+        rec["attack"] = attack
     with open(d / "notes.jsonl", "a") as f:
         f.write(json.dumps(rec) + "\n")
 
@@ -695,7 +710,9 @@ def open_pr(root, slug, yes=False):
     p = subprocess.run(cmd, cwd=root, input=body, capture_output=True, text=True)
     if p.returncode:
         raise ValueError(f"`{' '.join(cmd[:3])}` failed: {(p.stderr or p.stdout).strip()[-500:]}")
-    return url or p.stdout.strip().splitlines()[-1]
+    url = url or p.stdout.strip().splitlines()[-1]
+    (_dir(root, slug) / "pr").write_text(url + "\n")  # `herd done` refreshes this PR's description
+    return url
 
 
 # ---- lint hook ------------------------------------------------------------
@@ -751,6 +768,13 @@ def problems(root, slug):
     out = [f"{r['id']} is failing: {r['text']}" for r in ev["results"] if r["status"] == "failing"]
     if not ev["summary"]["passing"] and not out:
         out.append("no passing criterion: give at least one criterion a runnable check")
+    if ev.get("route") != "quick":
+        tried = {n.get("attack") for n in load_notes(root, slug) if n["kind"] == "tried"}
+        missing = [a for a in ATTACKS if a not in tried]
+        if missing:
+            out.append("adversarial pass incomplete (skills/run/adversarial.md): try "
+                       + "; ".join(f"{a}: {ATTACKS[a]}" for a in missing)
+                       + ". Log each with `herd note --tried --attack <name> \"what you ran and saw\"`")
     return out
 
 
@@ -801,7 +825,7 @@ def _slug_arg(root, args):
 USAGE = {
     "init": 'herd init <slug> "<goal>" [--request "<message>"] [--quick "<check>"] [--worktree]',
     "check": "herd check [slug]",
-    "note": 'herd note --found|--fixed|--open|--tried "text"',
+    "note": 'herd note --found|--fixed|--open|--tried [--attack bad-input|collision|one-bad-part|recount] "text"',
     "detect": "herd detect",
     "lint": "herd lint [--suggest]   (without --suggest: the PostToolUse hook, reads hook JSON on stdin)",
     "verify": "herd verify [slug] [--verbose]",
@@ -870,11 +894,12 @@ def main(argv):
             return 1 if errs else 0
         elif cmd == "note":
             kinds = {"--found": "found", "--fixed": "fixed", "--open": "open", "--tried": "tried"}
+            attack, args = _opt(args, "--attack")
             flags = [a for a in args if a.startswith("--")]
             rest = [a for a in args if not a.startswith("--")]
             if len(flags) != 1 or flags[0] not in kinds or len(rest) != 1:
                 raise UsageError
-            add_note(root, _slug_arg(root, []), kinds[flags[0]], rest[0])
+            add_note(root, _slug_arg(root, []), kinds[flags[0]], rest[0], attack=attack)
             print(f"noted ({kinds[flags[0]]}): {rest[0]}")
         elif cmd == "detect":
             print(json.dumps(herd_detect.detect(root), indent=2))
@@ -926,6 +951,12 @@ def main(argv):
             proven = sum(r["status"] == "passing" and not r.get("zero_tests") for r in ev["results"])
             print(f"done: evidence is fresh and passing ({proven} of {len(ev['results'])} criteria proven)")
             print(f"report: {(_dir(root, slug) / 'evidence.md').relative_to(root)}")
+            if (_dir(root, slug) / "pr").exists():  # a PR exists: its description must show the final evidence
+                try:
+                    print(f"pr: description updated with the final evidence: {open_pr(root, slug, yes=True)}")
+                except ValueError as e:
+                    print(f"warning: the pull request still shows older evidence ({e}); run `herd pr` again",
+                          file=sys.stderr)
         elif cmd == "pr":
             slug = _slug_arg(root, [a for a in args if a != "--yes"])
             print(open_pr(root, slug, yes="--yes" in args))

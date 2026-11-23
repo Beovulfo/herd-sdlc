@@ -3,7 +3,8 @@
 
 A task is `.herd/tasks/<slug>/task.toml`: a goal plus success criteria, each with a
 `check` command. `herd verify` runs the checks and stores evidence. `herd gate` (the
-Stop hook) refuses to let the agent finish without fresh, passing evidence.
+Stop hook) and `herd done` refuse to finish without fresh, passing evidence and the run rules:
+red first, the standard attacks, frozen human criteria and, at medium and high risk, a review.
 """
 import sys
 
@@ -505,7 +506,8 @@ BUILT_DIRS = {"__pycache__", "node_modules", ".pytest_cache", ".mypy_cache", ".r
 
 
 def is_code(path, root=None):
-    """A changed path that counts as code for red first: not Herd's own state, not docs, not tests."""
+    """A changed path that counts as code for red first: not Herd's own state, docs, config, tests or build
+    output; a file without an extension only with a shebang."""
     parts = Path(path).parts
     if not parts or parts[0] == ".herd" or path.lower().endswith(DOC_EXT + BUILT_EXT) or BUILT_DIRS & set(parts):
         return False  # Herd's state, docs, config, and what running the code leaves behind
@@ -610,7 +612,7 @@ def verify(root, slug):
     red_path, frozen_path = d / "red.json", d / "frozen.json"
     checked = [r for r in results if r["status"] != "unchecked"]
     pre = start.get("dirty") or {}
-    pre = pre if isinstance(pre, dict) else dict.fromkeys(pre)  # 0.4.0 drafts stored a list without hashes
+    pre = pre if isinstance(pre, dict) else {}
     mine = None if changed is None else [f for f in changed  # a file dirty at init is the agent's once it changes
                                          if f not in pre or (pre[f] is not None and pre[f] != _file_sha(root, f))]
     snapshot = {c["id"]: {"text": c["text"], "source": c["source"], "check": c["check"]} for c in task["criteria"]}
@@ -692,7 +694,8 @@ def verify(root, slug):
 
 
 def add_note(root, slug, kind, text, attack=None, check=None, timeout=None, extra=None):
-    """Append a caveat to the task's log: found, fixed, open (a known limit) or tried (adversarial attempt).
+    """Append a note to the task's log: one of NOTE_KINDS (found, fixed, open for a known limit, tried for an
+    adversarial attempt, decision, late-red, review, human-change).
 
     attack names which standard attack a tried note covers (one of ATTACKS); check is the command that
     shows it, run by `herd verify`. An attack that cannot apply has no check and text starting `n/a:`."""
@@ -730,13 +733,13 @@ def add_review(root, slug, by=None, text="", skipped=False):
         raise ValueError('use `herd review --by "<reviewer>" "<what they found>"` or `herd review --skipped "<why>"`')
     ev = load_evidence(root, slug) or {}  # the code state the review saw: it counts only for that state and risk
     extra = {"skipped": True} if skipped else {"by": by.strip()}
-    extra.update({"fingerprint": ev.get("fingerprint"), "content": ev.get("content"),
-                  "risk": (ev.get("risk") or {}).get("effective")})
+    extra.update({"content": ev.get("content"), "risk": (ev.get("risk") or {}).get("effective")})
     add_note(root, slug, "review", text, extra=extra)
 
 
 def review_state(root, slug, ev, notes):
-    """(counts, why not): the latest review counts only after all checks first passed, at the current risk or above."""
+    """(counts, why not): the latest review counts only after all checks first passed, at the current risk or
+    above, and at high risk only for the content it saw (a commit alone does not change that)."""
     rv = [n for n in notes if n["kind"] == "review"]
     if not rv:
         return False, "no review recorded"
@@ -844,7 +847,8 @@ def _review(notes):
 
 
 def _early_code(ev):
-    """Code files that existed before the first verify: changed before it, or moved aside for it."""
+    """Code files that existed before the first verify: changed before it, or moved aside for it (a stash is
+    reported separately, from red.json's `stashed`)."""
     red = ev.get("red") or {}
     return sorted(set(red.get("code_before") or []) | set(red.get("code_hidden") or []))
 

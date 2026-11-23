@@ -725,7 +725,7 @@ class TestGate(Base):
         self.assertEqual(out["decision"], "block")
         self.assertIn("herd verify", out["reason"])
 
-    def test_blocks_failing_then_allows_passing(self):
+    def test_blocks_failing_then_asks_for_herd_done_when_passing(self):
         self.task(attacks=True)
         herd.verify(self.root, "t1")
         self.assertIn("C1", self.gate()["reason"])

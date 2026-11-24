@@ -105,5 +105,60 @@ class TestOtherReading(Base):
         self.assertNotIn(NAME, " ".join(herd.problems(self.root, "q1")))
 
 
+def entry(readings):
+    return '\n[[inputs]]\nhuman = "a date"\nprogram = "03/04/2026"\n' + (f"readings = {readings}\n" if readings is not None else "")
+
+
+class TestReadings(Base):
+    """Each `[[inputs]]` entry lists at least 2 readings (0.12.9); only the number of items is counted."""
+
+    def left(self, readings, text=TASK, risk=None):
+        self.start(text.replace("inputs = []\n", "") + entry(readings))
+        if risk:  # `herd init` stores the risk it triaged
+            f = self.root / ".herd/tasks/t1/start.json"
+            f.write_text(json.dumps({**json.loads(f.read_text()), "risk": risk}))
+        return [w for w in self.red_then_build()["warnings"] if w.startswith("inputs #1")]
+
+    def refused(self):
+        late_review(self.root)
+        herd.verify(self.root, "t1")
+        return " ".join(herd.problems(self.root, "t1"))
+
+    def test_none_one_or_an_empty_list_is_questioned(self):
+        for r in (None, "[]", '["day first"]'):
+            self.assertTrue(self.left(r), r)
+            self.tearDown()
+            self.setUp()
+
+    def test_two_readings_are_not_questioned(self):
+        self.assertEqual(self.left('["day first", "month first"]'), [])
+
+    def test_the_wording_is_never_read(self):
+        self.assertEqual(self.left('["", "x"]'), [])
+
+    def test_a_string_is_not_a_list_of_readings(self):
+        self.assertTrue(self.left('"day first, month first"'))
+
+    def test_one_reading_refuses_done_at_medium_risk(self):
+        self.left('["day first"]')
+        self.assertIn("inputs #1: `readings`", self.refused())
+
+    def test_two_readings_do_not_refuse_done(self):
+        self.left('["day first", "month first"]')
+        self.assertNotIn("inputs #1", self.refused())
+
+    def test_low_risk_only_warns(self):
+        self.left('["day first"]', risk="low")
+        self.assertNotIn("inputs #1", self.refused())
+
+    def test_the_quick_route_is_exempt(self):
+        herd.init_task(self.root, "q1", "Fix typo", quick_check=OK)
+        self.assertEqual([w for w in herd.verify(self.root, "q1")["warnings"] if w.startswith("inputs #")], [])
+
+    def test_the_readings_are_shown_next_to_the_input(self):
+        self.left('["day first", "month first"]')
+        self.assertIn("a date -> 03/04/2026 (readings: day first; month first)", herd.report(herd.verify(self.root, "t1")))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -565,10 +565,17 @@ def length_warnings(task):
     return out
 
 
+def _readings(x):
+    """The `readings` of one input: its list items, never read for wording (anything but a list counts as none)."""
+    r = x.get("readings")
+    return [str(i).strip() for i in r] if isinstance(r, list) else []
+
+
 def inputs_line(inputs):
     """`Inputs: <as the human described it> -> <as the program receives it>`, for the human to compare."""
     return "Inputs (as you described them -> as the program receives them): " + "; ".join(
-        f"{str(x.get('human', '?')).strip()} -> {str(x.get('program', '?')).strip()}" for x in inputs if isinstance(x, dict))
+        f"{str(x.get('human', '?')).strip()} -> {str(x.get('program', '?')).strip()}"
+        + (f" (readings: {'; '.join(_readings(x))})" if _readings(x) else "") for x in inputs if isinstance(x, dict))
 
 
 INPUTS_TABLE = ('`[[inputs]]`, `human = "<the input as the human described it>"`, `program = "<the input as the '
@@ -591,8 +598,11 @@ def input_warnings(task):
         return out + [f"`inputs` must be a list of tables: write {INPUTS_TABLE}"]
     bad = [i for i, x in enumerate(ins, 1) if not (isinstance(x, dict) and str(x.get("human", "")).strip()
                                                     and str(x.get("program", "")).strip())]
-    return out + [f"inputs #{i}: give `human` (the input as the human described it) and `program` (as the program "
-                  "receives it)" for i in bad]
+    out += [f"inputs #{i}: give `human` (the input as the human described it) and `program` (as the program "
+            "receives it)" for i in bad]
+    return out + [f"inputs #{i}: `readings` needs at least 2 items, the ways a person could read the human's words "
+                  f"for it, such as `readings = [\"<one reading>\", \"<another>\"]`" for i, x in enumerate(ins, 1)
+                  if i - 1 not in [b - 1 for b in bad] and len(_readings(x)) < 2]
 
 
 def refusal_late(root, slug, red):

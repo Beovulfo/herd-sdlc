@@ -13,11 +13,15 @@ from unittest import mock
 from scripts import herd
 
 TASK = '''goal = "Add a greeting"
+test_budget = "One file check; no unit tests"
+known_limits = "Only the file is checked, not its text"
+inputs = []
 
 [[criteria]]
 id = "C1"
 text = "Given a name, when greet runs, then it prints hello"
 source = "human"
+coverage = "Proves greet.txt exists; not what it says"
 check = "test -f greet.txt"
 
 [[criteria]]
@@ -26,6 +30,8 @@ text = "The greeting reads well"
 source = "agent-proposed"
 check = ""
 '''
+# TASK without test_budget, known_limits and coverage, which `herd done` needs at medium and high risk (0.10.0)
+BARE = "\n".join(line for line in TASK.splitlines() if not line.startswith(("test_budget", "known_limits", "coverage"))) + "\n"
 
 
 OK = "python3 -c \"import json\""  # an attack command that passes and is not vacuous
@@ -47,17 +53,18 @@ def late_review(root, slug="t1"):
     with (d / "notes.jsonl").open("a") as f:
         f.write(json.dumps({"at": herd.now(), "kind": "review", "text": "no Blocker or Major",
                             "by": "a fresh subagent", "risk": "high", "source": "hook", "tier": "opus",
-                            "builder_tier": "opus", "top": True, "verdict": "PASS"}) + "\n")
+                            "builder_tier": "opus", "top": True, "verdict": "PASS", "saw": True,
+                            "diff_seen": True, "code_total": 0, "code_read": 0}) + "\n")
 
 
 _LOGS = [0]
 
 
 def transcript(root, models, name="main", text="done", model="claude-{}-5-5", before_start=False,
-               synthetic_last=False, handback=False, path=None):
+               synthetic_last=False, handback=False, path=None, saw=True):
     """A Claude Code session log like the ones in spike S3: one assistant line per tier name in models, the last
-    one carrying text (or, with handback, a SubagentHandback report; with text None, no text at all). It lives
-    under .herd/, which the evidence fingerprint ignores."""
+    one carrying text (or, with handback, a SubagentHandback report; with text None, no text at all), after a
+    `git diff` call unless saw is False. It lives under .herd/, which the evidence fingerprint ignores."""
     models = [models] if isinstance(models, str) else models
     _LOGS[0] += 1
     path = Path(path) if path else Path(root) / ".herd" / "logs" / f"{name}-{_LOGS[0]}.jsonl"
@@ -77,6 +84,8 @@ def transcript(root, models, name="main", text="done", model="claude-{}-5-5", be
             content = [{"type": "tool_use", "name": "SubagentHandback", "input": {"message": text}}]
         elif last:
             content = [{"type": "text", "text": text}]
+        if last and saw:
+            content = [{"type": "tool_use", "name": "Bash", "input": {"command": "git diff"}}] + content
         rows.append({"type": "assistant", "timestamp": ts, "message": {"model": model.format(tier), "content": content}})
     if synthetic_last:
         rows.append({"type": "assistant", "timestamp": ts, "message": {"model": "<synthetic>", "content": []}})
@@ -87,7 +96,7 @@ def transcript(root, models, name="main", text="done", model="claude-{}-5-5", be
 def hook_review(root, slug="t1", builder="opus", reviewer="opus", text="No Blocker or Major.\nHERD-REVIEW: PASS",
                 model="claude-{}-5-5", agent_type="herd:herd-reviewer", reviewer_path=None, builder_path=None,
                 reviewer_lines=None, builder_before_start=False, synthetic_last=False, handback=False,
-                last_message=None, seen=True):
+                last_message=None, seen=True, saw=True):
     """Run the SubagentStop review hook as Claude Code would at the end of a herd-reviewer subagent, with the
     logs where spike S3 found them: <session>.jsonl and <session>/subagents/agent-<id>.jsonl."""
     _LOGS[0] += 1
@@ -104,7 +113,8 @@ def hook_review(root, slug="t1", builder="opus", reviewer="opus", text="No Block
         rev.parent.mkdir(parents=True, exist_ok=True)
         rev.write_text("".join(line + "\n" for line in reviewer_lines))
     else:
-        transcript(root, reviewer, text=text, model=model, synthetic_last=synthetic_last, handback=handback, path=rev)
+        transcript(root, reviewer, text=text, model=model, synthetic_last=synthetic_last, handback=handback, path=rev,
+                   saw=saw)
     hook = {"session_id": sid, "transcript_path": str(main), "cwd": str(root), "agent_id": aid,
             "agent_type": agent_type, "agent_transcript_path": str(rev), "hook_event_name": "SubagentStop",
             "stop_hook_active": False}
@@ -305,7 +315,7 @@ class TestQuick(Base):
 
 class TestBudgetAndRed(Base):
     def test_budget_note_in_report_and_validation(self):
-        self.task('test_budget = "unit for parsing; not testing the CLI wrapper"\n' + TASK)
+        self.task(TASK.replace('"One file check; no unit tests"', '"unit for parsing; not testing the CLI wrapper"'))
         (self.root / "greet.txt").write_text("hello")
         text = herd.report(herd.verify(self.root, "t1"))
         self.assertIn("Test budget: unit for parsing; not testing the CLI wrapper", text)
@@ -313,7 +323,7 @@ class TestBudgetAndRed(Base):
         self.assertEqual(herd.validate_task(dict(t, test_budget=3))[0].split(":")[0], "test_budget")
 
     def test_no_budget_line_when_absent(self):
-        self.task()
+        self.task(BARE)
         self.assertNotIn("Test budget", herd.report(herd.verify(self.root, "t1")))
 
     def test_red_recorded_on_first_verify_only(self):
@@ -464,7 +474,7 @@ class TestCoverageAndLimits(Base):
         self.assertIn("C1: proves per-stop events, not per-cell steps", text)
 
     def test_report_is_quiet_without_them(self):
-        self.task()
+        self.task(BARE)
         text = herd.report(herd.verify(self.root, "t1"))
         self.assertNotIn("Known limits", text)
         self.assertNotIn("Coverage of human criteria", text)
@@ -1416,7 +1426,7 @@ case "$1 $2" in
 esac
 """
 
-PR_TASK = TASK.replace('check = "test -f greet.txt"', 'check = "test -f greet.txt"\ncoverage = "Only that the file exists"')
+PR_TASK = TASK.replace('"Proves greet.txt exists; not what it says"', '"Only that the file exists"')
 
 
 class TestPr(Base):
@@ -1546,7 +1556,7 @@ class TestPr(Base):
         self.assertFalse([c for c in self.calls() if "merge" in c])
 
     def test_body_puts_evidence_first(self):
-        (self.root / ".herd/tasks/t1/task.toml").write_text('known_limits = "Only ASCII names"\n' + PR_TASK)
+        (self.root / ".herd/tasks/t1/task.toml").write_text(PR_TASK.replace('"Only the file is checked, not its text"', '"Only ASCII names"'))
         herd.add_note(self.root, "t1", "open", "unicode names not tried")
         herd.verify(self.root, "t1")
         self.herd("pr", "t1", "--yes")
@@ -1623,7 +1633,9 @@ class TestPr(Base):
 
 
 WT_TASK = '''goal = "Write out.txt"
+test_budget = "One file check"
 known_limits = "none"
+inputs = []
 
 [[criteria]]
 id = "C1"
@@ -1930,8 +1942,9 @@ class TestBudgets(Base):
     # (3) short skills, rare parts in reference files read only when needed
     def test_skill_word_budgets(self):
         # quality first: 0.3.1 raised run from 800 when the break-it attacks moved back into it
-        budget = {"run": 845, "criteria": 470, "evidence": 450}  # 0.4.0: rules the CLI enforces left the skill;
-        # 0.5.0: +10 for resuming from the stop record; 0.6.0: +15 for the guard rule; 0.9.0: criteria +30 for `inputs`
+        budget = {"run": 845, "criteria": 490, "evidence": 450}  # 0.4.0: rules the CLI enforces left the skill;
+        # 0.5.0: +10 for resuming from the stop record; 0.6.0: +15 for the guard rule; 0.9.0: criteria +30 for `inputs`;
+        # 0.10.0: criteria +20 for the top-level [[inputs]] example (a Haiku run put `inputs` inside [[criteria]])
         for name, limit in budget.items():
             self.assertLessEqual(words((SKILLS / name / "SKILL.md").read_text()), limit, name)
 

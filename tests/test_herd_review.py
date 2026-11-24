@@ -71,7 +71,7 @@ class TestHookOnly(ReviewBase):
                          ("hook", "sonnet", "haiku", "PASS", "claude-sonnet-5-5"))
         p = self.cli("done")
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertIn("Review: claude-sonnet-5-5 (sonnet, builder on haiku; PASS)", p.stdout)
+        self.assertIn("Review: claude-sonnet-5-5 (sonnet, builder on haiku; PASS; ran git diff or git show, read 0 of 1 changed code file)", p.stdout)
 
     def test_quick_route_needs_no_review(self):
         herd.init_task(self.root, "q1", "Fix a typo", quick_check="python3 -c 1")
@@ -94,7 +94,7 @@ class TestTierRule(ReviewBase):
                         self.assertEqual(why, f"review by {reviewer} does not count: the builder ran on {builder}, "
                                               f"the reviewer must be {tiers[need]} or higher. Spawn herd-reviewer "
                                               f"with model {tiers[need]}")
-        self.fresh("[review]\nstep = 1\n")
+        self.fresh("")  # the default, one tier above since 0.10.0
         self.review(builder="opus", reviewer="opus")  # the top tier reviews itself
         self.assertTrue(self.state()[0])
         self.assertIn("same tier", herd._review(herd.load_notes(self.root, "t1")))
@@ -117,7 +117,7 @@ class TestTierRule(ReviewBase):
         for cfg in ("[review\n", "[review]\ntiers = []\n", "[review]\ntiers = 3\n", "[review]\nstep = -1\n",
                     "[review]\nstep = 'x'\n", '[review]\ntiers = ["", 2]\n'):
             (self.root / "herd.toml").write_text(cfg)
-            self.assertEqual(herd.review_tiers(self.root), (["haiku", "sonnet", "opus"], 0), cfg)
+            self.assertEqual(herd.review_tiers(self.root), (["haiku", "sonnet", "opus"], 1), cfg)
 
 
 class TestTranscripts(ReviewBase):
@@ -231,7 +231,7 @@ class TestWiringAndStatus(ReviewBase):
         self.assertEqual(rec["review"]["needed"], "sonnet")
         (self.root / ".herd/tasks/t1/start.json").write_text(json.dumps(
             dict(json.loads((self.root / ".herd/tasks/t1/start.json").read_text()), transcript="/nonexistent")))
-        self.assertIn("Review: needs a reviewer on the builder's model", self.cli("status").stdout)
+        self.assertIn("Review: needs a reviewer one tier above the builder", self.cli("status").stdout)
 
 
 class TestReviewAttacks(ReviewBase):
@@ -253,7 +253,7 @@ class TestReviewAttacks(ReviewBase):
         self.assertFalse(self.state()[0])
         for cfg in ("[review\n", '[review]\ntiers = "opus"\n', "[review]\nstep = true\n"):
             (self.root / "herd.toml").write_text(cfg)
-            self.assertEqual(herd.review_tiers(self.root), (["haiku", "sonnet", "opus"], 0))
+            self.assertEqual(herd.review_tiers(self.root), (["haiku", "sonnet", "opus"], 1))
 
     def test_review_collision(self):
         self.ready()
@@ -354,7 +354,7 @@ class TestReviewFindings(ReviewBase):
         self.assertEqual(len(lines), 7)
         review = lines[-1]
         self.assertEqual(review, "Review: claude-sonnet-5-5 (sonnet, builder on haiku; PASS, after 2 rounds "
-                                 "without PASS): No Blocker or Major.")
+                                 "without PASS; ran git diff or git show, read 0 of 1 changed code file): No Blocker or Major.")
         body = herd.pr_body(self.root, "t1")
         self.assertIn("2 review rounds found Blocker or Major issues before the PASS", body)
         self.assertNotIn("\nHERD-REVIEW: PASS", body)
@@ -363,12 +363,12 @@ class TestReviewFindings(ReviewBase):
         self.ready()
         probs = herd.problems(self.root, "t1")
         self.assertEqual(herd.next_step([p for p in probs if p.startswith("review")]),
-                         "spawn herd-reviewer on the builder's model, then run `herd verify`")
+                         "spawn herd-reviewer one tier above the builder, then run `herd verify`")
         main = transcript(self.root, "haiku")
         herd.gate(self.root, {"transcript_path": str(main)})  # the gate learns the session's log
         self.assertIn("Review: needs sonnet or higher (builder on haiku)", self.cli("status").stdout)
         herd.gate(self.root, {"transcript_path": str(transcript(self.root, "gpt"))})
-        self.assertIn("Review: needs a reviewer on the builder's model (claude-gpt-5-5 matches no tier)",
+        self.assertIn("Review: needs a reviewer one tier above the builder (claude-gpt-5-5 matches no tier)",
                       self.cli("status").stdout)
 
 

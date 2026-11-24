@@ -15,7 +15,9 @@ OK = "python3 -c \"import json\""  # an attack command that passes and is not va
 REQUEST = "Add f() to app.py. It must return 1 for any call."
 APP_CHECK = "python3 -c \"import app; assert app.f() == 1\""
 TASK = f'''goal = "Add f() to app.py"
+test_budget = "Two import probes; no unit tests"
 known_limits = "Repeated calls are not timed."
+inputs = []
 
 [[criteria]]
 id = "C1"
@@ -31,12 +33,10 @@ source = "agent-proposed"
 check = "python3 -c \\"import app; app.f\\""
 '''
 
+NO_INPUTS = TASK.replace("inputs = []\n", "")
 
 def git(root, *args):
     subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
-
-
-ONE_ABOVE = "[review]\nstep = 1\n"
 
 
 class Base(unittest.TestCase):
@@ -59,10 +59,6 @@ class Base(unittest.TestCase):
                               capture_output=True, text=True)
 
     def start(self, text=TASK, goal="Add f() to app.py"):
-        if not (self.root / "herd.toml").exists():  # most review tests are about the tier rule: one tier above
-            (self.root / "herd.toml").write_text(ONE_ABOVE)
-            git(self.root, "add", "herd.toml")  # in HEAD, so it is not a change the task made
-            git(self.root, "commit", "-q", "-m", "review one tier above")
         herd.init_task(self.root, "t1", goal, request=REQUEST)
         (self.root / ".herd/tasks/t1/task.toml").write_text(text)
 
@@ -162,7 +158,7 @@ class TestRiskAndReview(Base):
         self.assertIn("unreviewed", herd.pr_body(self.root, "t1"))
         hook_review(self.root, builder="haiku", reviewer="sonnet")
         self.assertEqual(herd.problems(self.root, "t1"), [])
-        self.assertIn("Review: claude-sonnet-5-5 (sonnet, builder on haiku; PASS)", herd.report(herd.verify(self.root, "t1")))
+        self.assertIn("Review: claude-sonnet-5-5 (sonnet, builder on haiku; PASS; ran git diff or git show, read 0 of 1 changed code file)", herd.report(herd.verify(self.root, "t1")))
 
     def test_review_by_a_named_reviewer_is_recorded(self):
         self.start()
@@ -170,7 +166,7 @@ class TestRiskAndReview(Base):
         self.attacks_and_review()
         ev = herd.verify(self.root, "t1")
         self.assertEqual(herd.problems(self.root, "t1"), [])
-        self.assertIn("Review: a fresh subagent (opus, builder on opus; same tier; PASS): no Blocker or Major",
+        self.assertIn("Review: a fresh subagent (opus, builder on opus; same tier; PASS; ran git diff or git show, read 0 of 0 changed code files): no Blocker or Major",
                       herd.report(ev))
 
     def test_the_latest_of_several_reviews_is_the_one_reported(self):
@@ -178,7 +174,7 @@ class TestRiskAndReview(Base):
         self.red_then_build()
         herd.add_review(self.root, "t1", by="me", text="a note, not a review that counts")
         hook_review(self.root, text="One Major, fixed.\nHERD-REVIEW: PASS")
-        self.assertIn("(opus, builder on opus; same tier; PASS): One Major, fixed.",
+        self.assertIn("(opus, builder on opus; same tier; PASS; ran git diff or git show, read 0 of 1 changed code file): One Major, fixed.",
                       herd.report(herd.verify(self.root, "t1")))
         self.assertNotIn("unreviewed", herd.pr_body(self.root, "t1"))
         with open(self.root / ".herd/tasks/t1/notes.jsonl", "a") as f:  # a skipped review from before 0.7.0
@@ -244,7 +240,7 @@ class TestFinalReport(Base):
         self.assertIn("f takes no arguments; the request named none; add parameters in app.py", out)
         self.assertIn("f() returned None for no arguments", out)
         self.assertIn("Limits: Repeated calls are not timed.", out)
-        self.assertIn("Review: a fresh subagent (opus, builder on opus; same tier; PASS): no Blocker or Major", out)
+        self.assertIn("Review: a fresh subagent (opus, builder on opus; same tier; PASS; ran git diff or git show, read 0 of 0 changed code files): no Blocker or Major", out)
         self.assertIn("Not proven: nothing open", out)
         self.assertIn(".herd/tasks/t1/evidence.md", out)
 
@@ -904,7 +900,7 @@ class TestStopRecord(Base):
         self.assertEqual(rec["problems"], probs)
         self.assertTrue(rec["resumable"])
         self.assertIn("spawn herd-reviewer", rec["next"])
-        self.assertEqual(rec["review"], {"needed": "the builder's model", "latest": None})
+        self.assertEqual(rec["review"], {"needed": "one tier above the builder", "latest": None})
         late_review(self.root)
         herd.verify(self.root, "t1")
         rec = herd.write_stop(self.root, "t1", "released")
@@ -1176,12 +1172,13 @@ class TestRefusalAttack(Base):
         herd.verify(self.root, "t1")
         self.assertIn("refusal (no passing command)", " ".join(herd.problems(self.root, "t1")))
 
-    def test_the_default_reviewer_tier_is_the_builders(self):
-        self.assertEqual(herd.review_tiers(self.root), (list(herd.DEFAULT_TIERS), 0))
+    def test_the_default_reviewer_tier_is_one_above_the_builders(self):  # 0.10.0; 0 in 0.8.0 and 0.9.0
+        self.assertEqual(herd.review_tiers(self.root), (list(herd.DEFAULT_TIERS), 1))
 
 
 
 class TestInputsAndRefusalFirst(Base):
+    """These tests start from TASK without its `inputs = []` (NO_INPUTS)."""
     IN = '\n[[inputs]]\nhuman = "a call"\nprogram = "{}"\n'
 
     @staticmethod
@@ -1193,17 +1190,17 @@ class TestInputsAndRefusalFirst(Base):
         return self.red_then_build()["warnings"]
 
     def test_no_inputs_is_questioned_and_an_empty_list_is_not(self):
-        self.assertTrue([w for w in self.warnings(TASK) if w.startswith("no `inputs`")])
+        self.assertTrue([w for w in self.warnings(NO_INPUTS) if w.startswith("no `inputs`")])
 
     def test_empty_inputs_and_the_quick_route_are_not_questioned(self):
-        self.assertFalse([w for w in self.warnings("inputs = []\n" + TASK) if self.about_inputs(w)])
+        self.assertFalse([w for w in self.warnings(TASK) if self.about_inputs(w)])
 
     def test_an_input_without_both_forms_is_questioned(self):
-        w = self.warnings(TASK + '\n[[inputs]]\nhuman = "a call"\n')
+        w = self.warnings(NO_INPUTS + '\n[[inputs]]\nhuman = "a call"\n')
         self.assertTrue([x for x in w if x.startswith("inputs #1")], w)
 
     def test_the_inputs_are_shown_for_the_human_to_compare(self):
-        text = TASK + self.IN.format("a call, as typed")
+        text = NO_INPUTS + self.IN.format("a call, as typed")
         self.warnings(text)
         ev = herd.verify(self.root, "t1")
         line = "Inputs (as you described them -> as the program receives them): a call -> a call, as typed"

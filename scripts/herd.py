@@ -72,6 +72,7 @@ import shlex
 import shutil
 import subprocess
 import tempfile
+import time
 import tomllib
 import unicodedata
 from datetime import datetime, timezone
@@ -850,6 +851,34 @@ def run_check(root, check, timeout, full=False):
         return p.returncode, out if full else out[-TAIL_CHARS:]
     except subprocess.TimeoutExpired:
         return None, f"timeout after {timeout}s"
+
+
+def verify_only(root, slug, only):
+    """Run one criterion or attack check and report it: (passing, lines). Writes nothing under .herd/, so it
+    never changes what the gate reads. Needs the red run, so red first still holds."""
+    task = load_task(root, slug)
+    errs = validate_task(task)
+    if errs:
+        raise ValueError("; ".join(errs))
+    if not (_dir(root, slug) / "red.json").exists():
+        return False, [f"no red run yet: run `herd verify` once first, then `herd verify --only {only}`"]
+    crit = {c["id"]: c for c in task["criteria"]}
+    tried = {n["attack"]: n for n in load_notes(root, slug) if n["kind"] == "tried" and n.get("attack") and n.get("check")}
+    if only in crit:
+        check, timeout = crit[only]["check"], crit[only].get("timeout_s", DEFAULT_TIMEOUT)
+    elif only in tried:  # the latest note of that attack: a later one replaces an earlier one
+        check, timeout = tried[only]["check"], tried[only].get("timeout_s", DEFAULT_TIMEOUT)
+    else:
+        return False, [f"no criterion or attack `{only}`: criteria {', '.join(crit) or 'none'}; "
+                       f"attacks with a command {', '.join(tried) or 'none'}"]
+    if not check.strip():
+        return False, [f"{only} unchecked: it has no command"]
+    began = time.monotonic()
+    code, out = run_check(root, check, timeout, full=True)
+    secs = f"{time.monotonic() - began:.0f} s"
+    if code == 0:
+        return True, [f"{only} passing ({secs})" + (" (ran zero tests)" if ran_zero_tests(out) else "")]
+    return False, [f"{only} failing ({secs})", out[-TAIL_CHARS:].rstrip()]
 
 
 def verify(root, slug):
@@ -2482,7 +2511,7 @@ USAGE = {
                     "inputs, the files it must read, the diff command)",
     "detect": "herd detect",
     "lint": "herd lint [--suggest]   (without --suggest: the PostToolUse hook, reads hook JSON on stdin)",
-    "verify": "herd verify [slug] [--verbose]",
+    "verify": "herd verify [slug] [--verbose] [--only <id>]   (--only: run one criterion or attack, write nothing)",
     "status": "herd status [slug] [--json]   (--json: the stop record, or null)",
     "done": "herd done [slug] [--verbose]",
     "cancel": 'herd cancel [slug] [--reason "text"]',
@@ -2590,6 +2619,11 @@ def main(argv):
                 if out:
                     print(json.dumps(out))
         elif cmd == "verify":
+            only, args = _opt(args, "--only")
+            if only is not None:
+                ok, lines = verify_only(root, _slug_arg(root, [a for a in args if a != "--verbose"]), only)
+                print("\n".join(lines))
+                return 0 if ok else 1
             verbose = "--verbose" in args
             ev = verify(root, _slug_arg(root, [a for a in args if a != "--verbose"]))
             s = ev["summary"]

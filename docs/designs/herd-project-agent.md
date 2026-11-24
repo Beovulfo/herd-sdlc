@@ -1,7 +1,7 @@
 # Herd Project Agent: ground check, learning across tasks, a graph agent that runs the task
 
 * **Author:** Toni
-* **Status:** Draft. Spike S4 done; nothing else built. The owner approved Part B as the herd-sdlc-engineer's first job.
+* **Status:** Draft. Spike S4 done; nothing else built. The owner approved Part B as Collie's first job.
 * **Date:** 2026-11-24
 
 --------------------------------------------------------------------------------
@@ -12,11 +12,11 @@ Three changes that make Herd start from what a project already knows and get bet
 
 1. **Ground check (Part A).** `herd init` records the target repository's own knowledge base (agent instructions, README, docs, tests, CI) as evidence, and `herd verify` warns when the task ignores it: an instruction file the agent never read, or the project's own test command that no check runs.
 2. **Learning across tasks (Part B).** When a task ends (`herd done`) or stops (`stopped.json`), Herd's code turns the task's records into lessons in a per-project store. The next task in that project reads them at intake. Lessons come from what Herd recorded (failed checks, refused gates, review findings, escalations, the human's criteria changes), never from an agent's summary.
-3. **The Herd graph agent (Part C).** The plugin ships an agent that runs a Herd task as a graph, in the format of [`.claude/graphs/`](../../.claude/graphs/README.md), so a user's task is driven by Herd's flow and the project's lessons instead of Claude's default agent. The `herd-sdlc-engineer` agent built for this repository is the reference: same file layout, same node types, same gate rules, the same split of knowledge (agent file) and control flow (graph).
+3. **The Herd graph agent (Part C).** The plugin ships an agent that runs a Herd task as a graph, in the graph format of Collie, so a user's task is driven by Herd's flow and the project's lessons instead of Claude's default agent. Collie, the owner's graph agent that develops Herd and lives in its own repository, is the reference: same file layout, same node types, same gate rules, the same split of knowledge (agent file) and control flow (graph).
 
 All three keep the existing rules: standard library only, `gh` the only external service, the CLI decides from files, git state, session logs and exit codes, a hook never breaks the session, and nothing reads the agent's wording.
 
-**Terms.** Knowledge base: the files in the target repository that tell a contributor how it works. Lesson: one record in the store, written by code. Store: the per-project file of lessons. Graph agent: an agent file plus a graph file, run by the rules in `.claude/graphs/README.md`. Intake: step 1 of the run flow, up to `herd init` and triage.
+**Terms.** Collie: the graph agent that develops Herd, kept outside this repository; an agent file holds its knowledge and YAML graphs its control flow, one line per node, with node types `act`, `think`, `check`, `gate`, `sub` and `end`. Knowledge base: the files in the target repository that tell a contributor how it works. Lesson: one record in the store, written by code. Store: the per-project file of lessons. Graph agent: an agent file plus a graph file, run by Collie's executor rules. Intake: step 1 of the run flow, up to `herd init` and triage.
 
 ## Problem
 
@@ -146,9 +146,9 @@ The table is fixed in code. Text is copied from the record, never rewritten. Lin
 
 ### Part C: the Herd graph agent
 
-**C1. Files in the plugin.** `agents/herd-run.md` (knowledge: Herd's hard rules, the writing rules, how to read `ground.json` and `lessons.md`) and `graphs/run.yaml` (control flow), in the format and under the executor rules of [`.claude/graphs/README.md`](../../.claude/graphs/README.md). The `herd-sdlc-engineer` ([`.claude/agents/herd-sdlc-engineer.md`](../../.claude/agents/herd-sdlc-engineer.md)) is the reference: a graph per job, `check` nodes that route on evidence, gates only a human opens, a `learn` node, sources for every rule. The validator moves into the plugin with it.
+**C1. Files in the plugin.** `agents/herd-run.md` (knowledge: Herd's hard rules, the writing rules, how to read `ground.json` and `lessons.md`) and `graphs/run.yaml` (control flow), in Collie's format, with a copy of its executor rules and validator shipped in the plugin. Collie is the reference: a graph per job, `check` nodes that route on evidence, gates only a human opens, a `learn` node, sources for every rule. The plugin keeps its own copy of the validator and a test, so it does not depend on Collie.
 
-**C2. The run graph.** The nodes follow the run skill's steps: `stopped` (a `Stopped` record with a `Next`), `ground` (read `ground.json`'s instruction files and `lessons.md`), `route` (quick or standard), `init`, `criteria`, `red`, `gate_high` (gate at high risk), `build`, `break_it`, `review`, `verify`, `pr`, `done`, `report`. Every `check` node names its command, for example `red_ok: {type: check, cmd: "herd verify", expect: "fails", pass: gate_high, fail: criteria}`. The skill keeps only what a graph cannot say, and shrinks by what moves (recurring correction 3 of the engineer agent).
+**C2. The run graph.** The nodes follow the run skill's steps: `stopped` (a `Stopped` record with a `Next`), `ground` (read `ground.json`'s instruction files and `lessons.md`), `route` (quick or standard), `init`, `criteria`, `red`, `gate_high` (gate at high risk), `build`, `break_it`, `review`, `verify`, `pr`, `done`, `report`. Every `check` node names its command, for example `red_ok: {type: check, cmd: "herd verify", expect: "fails", pass: gate_high, fail: criteria}`. The skill keeps only what a graph cannot say, and shrinks by what moves (one of Collie's recurring corrections).
 
 **C3. How a session loads it.** Spike S4 showed a plugin agent can be the main agent. The README says `claude --agent herd:herd-run`, and `herd setup` can offer to write `{"agent": "herd:herd-run"}` into the project's `.claude/settings.json` (asked, never silent). `/herd:run` in a session on the default agent keeps working from the skill.
 
@@ -157,7 +157,7 @@ The table is fixed in code. Text is copied from the record, never rewritten. Lin
 ## Order
 
 1. Spike S4 (done).
-2. Part B first, built by the `herd-sdlc-engineer` agent through its `change.yaml` graph as its first autonomous job (the owner's choice, 2026-11-24). B1 to B5 in one release.
+2. Part B first, built by Collie through its `change.yaml` graph as its first autonomous job (the owner's choice, 2026-11-24). B1 to B5 in one release.
 3. Part A, advisory warnings only, after Part B and the 0.11.0 intake reviewer.
 4. Part C after A and B, with a benchmark leg: the run graph agent against the run skill, same model, same input.
 
@@ -192,6 +192,6 @@ The table is fixed in code. Text is copied from the record, never rewritten. Lin
 ## Context and sources
 
 * The owner's requests for this design: learning from each task "is super important"; Herd "should always use as input the knowledge base available in the repository where herd is working"; the graph agent is the reference for project agents, and users load it to run their tasks instead of a default agent (2026-11-24).
-* The graph format: the owner's `blackboard-reviewer` project, mirrored in [`.claude/graphs/`](../../.claude/graphs/README.md).
+* The graph format: the owner's `blackboard-reviewer` project, which Collie follows.
 * Records reused: `notes.jsonl` kinds (`NOTE_KINDS` in `scripts/herd.py`), `fails.json`, `stopped.json`, hook-recorded reviews, `_edited_files` (session-log walk), the worktree file lock (CHANGELOG 0.3.1).
 * [`herd-guardrails.md`](herd-guardrails.md) for the hook and guard rules this builds on.

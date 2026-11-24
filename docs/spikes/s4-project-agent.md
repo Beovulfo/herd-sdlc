@@ -24,7 +24,8 @@ One change to the design: an agent never needs to Read `CLAUDE.md`, because Clau
 | `--plugin-dir <repo> --agent herd:herd-reviewer` | "`HERD-REVIEW: PASS` if no Blocker or Major finding, otherwise `HERD-REVIEW: FAIL`." |
 | `--plugin-dir <repo>`, project `.claude/settings.json` with `{"agent": "herd:herd-reviewer"}` | the same answer |
 | `--agent herd:herd-reviewer` without the plugin enabled | `--agent 'herd:herd-reviewer' not found. Available agents: ...` (plugin agents are listed by their plugin-scoped names, such as `egm:egm-style`) |
-| `--agent herd-sdlc-engineer` in this repository (a project agent in `.claude/agents/`) | "`change.yaml`, `benchmark.yaml`, `release.yaml`." |
+| `--agent herd-sdlc-engineer` in this repository (a project agent in `.claude/agents/`, before it moved out as Collie) | "`change.yaml`, `benchmark.yaml`, `release.yaml`." |
+| From this repository, `--plugin-dir <collie> --agent collie:collie` (Collie in its own repository) | "Collie. Graphs: `graphs/` in the Collie repository ..." |
 
 So Part C can work with no subagent fallback: `claude --agent herd:<name>`, or the `agent` setting in a project's `.claude/settings.json`. An unknown name prints the error and the list of available agents, and the command still exits 0.
 

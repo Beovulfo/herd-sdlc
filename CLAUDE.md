@@ -9,7 +9,6 @@ review the evidence. Requirements: [`docs/PRD.md`](docs/PRD.md). Changes: [`CHAN
 - `scripts/herd.py`: the CLI (init, check, detect, verify, status, done, cancel, pr, gate, preinit, guard, review-hook, lint, triage, note, review). It uses `herd_detect.py` and `herd_triage.py`.
 - `scripts/herd_arbiter.py`, `scripts/herd_escalation.py`: tested building blocks for the planned GitHub automation, not wired into the CLI yet.
 - `tests/`: one `test_*.py` per module.
-- `.claude/agents/herd-sdlc-engineer.md` and `.claude/graphs/`: the graph agent that develops Herd (knowledge in the agent file, control flow in the graphs, `validate.py` checks them). Not shipped with the plugin.
 - `docs/designs/`: specs, written with the Elephant-Goldfish Model (Herd dogfoods its own method). `docs/spikes/`: experiments. `docs/backlog.md`: deferred ideas.
 - `examples/supermarket-route/`: the benchmark, with and without Herd.
 

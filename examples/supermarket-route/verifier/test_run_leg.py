@@ -2,6 +2,8 @@ import contextlib
 import io
 import json
 import os
+import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -201,6 +203,60 @@ class TestRepoDeny(Base):
         s = rl.build_settings(root, 1, 1, ["/opt/src/herd"])
         self.assertIn("/opt/src/herd", s["sandbox"]["filesystem"]["denyRead"])
         self.assertIn("Read(///opt/src/herd/**)".replace("///", "//"), s["permissions"]["deny"])
+
+
+class TestTask(Base):
+    BUS = {"bus_verify.py", "bus_probe.py", "bus_reference.py"}
+
+    def test_task_value_as_name_or_path_resolves_to_the_same_task(self):
+        for v in ("bus-transfer", "examples/bus-transfer", "examples/bus-transfer/", "./examples/bus-transfer",
+                  str(rl.EXAMPLES / "bus-transfer"), str(rl.EXAMPLES / "bus-transfer") + "/"):
+            self.assertEqual(rl.resolve_task(v), "bus-transfer", v)
+        self.assertEqual(rl.resolve_task("supermarket-route"), "supermarket-route")
+
+    def test_unknown_task_is_refused_with_the_known_names(self):
+        for v in ("nope", "examples/nope", "", "../bus-transfer-x"):
+            with self.assertRaises(ValueError) as cm:
+                rl.resolve_task(v)
+            self.assertIn("bus-transfer", str(cm.exception))
+            self.assertIn("supermarket-route", str(cm.exception))
+        code, out = run_main(["--name", "leg", "--runs", "1", "--model", "m", "--task", "nope"], self.env, [])
+        self.assertEqual(code, 2)
+        self.assertIn("unknown task", out)
+
+    def test_task_supplies_the_prompt_and_an_explicit_prompt_wins(self):
+        want = (rl.EXAMPLES / "bus-transfer" / "prompt.md").read_text()
+        for task in ("bus-transfer", "examples/bus-transfer/"):
+            code, out = run_main(["--name", "leg", "--runs", "1", "--model", "m", "--task", task, "--dry-run"],
+                                 self.env, [str(self.tmpdir)])
+            self.assertEqual(code, 0, out)
+            self.assertIn(shlex.quote(want), out)
+            shutil.rmtree(self.tmpdir / "herd-bench")
+        code, out = run_main(self.args("--task", "bus-transfer", "--dry-run"), self.env, [str(self.tmpdir)])
+        self.assertEqual(code, 0, out)
+        self.assertIn(shlex.quote(self.prompt.read_text()), out)
+        self.assertNotIn(shlex.quote(want), out)
+
+    def test_hidden_names_of_both_tasks_are_refused_for_either_task(self):
+        for task in ("bus-transfer", "supermarket-route"):
+            for name in sorted(self.BUS | {"verify_general.py", "robustness_probe.py", "probe6.py"}):
+                planted = self.tmpdir / "old" / name
+                planted.parent.mkdir(exist_ok=True)
+                planted.write_text("x")
+                code, out = run_main(self.args("--task", task, "--dry-run"), self.env, [str(self.tmpdir)])
+                self.assertEqual(code, 2, (task, name))
+                self.assertIn(str(planted), out)
+                planted.unlink()
+
+    def test_hidden_names_table_covers_every_task_folder(self):
+        self.assertTrue(self.BUS <= rl.HIDDEN["bus-transfer"])
+        self.assertEqual(set(rl.HIDDEN), {p.name for p in rl.EXAMPLES.iterdir() if (p / "verifier").is_dir()})
+        self.assertEqual(rl.PLANTED_NAMES, set().union(*rl.HIDDEN.values()))
+
+    def test_supermarket_still_requires_a_prompt_or_a_task(self):
+        code, out = run_main(["--name", "leg", "--runs", "1", "--model", "m"], self.env, [])
+        self.assertEqual(code, 2)
+        self.assertIn("--prompt or --task", out)
 
 
 if __name__ == "__main__":

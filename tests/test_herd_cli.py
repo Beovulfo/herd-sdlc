@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -2134,3 +2135,52 @@ class TestVerifyOnly(Base):
         self.assertNotIn("after every change", step)
         self.assertIn("once the work is done and after each review fix", step)
         self.assertIn("herd verify --only", step)
+
+    def test_only_bad_input_ends_with_a_message(self):
+        self.task()
+        herd.verify(self.root, "t1")
+        for args in (["--only", ""], ["--only", "c1"], ["--only", "C1; rm -rf x"], ["t1", "--only", "nope"],
+                     ["--only", "C1", "--only", "C2"]):
+            rc, out, err = self.run_cli("verify", *args)
+            self.assertIn(rc, (0, 1), args)
+            self.assertNotIn("Traceback", out + err, args)
+        rc, _, err = self.run_cli("verify", "nosuchtask", "--only", "C1")
+        self.assertEqual(rc, 1)
+        self.assertNotIn("Traceback", err)
+
+    def test_only_with_a_slug_and_verbose(self):
+        self.task()
+        herd.verify(self.root, "t1")
+        (self.root / "greet.txt").write_text("hello")
+        rc, out, _ = self.run_cli("verify", "t1", "--verbose", "--only", "C1")
+        self.assertEqual((rc, out.split()[:2]), (0, ["C1", "passing"]))
+
+    def test_only_collision_the_latest_attack_note_wins_both_ways(self):
+        self.task()
+        herd.verify(self.root, "t1")
+        herd.add_note(self.root, "t1", "tried", "good", attack=FIRST_ATTACK, check=OK)
+        herd.add_note(self.root, "t1", "tried", "later and broken", attack=FIRST_ATTACK, check="false")
+        self.assertEqual(self.run_cli("verify", "--only", FIRST_ATTACK)[0], 1)
+        herd.add_note(self.root, "t1", "tried", "n/a: nothing to test", attack="collision")
+        rc, out, _ = self.run_cli("verify", "--only", "collision")  # an n/a note has no command to run
+        self.assertEqual(rc, 1)
+        self.assertIn("no criterion or attack", out)
+
+    def test_only_one_bad_part_other_checks_do_not_matter(self):
+        self.task()
+        herd.verify(self.root, "t1")
+        herd.add_note(self.root, "t1", "tried", "broken", attack="collision", check="false")
+        (self.root / "greet.txt").write_text("hello")
+        self.assertEqual(self.run_cli("verify", "--only", "C1")[0], 0)  # C2 is unchecked, collision fails
+        self.assertEqual(self.run_cli("verify", "--only", "C2")[0], 1)  # an unchecked criterion is not passing
+
+    def test_only_recount_reports_the_real_time(self):
+        self.task()
+        herd.verify(self.root, "t1")
+        herd.add_note(self.root, "t1", "tried", "slow", attack=FIRST_ATTACK, check="python3 -c 'import time; time.sleep(1.2)'")
+        began = time.monotonic()
+        rc, out, _ = self.run_cli("verify", "--only", FIRST_ATTACK)
+        wall = time.monotonic() - began
+        secs = int(re.search(r"\((\d+) s\)", out).group(1))
+        self.assertEqual(rc, 0)
+        self.assertTrue(1 <= secs <= wall + 1, (secs, wall))

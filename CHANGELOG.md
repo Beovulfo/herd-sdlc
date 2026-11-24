@@ -13,6 +13,15 @@ Faster tests (issue #32). Tests only: nothing under `scripts/`, `hooks/`, `skill
 - **Why not 30 s:** what is left is process starts, not git setup. A test runs `herd verify`, `herd gate` and `herd done` many times; each runs about 5 git commands and each criterion check starts `python3` (about 40 ms here). `test_herd_quality` and `test_herd_review` start 400 to 500 `python3 -c` checks between them. Going lower means changing how Herd calls git or stubbing its checks, which this task excludes (tests only, Herd's behaviour unchanged).
 - **Known limits:** CI runs `unittest discover` in one process, so it does not get the class-level parallelism of `tests/check_suite_speed.py`. The git cache is keyed by file contents, not timestamps, and never caches commands that write.
 
+## 0.12.6
+
+Evidence stays fresh across a commit (issue #50, milestone M3 Fast Herd tasks). Owner: "Run 1 and 2" (proposal 2 of the workflow review).
+
+- **Why:** `fingerprint` hashes HEAD, so a plain commit made the evidence stale and `herd done` refused until one more full `herd verify`, although run skill step 7 says "commit and run `herd done`".
+- **Changed:** freshness is decided by content. The evidence is stale when `task.toml` changed; otherwise, when it holds `content` and the content id can be computed, only when the two differ (a commit moves HEAD but not the files); otherwise the old fingerprint decides (outside git, or evidence without a content id). `herd gate`, `herd done` and `herd pr` use one `_stale`, and verify and `_stale` share one helper for the content id. When HEAD or the dirty flag differ from the evidence, `herd done` and `herd pr` record the current ones as `head` and `dirty`, keep the old head as `verified_head`, so the final report, the report and the PR description name the final commit. Messages no longer say to run `herd verify` after a commit. `fingerprint` is still written.
+- **Unchanged:** any edit is stale (also an amend, a reset or a checkout to other content, and a `task.toml` edit); `herd done` still refuses uncommitted work when pull requests are on; the review rule; `herd verify --only` writes nothing; no check is skipped.
+- **Known limits:** the freshness check adds one `git diff` when HEAD moved past the start commit. Outside git an edit to a file is not seen (it never was: only a `task.toml` edit is stale there). A commit with a different message or an empty commit is fresh, since only content counts.
+
 ## 0.12.5
 
 `herd verify` reads git state once (issue #46). Owner: "Why is herd calling git ? I don't get it", "I want it yes", "2" (one git call per verify, keep git's ignore rules).

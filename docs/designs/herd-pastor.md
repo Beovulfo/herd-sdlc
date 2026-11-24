@@ -1,7 +1,7 @@
 # Herd Pastor: a named graph agent per repository that runs Herd and learns from every task
 
 * **Author:** Toni
-* **Status:** Draft v3: v2 after two EGM review rounds (round 1: design, implementation readiness, scope, code accuracy, comprehension; round 2: implementation readiness), plus corrections (D8) at the owner's request; round 3 (implementation readiness) found 0 Blockers and 5 Majors, all fixed. Spike S5 done; nothing built. Supersedes Parts B and C of [`herd-project-agent.md`](herd-project-agent.md); its Part A (ground check) stays there.
+* **Status:** Draft v4: v2 after two EGM review rounds (round 1: design, implementation readiness, scope, code accuracy, comprehension; round 2: implementation readiness), plus corrections (D8) at the owner's request; round 3 (implementation readiness) found 0 Blockers and 5 Majors, all fixed. v4 adds the user's own agent and the ON/OFF switch (G13), at the owner's request; round 4 (implementation readiness) found 0 Blockers and 3 Majors, all fixed. Spike S5 done; nothing built. Supersedes Parts B and C of [`herd-project-agent.md`](herd-project-agent.md); its Part A (ground check) stays there.
 * **Date:** 2026-11-24
 
 --------------------------------------------------------------------------------
@@ -54,15 +54,16 @@ When a task stops without `herd done`, Herd writes `stopped.json` with the reaso
 
 * G1: `herd pastor new` creates a pastor from the plugin's template. `--shared` writes `.claude/agents/<name>.md` in the current work tree, for the user to commit. `--local` writes it in the main checkout and adds `/.claude/agents/<name>.md` to `.git/info/exclude`. With neither flag it refuses and names both, because that choice is the user's. Check: `test_pastor_new_shared`, `test_pastor_new_local_excluded`, `test_pastor_new_needs_mode`.
 * G2: Without `--name`, the name is `random.choice` from `PET_NAMES` in code, excluding names already in `.claude/agents/` of the work tree or the main checkout. When every name is taken, it says so and asks for `--name`. A given name must match `[a-z][a-z0-9-]{1,30}` and must not exist. Check: `test_pastor_name_random_and_unused`, `test_pastor_name_rejected`.
-* G3: `herd pastor list` prints every `.claude/agents/*.md` of the work tree and of the main checkout, without duplicates; the work tree's copy wins. For a pastor it also prints the mode, the template version and any graph problems (D2). Other agents are marked `not a pastor`. `herd pastor use <name>` accepts any of them. It writes `"agent": "<name>"` into the main checkout's `.claude/settings.local.json`, keeps the file's other keys, adds the file to `.git/info/exclude` when it is untracked, and says the change takes effect in the next session. Check: `test_pastor_list_worktree`, `test_pastor_use_keeps_settings`.
+* G3: `herd pastor list` prints every `.claude/agents/*.md` of the work tree and of the main checkout, without duplicates; the work tree's copy wins. For a pastor it also prints the mode, the template version and any graph problems (D2). Other agents are marked `not a pastor`. `herd pastor use <name>` accepts any of them. It reads the `agent` setting the way Claude Code layers it: the main checkout's `.claude/settings.local.json`, then the work tree's and the main checkout's `.claude/settings.json`, then `~/.claude/settings.json`, taking the first non-empty value and skipping unreadable JSON. When that names a different agent, `use` refuses, names the file, and prints how to change it by hand: Herd never replaces or edits an agent the user chose. When it names the same agent, `use` says so and exits 0. A name that `list` does not show is refused too, with the same hand-edit hint for a plugin or user agent. Otherwise it writes `"agent": "<name>"` into the main checkout's `.claude/settings.local.json`, keeps the file's other keys, adds the file to `.git/info/exclude` when it is untracked, and says the change takes effect in the next session. Check: `test_pastor_list_worktree`, `test_pastor_use_keeps_settings`, `test_pastor_use_never_replaces_own_agent` (local, project and user scope).
 * G4: A SessionStart hook, `herd session-hook`, prints at most one `additionalContext` block, and only when `source` is `startup` inside a git repository:
   * the session's agent is a pastor: the block names it, its lesson count, `lessons.md`, and a newer template when there is one;
-  * the session has no agent (`agent_type` absent) and the user has not run `herd pastor none`: the block tells the agent to ask the user one question in its first reply, with three options. The options are use an existing agent (named), create a pastor (shared or local), or continue without one;
-  * any other agent, such as Collie: nothing.
+  * the session has no agent (`agent_type` absent) and pastors are on (G13): the block tells the agent to ask the user one question in its first reply, with three options. The options are use an existing agent (named), create a pastor (shared or local), or continue without one (`herd pastor off`);
+  * any other agent, from any settings scope or `--agent`, such as Collie: nothing. `agent_type` carries the agent whichever way it was chosen: spike S5 saw `pip` for a project agent in settings and `egm:egm-style` for a plugin agent by `--agent` or by setting. A name with `:` is never a pastor;
+  * pastors off (G13): the no-agent question is not asked. A session whose agent is still a pastor gets its block anyway, since that block is how it learns to call `herd`.
 
   Both blocks start with the line `herd <command> means python3 "<path>/scripts/herd.py" <command>; reference files are in <path>/skills/`, where `<path>` is the plugin folder the hook itself runs from. A project agent gets no `${CLAUDE_PLUGIN_ROOT}` expansion, and the plugin folder changes with every upgrade, so the path is never written into the agent file.
 
-  Check: `test_session_hook_names_pastor` (asserts the `herd` line), `test_session_hook_asks_until_decided`, `test_session_hook_silent_for_other_agent`, `test_session_hook_silent_outside_git`.
+  Check: `test_session_hook_names_pastor` (asserts the `herd` line), `test_session_hook_asks_until_decided`, `test_session_hook_silent_for_other_agent`, `test_session_hook_silent_when_off`, `test_session_hook_names_pastor_when_off`, `test_session_hook_silent_outside_git`.
 * G5: `herd done` and `write_stop` (the code that writes `stopped.json`) add lessons to the store, from records only (D4). Each lesson keeps its source (`herd`, `reviewer`, `human`), the tasks and the commit it came from. Check: `test_lessons_from_done`, `test_lessons_from_stop`.
 * G6: A task adds each key at most once. A key already in the store from another task increments `seen`, and the final report says `recurred: L3f9a2c (3rd time)`. `L3f9a2c` is the lesson's id, derived from its key. Check: `test_lesson_recurrence`, `test_lesson_once_per_task`.
 * G7: `herd init` writes `.herd/tasks/<slug>/lessons.md`, at most 10 lessons ranked by `seen` then `last`, both descending, and prints one line naming the file. Check: `test_lessons_ranked_and_capped`.
@@ -76,6 +77,7 @@ When a task stops without `herd done`, Herd writes `stopped.json` with the reaso
   It also denies `herd lessons --drop` and `herd session-hook`. Outside a task, all of these are the user's. Check: `test_guard_protects_pastor_and_store_from_worktree`, `test_guard_denies_lessons_drop`, `test_guard_allows_lessons_list`.
 * G10: The template's graph passes the graph rules in D2, and so does any graph `herd pastor list` checks. Check: `test_template_graph_valid`, `test_graph_rejects_ungated_side_effect`.
 * G12: `herd note --correction "<the human's words>"` records a `correction` note only when its text is a verbatim quote, by the 0.10.0 comparison, of a message the human typed in the task's sessions since `herd init` (D8). Otherwise it refuses and says why. At `herd done` each correction becomes a lesson. The template's `learn` step drafts a rule from each new correction lesson, and writes it into the knowledge section only on the user's yes at a gate node. Check: `test_correction_must_quote_human`, `test_correction_rejects_peer_and_tool_text`, `test_lessons_from_corrections`.
+* G13: Pastors have an ON/OFF switch, ON by default. `herd pastor off` and `herd pastor on` write `<git-common-dir>/herd/pastor.json` (`{"enabled": false}` or `true`), which belongs to this clone only, so one person can turn pastors off without changing a team file. A team can set the default in `herd.toml` with `[pastor] enabled = false`. The clone's file, when present, wins over `herd.toml`. While OFF, the SessionStart hook does not ask its question, and `herd pastor new` and `use` refuse with `pastors are off: run herd pastor on`. `list`, `on` and `off` still work. `herd pastor off` does not touch the `agent` setting: when the main checkout's `.claude/settings.local.json` still names a pastor, it prints `<name> is still this clone's agent: remove "agent" from .claude/settings.local.json to use the default agent`. An unreadable `pastor.json` or `herd.toml`, or an `enabled` that is not a boolean, is ignored, as `[review]` treats odd values, so the default ON holds. `on` and `off` create `<git-common-dir>/herd/` when it is missing. Lessons (D5), corrections (D8) and their guard rules (D6) are Herd's own records and stay on either way, for any agent: `herd init` still writes `lessons.md`, and any agent that runs Herd can read it. Check: `test_pastor_switch_off_and_on`, `test_pastor_switch_clone_wins_over_toml`, `test_lessons_written_when_off`.
 * G11: The SessionStart hook adds at most 20 ms over a bare `python3 -c pass`. Lessons add at most 50 ms to `herd init`, `herd verify` and `herd done` with 200 lessons and 1,000 files. Both are measured as the median of 5 runs against the same command without the feature. Check: `test_pastor_and_lessons_cost`.
 
 ## Non-Goals
@@ -100,12 +102,13 @@ When a task stops without `herd done`, Herd writes `stopped.json` with the reaso
 * Lessons are kept per repository, not per pastor: "Per repository (Recommended)".
 * `--local` uses `.git/info/exclude`, not `.gitignore`: ".git/info/exclude (Recommended)".
 * Corrections: "maybe we should inlcude a herd record as a correction?" This became D8 and G12.
+* Own agents and a switch: "we should allow the user to use their own agents instead of creating a new one in the repo. For example I will be using Collie directly to work in herd-sdlc repository, so we need to enable the user to turn if OFF or ON,obviously". This became G13, CUJ 7 and CUJ 8, and the own-agent rules in G3 and G4.
 
 ## Critical User Journeys (CUJs)
 
 ### CUJ 1: First session in a repository
 
-* **Given**: Herd is installed. The repository has no pastor and no `agent` setting, and the user has never run `herd pastor none` in it.
+* **Given**: Herd is installed. The repository has no pastor and no `agent` setting, and pastors are on (the default).
 * **When**: The user starts a session.
 * **Then**: The SessionStart hook adds the question to the context. The agent's first reply asks it: use an existing agent (none here), create a pastor, or continue without. The user chooses to create one and keep it local. The agent runs `herd pastor new --local`, and Herd writes `.claude/agents/juniper.md` in the main checkout and adds it to `.git/info/exclude`. The agent then runs `herd pastor use juniper`, and Herd prints `juniper is set as this repository's agent; it starts with your next session`. Test: `test_session_hook_asks_until_decided`, `test_pastor_new_local_excluded`.
 
@@ -139,6 +142,18 @@ When a task stops without `herd done`, Herd writes `stopped.json` with the reaso
 * **When**: The pastor runs `herd note --correction "never write to the real config in tests, use a temp dir"`.
 * **Then**: Herd finds that text in a message the human typed in this task's session and records the note. A note with words the user did not type is refused. At `herd done` the store gets a `correction` lesson. The `learn` node drafts the rule "Never write to the real config in tests; use a temp dir (L8c21e0, the user's words)" and asks at `gate_learn`. On the user's yes, the pastor adds it under `## Knowledge` in its own file in the main checkout, never as a commit on the done task's branch. For a shared pastor the edit stays uncommitted for the user to commit. Test: `test_correction_must_quote_human`, `test_lessons_from_corrections`.
 
+### CUJ 7: The user brings their own agent
+
+* **Given**: The owner works on herd-sdlc with Collie, their own graph agent, which is installed as the plugin `collie@agent-kennel` at local scope. herd-sdlc's git-ignored `.claude/settings.local.json` has `"agent": "collie:collie"`. Pastors are on.
+* **When**: The owner starts a session and runs a Herd task.
+* **Then**: The SessionStart hook sees `agent_type` set to a non-pastor agent and adds nothing. No question is asked, and no file under `.claude/` changes. `herd init` still writes `lessons.md` and names it, and Collie reads it as it would any file. Corrections Collie records with `herd note --correction` become lessons too. If anyone runs `herd pastor use juniper`, it refuses because the settings already name `collie:collie`. Test: `test_session_hook_silent_for_other_agent`, `test_pastor_use_never_replaces_own_agent`.
+
+### CUJ 8: The user turns pastors off
+
+* **Given**: A team repository with `[pastor] enabled = true` in `herd.toml` and a shared pastor. One developer prefers Claude's default agent.
+* **When**: The developer runs `herd pastor off`.
+* **Then**: Herd writes `<git-common-dir>/herd/pastor.json` with `{"enabled": false}`. Nothing committed changes, so the team is not affected. The next session starts with no question. Had the developer earlier run `herd pastor use juniper`, `off` would also print that Juniper is still this clone's agent and how to remove it. `/herd:run` works as before, and `lessons.md` is still written at `herd init`. `herd pastor on` turns the question back on. Test: `test_pastor_switch_off_and_on`, `test_lessons_written_when_off`.
+
 ## Design
 
 ### Spike S5 (done)
@@ -156,7 +171,7 @@ When a task stops without `herd done`, Herd writes `stopped.json` with the reaso
 | `.claude/agents/<name>.md` | frontmatter, marker line, knowledge, graph | committed by the user, in the work tree | main checkout, in `.git/info/exclude` |
 | `.claude/pastors/lessons.json` | the committed copy of the store | in the task's work tree | not written |
 | `<git-common-dir>/herd/lessons.json` | the store | always | always |
-| `<git-common-dir>/herd/pastor-declined` | the user ran `herd pastor none` | | |
+| `<git-common-dir>/herd/pastor.json` | this clone's ON/OFF switch, `{"enabled": true}` or `false` (G13) | | |
 | `.claude/settings.local.json` (main checkout) | `"agent": "<name>"` | per person | per person |
 | `.herd/tasks/<slug>/history.json` | one row per verify: `{"at", "failing_attacks": [...], "escalate": [...]}` | | |
 | `.herd/tasks/<slug>/lessons.md` | the lessons shown for this task | | |
@@ -269,7 +284,7 @@ The run skill stays for sessions without a pastor. The template holds the same s
 - `list` (G3);
 - `new [--name N] --shared|--local` (G1, G2);
 - `use <name>` (G3);
-- `none`, which writes `<git-common-dir>/herd/pastor-declined`. `use` removes that file.
+- `off` and `on`, the switch (G13). `herd.toml`'s `[pastor] enabled` is read the way `[review]` and `[guard]` are today.
 
 `PET_NAMES` holds 40 short lowercase pet names, fixed in code (for example juniper, biscuit, pepper, maple, otis).
 
@@ -278,12 +293,12 @@ The run skill stays for sessions without a pastor. The template holds the same s
 - finds the main checkout with `_main_checkout`, the same function G3 and D6 use;
 - globs `.claude/agents/*.md` and reads the first lines of each file.
 
-Like the guard, it leaves before the other imports when it has nothing to say. That is what keeps it inside G11's 20 ms. It joins `HOOK_COMMANDS`, so the guard denies running it by hand, the Python 3.10 exit list at the top of `scripts/herd.py`, and the list of hooks in `main` that exit 0 on a deleted working folder. Its output is `{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "<text>"}}`, with the text from a fixed template in code:
+Like the guard, it leaves before the other imports when it can tell it has nothing to say: when `source` is not `startup`, or when `agent_type` contains `:` (a plugin agent, never a pastor). Everything else (git, `herd.toml`, `pastor.json`, the glob) runs after the imports. That is what keeps it inside G11's 20 ms. It joins `HOOK_COMMANDS`, so the guard denies running it by hand, the Python 3.10 exit list at the top of `scripts/herd.py`, and the list of hooks in `main` that exit 0 on a deleted working folder. Its output is `{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "<text>"}}`, with the text from a fixed template in code:
 
 > Herd: this repository has no agent set. In your first reply, ask the user one question with these options:
-> 1) use an existing agent: <names>
+> 1) use an existing agent: <names> (`herd pastor use <name>`), or your own plugin or user agent: set "agent" in .claude/settings.local.json yourself
 > 2) create a pastor, shared (committed) or local (only in this clone): `herd pastor new --shared|--local`, then `herd pastor use <name>`
-> 3) continue without one: `herd pastor none`
+> 3) continue without one, and stop this question: `herd pastor off`
 >
 > The choice takes effect in the next session.
 
@@ -350,7 +365,7 @@ The guard decides whether a path is protected in `_protected`, which today match
 
 `GUARD_STATE` gains `history.json` and `lessons.md`. `HOOK_COMMANDS` gains `session-hook`.
 
-During a task the pastor cannot rewrite its own rules, its graph or its lessons, and a widened job (CUJ 4) never lifts a guard rule. `git add` and `git commit` are not writes to the guard, so committing the shared lessons file stays possible.
+The guard protects only files with Herd's marker line, so a user's own agent and its files are never touched. During a task the pastor cannot rewrite its own rules, its graph or its lessons, and a widened job (CUJ 4) never lifts a guard rule. `git add` and `git commit` are not writes to the guard, so committing the shared lessons file stays possible.
 
 ### D7. Cost
 
@@ -390,6 +405,8 @@ The rule reads Claude Code's records of who typed what, not the wording. It prov
 | Write the shared lessons file at `herd done` and commit it after | The PR would hold a commit past the verified one, which `herd done` refuses today. Writing it at the last green verify keeps it inside the verified commit |
 | A per-session record of which pastor ran each task | Needed only for per-pastor lessons (Open Question 1) |
 | A `herd pastor check` command | `herd pastor list` already prints the graph problems, and a test covers the template |
+| The switch only in `herd.toml` | One person could not turn pastors off without changing the team's committed file |
+| The switch only in the clone | A team that does not want pastors would need each member to turn them off |
 | A SessionStart hook that blocks until the user picks | A hook cannot prompt the user, and blocking would break the session |
 
 ## Risks and Mitigations
@@ -401,7 +418,7 @@ The rule reads Claude Code's records of who typed what, not the wording. It prov
 | The graph is text, so an agent can skip a node | Every step that matters ends in a `herd` command whose exit code the done gate checks again (Non-Goals) |
 | Lessons pile up and become noise | 10 shown, 200 kept, ranked by recurrence and recency; the human drops a lesson |
 | The pastor drifts from Herd as Herd changes | The template version is in the marker line, and the list and the hook say when it is older |
-| The SessionStart question nags | Asked only at startup, with no agent set and no `herd pastor none` |
+| The SessionStart question nags | Asked only at startup, with no agent set and pastors on; `herd pastor off` stops it for the clone |
 | Parallel tasks write the store at once | A file lock. On Windows `fcntl` is missing and parallel writes can race (known limit, as for worktrees) |
 | Review findings past 2,000 characters are lost | `REVIEW_CHARS` clips the stored review. Accepted for this version, and a known limit |
 

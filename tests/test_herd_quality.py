@@ -7,7 +7,7 @@ from pathlib import Path
 
 from scripts import herd
 from tests.test_harness_rules import APP_CHECK, NO_INPUTS, REQUEST, TASK, Base
-from tests.test_herd_cli import intake_review, transcript
+from tests.test_herd_cli import transcript
 from tests.test_herd_review import ReviewBase
 
 NARROWED = TASK.replace('text = "It must return 1 for any call"', 'text = "It must return 1 for one call"')
@@ -94,7 +94,6 @@ class TestVerbatimBlock(Base):
         herd.verify(self.root, "t1")  # a note for another id is not this criterion's source
         self.assertIn("C1 is not a verbatim quote", " ".join(herd.problems(self.root, "t1")))
         herd.add_note(self.root, "t1", "human-change", "C1: the human now says “It must return 1 for one call.”")
-        intake_review(self.root)  # the criteria changed: the intake review is needed again (0.11.0)
         ev = herd.verify(self.root, "t1")
         self.assertEqual(ev["human_not_verbatim"], [])
         self.assertEqual(herd.problems(self.root, "t1"), [])  # the freeze accepts the same note
@@ -106,7 +105,6 @@ class TestVerbatimBlock(Base):
         self.attacks_and_review()
         herd.verify(self.root, "t1")
         (self.root / ".herd/tasks/t1/task.toml").write_text(TASK)  # the human's words, after the first verify
-        intake_review(self.root)  # the criteria changed: the intake review is needed again (0.11.0)
         ev = herd.verify(self.root, "t1")
         self.assertEqual((ev["human_changed"], ev["human_not_verbatim"]), ([], []))
         self.assertEqual(herd.problems(self.root, "t1"), [])
@@ -412,7 +410,7 @@ FAST = 'python3 -c "import app"'  # a check that passes once app.py exists
 
 class TestCorrections(Base):
     """0.11.1: human criteria changed after the first verify only toward the request's words are a correction, not
-    the human's change (a Haiku run re-split its quotes after an intake FAIL and could not finish)."""
+    the human's change (a Haiku run re-split its quotes after a reviewer FAIL and could not finish)."""
     REQ = "Build it. It must return 1 for any call. It must be fast. Errors print one line."
 
     def toml(self, *crit):
@@ -424,7 +422,6 @@ class TestCorrections(Base):
     def ready(self, *crit, request=True):
         herd.init_task(self.root, "t1", "g", request=self.REQ if request else None)
         (self.root / ".herd/tasks/t1/task.toml").write_text(self.toml(*crit))
-        intake_review(self.root)
         (self.root / "tests").mkdir(exist_ok=True)
         (self.root / "tests/test_app.py").write_text("import app\n")
         herd.verify(self.root, "t1")  # red
@@ -434,7 +431,6 @@ class TestCorrections(Base):
 
     def change(self, *crit):
         (self.root / ".herd/tasks/t1/task.toml").write_text(self.toml(*crit))
-        intake_review(self.root)
         ev = herd.verify(self.root, "t1")
         return ev, herd.problems(self.root, "t1")
 
@@ -498,7 +494,6 @@ class TestCorrections(Base):
         own = ("C1", "f returns 1 within 2 ms for every call", "human", APP_CHECK)
         self.change(own, *self.FIRST[1:])
         herd.add_note(self.root, "t1", "human-change", "C1: the human said: f returns 1 within 2 ms for every call")
-        intake_review(self.root)
         herd.verify(self.root, "t1")
         self.assertNotIn("C1 changed", " ".join(herd.problems(self.root, "t1")))
         _, probs = self.change(self.FIRST[0], *self.FIRST[1:])  # back to a quote: the human's rewording would be lost

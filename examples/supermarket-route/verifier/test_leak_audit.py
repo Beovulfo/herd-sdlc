@@ -196,5 +196,37 @@ class TestTask(Base):
         self.assertNotIn("Traceback", r.stderr)
 
 
+BUS_FILE = "/work/examples/bus-transfer/verifier/test_bus_verify.py"
+
+
+class TestBusRead(Base):
+    def test_Bus_read_of_the_hidden_test_file_is_a_finding_that_voids_the_run(self):
+        f = self.audit(use("Read", {"file_path": BUS_FILE}), result("t1", "def test_solver(): ..."))
+        self.assertEqual([(x.tool, x.blocked) for x in f], [("Read", False)])
+        self.assertIn(BUS_FILE, f[0].detail)
+
+    def test_Bus_read_refused_by_the_tool_is_still_reported(self):
+        f = self.audit(use("Read", {"file_path": BUS_FILE}), result("t1", "denied", is_error=True))
+        self.assertEqual([(x.tool, x.blocked) for x in f], [("Read", False)])
+
+    def test_Bus_each_read_call_counts_once(self):
+        f = self.audit(use("Read", {"file_path": BUS_FILE}, "t1"), result("t1", "a"),
+                       use("Read", {"file_path": BUS_FILE}, "t2"), result("t2", "b"))
+        self.assertEqual(len(f), 2)
+
+    def test_Bus_other_reads_and_malformed_read_calls_are_not_findings(self):
+        self.assertEqual(self.audit(use("Read", {"file_path": "/work/CLAUDE.md"})), [])
+        self.assertEqual(self.audit(use("Read", "not a dict", "t1"), use("Read", {}, "t2")), [])
+        f = self.audit(use("Read", None, "t1"), use("Read", {"file_path": BUS_FILE}, "t2"))
+        self.assertEqual(len(f), 1)
+
+    def test_Bus_cli_exits_one_and_names_the_read(self):
+        r = self.cli(use("Read", {"file_path": BUS_FILE}), result("t1", "x"))
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn(f"Read\tread hidden verifier file: {BUS_FILE}\tnot blocked", r.stdout)
+        self.assertEqual(r.stdout.splitlines()[-1], "leak audit: 1 findings (0 blocked)")
+        self.assertNotIn("Traceback", r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

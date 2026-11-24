@@ -259,5 +259,22 @@ class TestTask(Base):
         self.assertIn("--prompt or --task", out)
 
 
+class TestHiddenBus(Base):
+    def test_Hidden_bus_test_file_is_in_the_bus_table(self):
+        self.assertIn("test_bus_verify.py", rl.HIDDEN["bus-transfer"])
+        self.assertIn("test_bus_verify.py", rl.PLANTED_NAMES)
+
+    def test_Hidden_stray_copy_of_the_bus_test_file_in_the_temp_folder_is_refused(self):
+        planted = self.tmpdir / "stray" / "test_bus_verify.py"
+        planted.parent.mkdir()
+        planted.write_text("x")
+        for task in ("bus-transfer", "supermarket-route"):
+            code, out = run_main(self.args("--task", task, "--dry-run"), self.env, [str(self.tmpdir)])
+            self.assertEqual(code, 2, (task, out))
+            self.assertIn("refused: the hidden verifier or a probe is readable by a run", out)
+            self.assertIn(str(planted), out)
+        self.assertFalse((self.tmpdir / "herd-bench").exists())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -2,6 +2,17 @@
 
 All notable changes to Herd. Versions follow `plugin/.claude-plugin/plugin.json`.
 
+## 0.12.11
+
+Docs in sync with the code, and a small cleanup (issue #59). The owner asked: "In the same PR update docs to make sure is in sync with the code and clean up docs and code". No behaviour change.
+
+- **Fixed (docs):** the README flow diagram says 6 attacks and shows the review after a passing `herd verify`; the slugify example shows real output with the six attacks and `readings`; the commands table names all six attacks and the optional `slug`; the settings table adds the `api/**` medium floor, `path_extensions` and the lint defaults; the install steps no longer add EGM, which the plugin does not use; the Status line no longer quotes a test count; the roadmap says v0.12. `docs/PRD.md`, `CLAUDE.md`, the `herd-reviewer` agent (Sonnet cap, 2-review limit), the run skill's review step (the model `herd status` prints) and the criteria skill's example (`test_budget`, `known_limits`) match the code. Three design docs say which parts are built or superseded.
+- **Fixed (benchmark docs):** a `blocked` leak-audit finding counts as clean; only a read of the verifier, another run or the network voids a run. The text about installs shipping `examples/` and the sandbox launcher being on a branch is updated. No new benchmark numbers.
+- **Fixed:** `herd note`'s usage line lists all six attack names (it listed four).
+- **Removed:** the unused `notes` parameter of `narrowed_claims`, and a stale code comment about attack notes is corrected.
+- **Added:** `tests/test_docs_sync.py` reads the version, the command list, the attack names and the setting defaults from the code and fails when the docs disagree.
+- **Known limits:** the test covers listed facts, not every sentence. Two code messages still say "one tier above" when the builder's model is unknown, without the Sonnet cap; changing them is a behaviour change and was left out.
+
 ## 0.12.10
 
 Installs no longer ship `examples/`. `.claude-plugin/marketplace.json` had `"source": "./"`, so an install copied the whole repository into the plugin cache, including `examples/` (the hidden benchmark verifier and old solutions). The 0.12.1 leak audit found this as a weakness of benchmark runs. Verified live: a fresh install into a temporary `CLAUDE_CONFIG_DIR` before the move held `examples/`, `tests/` and `docs/`; after it holds only `hooks`, `agents`, `skills`, `scripts`, `assets`, `LICENSE` and `NOTICE`, and `tests.test_layout` checks that.

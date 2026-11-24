@@ -18,3 +18,9 @@ if sys.platform == "darwin" and shutil.which("git") == "/usr/bin/git":
         atexit.register(shutil.rmtree, _bin, True)
         os.symlink(real, os.path.join(_bin, "git"))
         os.environ["PATH"] = _bin + os.pathsep + os.environ.get("PATH", "")
+
+
+from scripts import herd  # noqa: E402
+from tests import fastgit  # noqa: E402
+
+fastgit.install(herd)

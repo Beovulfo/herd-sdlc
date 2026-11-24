@@ -1,15 +1,30 @@
-"""Run the full suite once, one process per test module, 6 at a time, and assert it is fast and complete.
+"""Run the full suite once, one process per test class, one per CPU core at a time, and assert it is fast and complete.
 
 Used by the fast-tests task criterion: `python3 tests/check_suite_speed.py`. Not a test module."""
+import os
 import re
 import subprocess
 import sys
 import time
+import unittest
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 
 LIMIT_SECONDS = 30
 MIN_TESTS = 467  # the count before the speed-up
+
+
+def classes():
+    """Every `tests.module.Class` that holds tests, so heavy modules spread over all cores."""
+    found = set()
+
+    def walk(suite):
+        for t in suite:
+            if isinstance(t, unittest.TestSuite):
+                walk(t)
+            else:
+                found.add(f"{type(t).__module__}.{type(t).__name__}")
+    walk(unittest.defaultTestLoader.discover("tests", top_level_dir=".", pattern="test_*.py"))
+    return sorted(found)
 
 
 def run(module):
@@ -20,9 +35,9 @@ def run(module):
 
 
 def main():
-    mods = sorted(f"tests.{p.stem}" for p in Path("tests").glob("test_*.py"))
+    mods = classes()
     start = time.time()
-    with ThreadPoolExecutor(6) as pool:
+    with ThreadPoolExecutor(os.cpu_count() or 6) as pool:
         results = list(pool.map(run, mods))
     wall = time.time() - start
     total = sum(n for _, _, n, _ in results)

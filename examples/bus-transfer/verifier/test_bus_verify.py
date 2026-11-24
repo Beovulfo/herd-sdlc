@@ -7,6 +7,7 @@ import sys
 import tempfile
 import textwrap
 import unittest
+from unittest import mock
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -206,6 +207,11 @@ class TestGenerators(unittest.TestCase):
                 found = sum(bv.oracle_arrival(c, q) is not None for q in c["queries"])
                 self.assertGreaterEqual(found, 2, (tier, fam))
 
+    def test_every_size_gets_the_requested_number_of_seeds(self):
+        with mock.patch.object(bv, "make_case", lambda family, tier, seed: {}):
+            labels = [label for label, _ in bv.make_cases(list(bv.TIERS), ["random"], 2)]
+        self.assertEqual(labels, [f"{tier} random seed {n}" for tier in bv.TIERS for n in (0, 1)])
+
     def test_a_stop_has_one_time_so_a_one_time_timetable_loses_nothing(self):
         for label, c in small_cases():
             for t in c["trips"]:
@@ -283,6 +289,17 @@ class TestProbe(Probe):
         self.assertEqual(res, ["FAILS"] + ["clean error"] * 6)
         self.assertEqual(bp.handled(res), 0)
 
+    def test_non_utf8_output_is_a_failed_scenario_not_an_abort(self):
+        root, mod = self.project()
+        (root / "cli.py").write_text("import sys\nsys.stdout.buffer.write(b'caf\\xe9')\n")
+        res = bp.run_probe(root, mod)
+        self.assertEqual(res, ["FAILS"] + ["garbled"] * 6)
+        self.assertEqual(bp.handled(res), 0)
+        root, mod = self.project(unknown="sys.stderr.buffer.write(b'caf\\xe9'); sys.exit(1)")
+        res = bp.run_probe(root, mod)
+        self.assertEqual(res[bp.SCENARIOS.index("unknown_stop")], "garbled")
+        self.assertEqual(bp.handled(res), 5)
+
     def test_the_probe_scenarios_are_the_six_bad_inputs_of_the_issue(self):
         self.assertEqual(bp.BAD, ["missing_file", "malformed_timetable", "unknown_stop", "empty_network",
                                   "bad_departure", "duplicate_stop_ids"])
@@ -294,6 +311,12 @@ class TestProbe(Probe):
 
 
 class TestBadInput(unittest.TestCase):
+    def test_a_selection_with_no_cases_is_never_a_pass(self):
+        rc, out, err = verify("reference", "--tiers", "M", "--families", "hand")
+        self.assertEqual(rc, 2, out)
+        self.assertIn("no cases ran", err)
+        self.assertNotIn("PASS", out)
+
     def test_verifier_arguments_end_in_one_clear_line_and_exit_2(self):
         for extra, adapter, project in ((["--tiers", "Q"], "reference", HERE), (["--families", "zig"], "reference", HERE),
                                         (["--seeds", "0"], "reference", HERE), (["--limit-scale", "-1"], "reference", HERE),
@@ -373,6 +396,23 @@ class TestCollision(unittest.TestCase):
 
 
 class TestOneBadPart(unittest.TestCase):
+    def test_non_utf8_output_costs_only_its_case(self):
+        body = '''
+            def worker(project, canon):
+                if canon["family"] == "grid":
+                    sys.stdout.buffer.write(b"caf\\xe9")
+                if canon["family"] == "radial":
+                    sys.stderr.buffer.write(b"caf\\xe9")
+                return {"answers": [br.solve(canon, q) for q in canon["queries"]]}
+        '''
+        with tempfile.TemporaryDirectory() as t:
+            rc, out, rows = rows_of(adapter_file(t, body), "--tiers", "S", "--seeds", "1",
+                                    "--families", "grid,radial,random")
+        self.assertEqual(rc, 1, out)
+        self.assertEqual({r["family"]: r["valid"] for r in rows}, {"grid": False, "radial": False, "random": True})
+        self.assertEqual({r["status"] for r in rows if not r["valid"]}, {"bad output: not UTF-8"})
+        self.assertIn("CASES valid 1 of 3", out)
+
     def test_one_crashing_family_costs_only_its_cases(self):
         with tempfile.TemporaryDirectory() as t:
             ad = adapter_file(t, REFERENCE_BODY % 'assert canon["family"] != "grid", "boom"')

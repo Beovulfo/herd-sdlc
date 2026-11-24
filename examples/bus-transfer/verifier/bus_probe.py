@@ -46,14 +46,18 @@ def j(obj):
 
 def classify(sc, argv, cwd, timeout=20):
     try:
-        p = subprocess.run([sys.executable, *argv], cwd=cwd, capture_output=True, text=True, timeout=timeout)
+        p = subprocess.run([sys.executable, *argv], cwd=cwd, capture_output=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         return "HANG"
-    out = p.stdout + p.stderr
+    stdout, stderr = (b.decode("utf-8", errors="replace") for b in (p.stdout, p.stderr))
+    out = stdout + stderr
     if "Traceback" in out:
         return "CRASH"
+    garbled = "\ufffd" in out  # output that is not UTF-8 never counts as handled
     if sc == "normal":
-        return "ok" if p.returncode == 0 and p.stdout.strip() else "FAILS"
+        return "ok" if p.returncode == 0 and stdout.strip() and not garbled else "FAILS"
+    if garbled:
+        return "garbled"
     return "silent" if p.returncode == 0 else "clean error"
 
 

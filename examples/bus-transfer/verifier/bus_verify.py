@@ -239,7 +239,7 @@ def make_cases(tiers, families, seeds):
             if fam == "hand":
                 out += [(f"{tier} hand {c['seed']}", c) for c in hand_cases()] if tier == "S" else []
                 continue
-            for seed in range(seeds if tier in ("S", "M") else 1):
+            for seed in range(seeds):
                 out.append((f"{tier} {fam} seed {seed}", make_case(fam, tier, 7000 + seed)))
     return out
 
@@ -323,12 +323,15 @@ def run_worker(adapter, project, canon, limit):
         t0 = time.time()
         try:
             p = subprocess.run([sys.executable, __file__, "--worker", adapter, str(project), str(cp), str(op)],
-                               capture_output=True, text=True, timeout=limit)
+                               capture_output=True, timeout=limit)
         except subprocess.TimeoutExpired:
             return None, time.time() - t0, "timeout"
         wall = time.time() - t0
+        out, err = (b.decode("utf-8", errors="replace") for b in (p.stdout, p.stderr))
         if p.returncode != 0 or not op.exists():
-            return None, wall, "crash: " + (p.stderr.strip().splitlines() or ["?"])[-1][:100]
+            return None, wall, "crash: " + (err.strip().splitlines() or ["?"])[-1][:100]
+        if "\ufffd" in out + err:
+            return None, wall, "bad output: not UTF-8"
         return json.loads(op.read_text()), wall, "ok"
 
 
@@ -405,7 +408,11 @@ def main(argv=None):
         print(f"bus_verify: {why}", file=sys.stderr)
         return 2
     tiers, fams = a.tiers.split(","), a.families.split(",")
-    rows = [score(a.adapter, a.project, label, canon, a.limit_scale) for label, canon in make_cases(tiers, fams, a.seeds)]
+    cases = make_cases(tiers, fams, a.seeds)
+    if not cases:
+        print("bus_verify: no cases ran: this selection is empty (hand cases belong to tier S only)", file=sys.stderr)
+        return 2
+    rows = [score(a.adapter, a.project, label, canon, a.limit_scale) for label, canon in cases]
     valid = report(rows, tiers, fams)
     if a.json:
         Path(a.json).write_text(json.dumps(rows, indent=1))

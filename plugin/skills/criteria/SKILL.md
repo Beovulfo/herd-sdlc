@@ -22,8 +22,10 @@ A task is done when its criteria pass, proven by commands. Criteria live in `.he
 ## Format
 
 ```toml
-# The request said: "Add a --json flag to the export command. The output must be valid JSON with every row."
+# Request: "Add a --json flag to the export command. The output must be valid JSON with every row."
 goal = "Add a --json flag to the export command"
+test_budget = "..."
+known_limits = "..."
 
 [[inputs]]   # top level; never inside [[criteria]]
 human = "the rows to export"

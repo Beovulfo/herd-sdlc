@@ -1,7 +1,7 @@
 # Herd Quality Checks: verbatim criteria, required fields, inputs, what the reviewer saw
 
 * **Author:** Toni
-* **Status:** Implemented in 0.10.0
+* **Status:** Implemented in 0.10.0. Q5 is partly superseded: since 0.12.8 the reviewer is capped at Sonnet. 0.12.9 added `readings` to Q4.
 * **Date:** 2026-11-24
 
 --------------------------------------------------------------------------------

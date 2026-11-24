@@ -7,7 +7,7 @@ from pathlib import Path
 
 from scripts import herd
 from tests.test_harness_rules import APP_CHECK, NO_INPUTS, REQUEST, TASK, Base
-from tests.test_herd_cli import transcript
+from tests.test_herd_cli import intake_review, transcript
 from tests.test_herd_review import ReviewBase
 
 NARROWED = TASK.replace('text = "It must return 1 for any call"', 'text = "It must return 1 for one call"')
@@ -94,6 +94,7 @@ class TestVerbatimBlock(Base):
         herd.verify(self.root, "t1")  # a note for another id is not this criterion's source
         self.assertIn("C1 is not a verbatim quote", " ".join(herd.problems(self.root, "t1")))
         herd.add_note(self.root, "t1", "human-change", "C1: the human now says “It must return 1 for one call.”")
+        intake_review(self.root)  # the criteria changed: the intake review is needed again (0.11.0)
         ev = herd.verify(self.root, "t1")
         self.assertEqual(ev["human_not_verbatim"], [])
         self.assertEqual(herd.problems(self.root, "t1"), [])  # the freeze accepts the same note
@@ -105,6 +106,7 @@ class TestVerbatimBlock(Base):
         self.attacks_and_review()
         herd.verify(self.root, "t1")
         (self.root / ".herd/tasks/t1/task.toml").write_text(TASK)  # the human's words, after the first verify
+        intake_review(self.root)  # the criteria changed: the intake review is needed again (0.11.0)
         ev = herd.verify(self.root, "t1")
         self.assertEqual((ev["human_changed"], ev["human_not_verbatim"]), ([], []))
         self.assertEqual(herd.problems(self.root, "t1"), [])

@@ -212,7 +212,7 @@ class TestWiringAndStatus(ReviewBase):
             self.assertIn(word, body)
         hooks = json.loads((ROOT / "hooks/hooks.json").read_text())["hooks"]["SubagentStop"]
         self.assertEqual([(e["matcher"], h["command"].rsplit(" ", 1)[-1]) for e in hooks for h in e["hooks"]],
-                         [("^herd:herd-reviewer$", "review-hook")])
+                         [("^herd:herd-reviewer$", "review-hook"), ("^herd:herd-intake-reviewer$", "review-hook")])
         self.assertIn('["review-hook"]', Path(herd.__file__).read_text().split("import hashlib", 1)[0])
 
     def test_status_and_stop_record_name_the_tier(self):
@@ -354,7 +354,8 @@ class TestReviewFindings(ReviewBase):
         self.assertEqual(len(lines), 7)
         review = lines[-1]
         self.assertEqual(review, "Review: claude-sonnet-5-5 (sonnet, builder on haiku; PASS, after 2 rounds "
-                                 "without PASS; ran git diff or git show, read 0 of 1 changed code file): No Blocker or Major.")
+                                 "without PASS; ran git diff or git show, read 0 of 1 changed code file): No Blocker or Major; "
+                                 "intake review: a fresh subagent (opus, builder on opus; PASS): no Blocker or Major.")
         body = herd.pr_body(self.root, "t1")
         self.assertIn("2 review rounds found Blocker or Major issues before the PASS", body)
         self.assertNotIn("\nHERD-REVIEW: PASS", body)

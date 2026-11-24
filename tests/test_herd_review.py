@@ -529,5 +529,56 @@ class TestPassHint(ReviewBase):
         self.assertIsNone(herd.pass_hint(self.root, "t1", ev, herd.load_notes(self.root, "t1")))
         self.assertIn("the code changed after the review, and the risk is high", " ".join(herd.problems(self.root, "t1")))
 
+
+class TestHeadlessSession(ReviewBase):
+    """Issue #40: in a headless `claude -p` run the agent ran `H="python3 .../herd.py"; $H init calc ...`, which the
+    pre-init hook cannot read, so start.json had no session and no review counted until the first Stop block."""
+    INIT = 'H="python3 /p/scripts/herd.py"; $H init calc "Add add(a, b)" --request "r" 2>&1; echo ---'
+
+    def sessions(self):
+        return json.loads((self.root / ".herd/tasks/t1/start.json").read_text()).get("sessions")
+
+    def pre_tool(self, main, **extra):
+        """What Claude Code gives a PreToolUse hook on Bash (and the guard returns None for a harmless command)."""
+        hook = {"session_id": main.stem, "transcript_path": str(main), "cwd": str(self.root), "hook_event_name": "PreToolUse",
+                "tool_name": "Bash", "tool_input": {"command": "git status"}} | extra
+        return herd.guard(self.root, hook)
+
+    def test_the_observed_init_command_is_not_read_by_preinit(self):
+        self.assertIsNone(herd._init_target(self.INIT, self.root))
+
+    def test_the_guard_records_the_main_session(self):
+        self.ready()
+        self.assertIsNone(self.sessions())
+        main = transcript(self.root, "haiku", path=self.root / ".herd" / "logs" / "head.jsonl")
+        self.assertIsNone(self.pre_tool(main))
+        self.assertEqual(self.sessions(), [str(main)])
+        self.assertIsNone(self.pre_tool(main))  # again: recorded once
+        self.assertEqual(self.sessions(), [str(main)])
+        self.review(builder="haiku", reviewer="sonnet", builder_path=main, seen=False)
+        self.assertEqual((self.last()["builder_tier"], self.last()["round"]), ("haiku", True))
+
+    def test_a_subagent_or_odd_input_records_nothing(self):
+        self.ready()
+        main = transcript(self.root, "haiku", path=self.root / ".herd" / "logs" / "head.jsonl")
+        self.pre_tool(main, agent_id="a1")  # a subagent's own tool call
+        for bad in (None, "", 5, ["x"]):
+            herd.guard(self.root, {"cwd": str(self.root), "tool_name": "Bash", "tool_input": {"command": "ls"},
+                                   "transcript_path": bad})
+        herd.guard(self.root, {"cwd": str(self.root), "tool_name": "Bash", "tool_input": {"command": "ls"}})
+        self.assertIsNone(self.sessions())
+
+    def test_a_hand_made_log_still_does_not_count(self):
+        self.ready()
+        fake = transcript(self.root, "haiku", path=self.root / ".herd" / "logs" / "fake.jsonl")
+        self.review(builder="haiku", reviewer="sonnet", builder_path=fake, seen=False)  # nobody recorded it
+        self.assertIsNone(self.last()["builder_tier"])
+        self.assertFalse(self.last()["round"])
+        cmd = f"echo '{{\"transcript_path\": \"{fake}\"}}' | python3 /p/scripts/herd.py guard"
+        main = transcript(self.root, "haiku", path=self.root / ".herd" / "logs" / "head.jsonl")  # the real hook input
+        self.assertEqual(self.pre_tool(main, tool_input={"command": cmd})["hookSpecificOutput"]["permissionDecision"], "deny")
+        self.assertEqual(self.sessions(), [str(main)])  # the path in the command is never taken
+
+
 if __name__ == "__main__":
     unittest.main()

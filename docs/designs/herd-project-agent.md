@@ -1,7 +1,7 @@
 # Herd Project Agent: ground check, learning across tasks, a graph agent that runs the task
 
 * **Author:** Toni
-* **Status:** Draft (nothing here is built; Part B needs the owner's go-ahead before any code)
+* **Status:** Draft. Spike S4 done; nothing else built. The owner approved Part B as the herd-sdlc-engineer's first job.
 * **Date:** 2026-11-24
 
 --------------------------------------------------------------------------------
@@ -90,6 +90,8 @@ Confirm on the current Claude Code and record in `docs/spikes/s4-project-agent.m
 
 Do not guess these (CLAUDE.md, Writing). If one fails, change this design before writing code.
 
+**Result** ([`s4-project-agent.md`](../spikes/s4-project-agent.md), Claude Code 2.1.330): all three hold, with one change to A2. `CLAUDE.md` is loaded by Claude Code itself and recorded as an `instructions` attachment, not a Read, so A2 counts those files as read. `--agent herd:herd-reviewer` and the project `agent` setting both made the plugin agent the main agent, so C3 needs no subagent fallback.
+
 ### Part A: ground check
 
 **A1. What is recorded.** At `herd init`, from the project root, `ground.json` holds:
@@ -101,7 +103,7 @@ Do not guess these (CLAUDE.md, Writing). If one fails, change this design before
 
 Kinds, by path only: `instructions` (`CLAUDE.md`, `AGENTS.md`, `.github/copilot-instructions.md`), `readme` (`README*` at the root), `docs` (`docs/**/*.md`, at most 50, listed not read), `contributing` (`CONTRIBUTING*`), `ci` (`.github/workflows/*.y*ml`, `.gitlab-ci.yml`), `tests` (the top-level test folders `herd detect` already knows). CI commands are the text after `run:` on single-line `run:` entries; multi-line blocks are recorded as the workflow path only. This reads the repository's files, not the agent's text.
 
-**A2. Read check.** At the first `herd verify`, Herd collects the `file_path` of every Read call in the session logs since `herd init` (same walk as `_edited_files`, subagent logs included). An `instructions` or `readme` file not in that set is a warning. Reading through Bash (`cat`) is not seen: a known limit, like `preinit`.
+**A2. Read check.** At the first `herd verify`, Herd collects the `file_path` of every Read call in the session logs since `herd init` (same walk as `_edited_files`, subagent logs included), plus every `files[].path` of an `attachment` line of type `instructions` (how Claude Code records the `CLAUDE.md` files it loads itself, spike S4). An `instructions` or `readme` file not in that set is a warning. Reading through Bash (`cat`) is not seen: a known limit, like `preinit`.
 
 **A3. Suite check.** If neither `ci_commands` nor `detect` is empty and no criterion `check` or attack `check` contains one of those commands as a substring, `herd verify` warns once. Substring on commands, not on prose.
 
@@ -148,15 +150,15 @@ The table is fixed in code. Text is copied from the record, never rewritten. Lin
 
 **C2. The run graph.** The nodes follow the run skill's steps: `stopped` (a `Stopped` record with a `Next`), `ground` (read `ground.json`'s instruction files and `lessons.md`), `route` (quick or standard), `init`, `criteria`, `red`, `gate_high` (gate at high risk), `build`, `break_it`, `review`, `verify`, `pr`, `done`, `report`. Every `check` node names its command, for example `red_ok: {type: check, cmd: "herd verify", expect: "fails", pass: gate_high, fail: criteria}`. The skill keeps only what a graph cannot say, and shrinks by what moves (recurring correction 3 of the engineer agent).
 
-**C3. How a session loads it.** After spike S4: if a plugin agent can be the main agent, the README says `claude --agent <name>` and `herd setup` can offer to write the `agent` setting into the project's `.claude/settings.json` (asked, never silent). If it cannot, `/herd:run` spawns the agent as a subagent and the gates follow "Gates when running as a subagent".
+**C3. How a session loads it.** Spike S4 showed a plugin agent can be the main agent. The README says `claude --agent herd:herd-run`, and `herd setup` can offer to write `{"agent": "herd:herd-run"}` into the project's `.claude/settings.json` (asked, never silent). `/herd:run` in a session on the default agent keeps working from the skill.
 
 **C4. Project knowledge is data.** Herd does not write agent files into the user's repository. The per-project part (ground check, lessons) lives in files the graph agent reads at its `ground` node, so the agent definition stays the plugin's, reviewed and versioned, while the project's knowledge grows.
 
 ## Order
 
-1. Spike S4.
-2. Part A, one release after 0.11.0 (the intake reviewer). Advisory warnings only.
-3. Part B, after the owner approves this design (B1 to B5 in one release).
+1. Spike S4 (done).
+2. Part B first, built by the `herd-sdlc-engineer` agent through its `change.yaml` graph as its first autonomous job (the owner's choice, 2026-11-24). B1 to B5 in one release.
+3. Part A, advisory warnings only, after Part B and the 0.11.0 intake reviewer.
 4. Part C after A and B, with a benchmark leg: the run graph agent against the run skill, same model, same input.
 
 ## Alternatives Considered
@@ -184,7 +186,6 @@ The table is fixed in code. Text is copied from the record, never rewritten. Lin
 
 * That an agent shown lessons repeats fewer mistakes. Measure it: a benchmark of three related tasks in one project, run in order, with the store on and off, 6 runs each, Haiku and Sonnet; compare recurrences (B4), gate blocks, review rounds and hidden-verifier scores, mean and standard deviation.
 * That the read check means the agent used what it read.
-* That a plugin agent can be a session's main agent (spike S4).
 * That a graph agent follows the run flow better than the skill text; Part C ships only after its benchmark leg.
 * That the B2 keys are stable enough across tasks to count a recurrence.
 

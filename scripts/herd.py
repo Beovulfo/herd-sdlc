@@ -2473,6 +2473,8 @@ def gate(root, hook):
     causes = _escalations(root, slug)
     if causes:
         _stop(root, slug, "escalated", "; ".join(causes))
+        if any(c.startswith("review limit") for c in causes):  # the agent must ask, not loop: release the stop
+            return None
     esc = [f"{c}: ask the human one question" for c in causes]
     reason = (f"Herd task `{slug}` is not done ({n + 1}/{MAX_BLOCKS} stop attempts blocked). "
               + "; ".join(probs + esc) + f". Run `{cmd}` after fixing. If you are stuck, ask the human one question and stop."

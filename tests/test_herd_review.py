@@ -196,8 +196,7 @@ class TestVerdict(ReviewBase):
         self.assertFalse(ok)
         self.assertIn("review limit", why)
         ev = herd.verify(self.root, "t1")
-        out = herd.gate(self.root, {})
-        self.assertIn("review limit", out["reason"])
+        self.assertIsNone(herd.gate(self.root, {}))  # releases: the session ends, it does not loop
         rec = json.loads((self.root / ".herd/tasks/t1/stopped.json").read_text())
         self.assertEqual((rec["reason"], rec["resumable"]), ("escalated", False))
         self.assertIn("review limit", rec["next"])
@@ -615,10 +614,6 @@ class TestHeadlessSession(ReviewBase):
         self.assertEqual(self.sessions(), [str(main)])  # the path in the command is never taken
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestReviewLimitAttacks(Base):
     """The break-it pass for the review limit, on notes written straight to the log (no hook run)."""
 
@@ -678,3 +673,7 @@ class TestReviewLimitAttacks(Base):
         notes = herd.load_notes(self.root, "t1")
         self.assertFalse(herd.review_state(self.root, "t1", ev, notes)[0])
         self.assertIn("review limit", herd.review_state(self.root, "t1", ev, notes)[1])
+
+
+if __name__ == "__main__":
+    unittest.main()

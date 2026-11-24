@@ -1,4 +1,4 @@
-# Herd Verify Once: run a slow check once per content, not on every verify
+# Herd Verify Once: fewer full verifies, and a cheap way to run one check
 
 * **Author:** Toni
 * **Status:** Draft
@@ -9,80 +9,89 @@
 
 ## Overview
 
-`herd verify` runs every check on every call and reuses nothing, so a criterion that is the whole repo suite costs the suite on each verify. Herd will time each check. A check whose last real run took `slow_s` seconds or more is a **slow check**. Herd reuses a slow check's passing result while the content is unchanged. While a fast check still fails, it defers the slow check. Otherwise it runs it. A deferred check blocks green and done.
+`herd verify` runs every criterion and attack check and writes the evidence that the gate reads. It recommends two cheap fixes: (A) the run skill asks for a full verify only at fixed points; (B) `herd verify --only <id>` runs one check and writes nothing. The earlier draft's slow-check reuse and defer rules are dropped: on #32 they add nothing to A (Design 4).
 
 **Terms.**
-* Content: what `content_id()` returns, the git tree id of the working tree without `.herd/`. A commit does not change it; any edit does.
-* Task sha: `_task_sha()`, the hash of `task.toml`.
-* Red run: the first verify, recorded in `red.json` ("red first").
-* Green: `green.json`, written when every check first passes.
-* Gate: `problems()`, used by `herd done` and the Stop hook.
+* Criterion: an entry in `task.toml` with an id (`C1`...) and a check. In #32, C4 was the whole suite.
+* Attack: a `tried` note with an `attack` name (from `ATTACKS`) and a `check` command.
+* Gate: `problems()`, behind `herd done` and the Stop hook.
+* Content: `content_id()`, the tree id of the files without `.herd/`; any edit changes it.
+* Red run: the first verify that runs a check, recorded in `red.json`.
+* Fix round: edits after a failed review, then a verify.
 
 ## Problem
 
-* Issue #32's session ran 64 minutes. About 20 of them went to 5 `herd verify` runs, because criterion C4 was the whole suite (`ls tests/test_*.py | ... | xargs -P 6 -n 1 python3 -m unittest`, timeout 900 s). Evidence: `.herd/tasks/speed/evidence.json`, `timing.elapsed_s` 7957 (the wall clock until the session ended).
-* `verify()` calls `run_check()` for each criterion in a loop. Attack commands are deduplicated by `(check, timeout)` within one verify only.
-* Today's workaround is text in spawn requests ("never make the full suite a criterion"): a rule in text, not code, and lost evidence for a project without CI.
+From the #32 session log (agent-kennel `runs/collie/spawn/speed-coding-20261124T164734Z.jsonl`) and each verify's output file:
+
+| Verify | Before it | Took |
+|---|---|---|
+| red | criteria written, no C4 yet | 30 s |
+| 1 | code done, C4 added | 221 s |
+| 2, 3 | fix rounds 1, 2 | 323, 274 s |
+| 4 | one more edit, no review | 273 s |
+| 5 | fix round 3 | 278 s |
+| 11 | notes only, no file edit | at most 376 s |
+| 6 to 10 | fix rounds 4 to 8 | 235, 230, 231, 226, 237 s |
+
+Sum: 2558 s measured plus verify 11: 43 to 49 min. After the red run, every verify had all 5 checks passing. Without C4 a verify takes about 30 s.
 
 ## Goals
 
-* G1: Each result records `duration_s`, `timeout_s`, `content` (taken before it ran), `task_sha` and `ran_at` of its last real run. Deferred and reused results carry them, the exit code and output forward. Check: `test_verify_records_run_fields`.
-* G2: On any verify, a slow check whose last real run passed with the same check, timeout, content and task sha is reused: status `passing`, `reused: true`. Check: `test_slow_reused_after_commit`, `test_slow_rerun_after_edit`.
-* G3: A slow check that cannot be reused is `deferred` while any fast check fails, and runs once every fast check passes. `herd verify --all` runs it in any case. Output line: `C4 deferred (took 240 s): runs when the other checks pass, or with --all`. Check: `test_slow_deferred_while_fast_fails`, `test_slow_runs_when_fast_pass`.
-* G4: The red run runs every check. Check: `test_red_run_runs_all`.
-* G5: A deferred result blocks `green.json` and fails the gate with `C4 deferred: fix the failing checks or run herd verify --all`. Check: `test_deferred_blocks_green_and_done`.
-* G6: A deferred check keeps its `fails.json` count: it neither adds to it nor resets it. Check: `test_deferred_keeps_fail_count`.
-* G7: Attack commands follow the same rule, and `deferred` prints in the CLI, the report and the PR. Check: `test_slow_attack_deferred`, `test_pr_body_shows_deferred`.
+* G1 (A): The run skill asks for a full verify at red, when the work is done, and after each fix round. Check: `test_skill_verify_points` reads step 8 of `skills/run/SKILL.md`.
+* G2 (B): `herd verify --only <id>` takes a criterion id or an attack name (its latest note), runs its check with its timeout, prints `C4 passing (221 s)` or the failure, and exits 0 or 1. It writes nothing under `.herd/`. Check: `test_only_writes_nothing`.
+* G3 (B): A passing `--only` after an edit leaves the gate reporting stale evidence, and the Stop hook still blocks. Check: `test_only_does_not_satisfy_gate`.
+* G4 (B): An unknown id exits 1 and lists the criterion ids and attack names; with no `red.json` it exits 1 and asks for a full verify, so red first holds. Check: `test_only_unknown_id`, `test_only_before_red_refuses`.
 
 ## Non-Goals
 
-* No check relaxed: same commands, same timeouts, same pass rule.
-* No check skipped without proof: done needs every check passing on the current content.
-* Deciding from the command's text whether it is "a whole suite".
-* Running checks in parallel (Alternative 3).
+* No check relaxed: same commands, timeouts and pass rule. The gate still needs evidence whose content matches the files.
+* Deciding from a command's text whether it is a suite.
 
 ## Design
 
-1. `run_check()` also returns the elapsed seconds (`time.monotonic()`).
-2. `verify()` computes `content_id()` once before the checks, for the reuse decision and the per-result `content`. The top-level `content` stays as it is today, measured after the checks, so the review rule (`add_review`, the high-risk content compare) does not change.
-3. For each command, Herd looks up the previous `evidence.json` entry with the same `(check, timeout_s)`. There is no entry at the red run.
-   * No earlier real run, or it took less than `slow_s`: run.
-   * Slow, passed, same content and task sha: reuse.
-   * Slow, not reusable: deferred if a fast check fails and `--all` is not given; run otherwise.
-   * A timed-out check is slow and never reused.
-4. `summary` gains `deferred`. Green requires `deferred == 0`. The CLI status words, the gate's reason map, `pr_body` and `pass_hint` handle it.
-5. `herd.toml`: `[verify] slow_s = 60`. `0` turns the rule off (every check runs, as today).
-6. Docs: README settings table, `herd verify [slug] [--verbose] [--all]` usage, CHANGELOG. No skill text: the builder never has to call `--all`, because the gate's refusal names it.
+1. **(A) Skill text.** Step 8 changes from "Run `herd verify` after every change" to: "Run `herd verify` once the work is done and after each review fix. While working, run only the tests you changed, or `herd verify --only <id>`." Steps 3 and 10 stay. Minimum: red, one after the code, one per fix round. Extra verifies cost time, never correctness.
+2. **(B) `--only`.** Usage: `herd verify [slug] [--verbose] [--only <id>]`; the flag is popped before the slug. `verify(root, slug, only=id)` resolves the id and returns before its first write (legacy `start.json`, `frozen.json`, `red.json`, `fails.json`, `green.json`, `evidence.json`). A timeout prints as failing. The gate reads `evidence.json`, `notes.jsonl` and the file fingerprint, which `--only` never changes, so the gate needs no change.
+3. **How A and B fit.** B is how the builder follows A for one check, with Herd's exact command, timeout and directory (attack checks live in notes). On #32 it saves no time beyond A.
+4. **Slow-check reuse and defer: dropped.** Reuse needs unchanged content: only verify 11 had it, the verify A removes. Defer needs a failing fast check: no verify after the red run had one. So on #32 they add nothing to A. This is one session; a second log could revive them.
+5. Docs: README usage line, step 8, CHANGELOG.
+
+## Saving on #32
+
+| Change | Verifies with C4 | Saved |
+|---|---|---|
+| A | 11 to 9 (after code, 8 fix rounds) | verify 4 (273 s) plus 11 (up to 376 s): 5 to 11 min |
+| B | same | none beyond A |
+| Reuse and defer, on top of A | 9 | 0 |
+| C4 not a criterion (today's spawn rule, text) | 0 | about 37 min (2528 s for verifies 1 to 10, about 300 s without C4) |
+
+After A and B, about 34 min of C4 runs remain (9 verifies); reuse and defer remove none. The 8 fix rounds came from the unknown builder tier, fixed by #42 (`b39b2cd`).
 
 ## Alternatives
 
-| Option | Added time per verify | Saved on #32 (5 verifies, C4 about 4 min each) | Verdict |
-|---|---|---|---|
-| 1. Refuse or warn at `herd check` on a whole-suite criterion; run it once at the final verify | about 0 | up to about 12 min, if detected | Detection reads command text; the #32 `xargs` form dodges a `unittest discover` pattern. |
-| 2. Reuse a passing result while `content_id` is unchanged | about 0 (already computed once per verify) | one run per verify after only a commit or a note | Too little alone; included. |
-| 3. Run independent criteria in parallel | thread start, about 0 | seconds (estimate): C4 already uses 6 processes | Little gain, more CPU contention. |
-| **This design: timing plus reuse plus deferral** | about 0 | about 4-12 min (estimate, see Not proven) | **Recommended** |
+| Option | Saved on #32 | Verdict |
+|---|---|---|
+| 1. Refuse a whole-suite criterion at `herd check` | about 37 min | Reads command text; the #32 `xargs` form dodges a pattern (P5). |
+| 2, 3. Reuse or defer slow checks | 0 beyond A | Dropped (Design 4). |
+| 4. Slow checks run only at the final verify | about 30 min (2034 s in fix rounds, less 8 x 30 s) | Reviews judge evidence without C4. Open Question 2. |
+| **A plus B** | **5 to 11 min** | **Recommended** |
 
 ## Risks
 
-* A slow check fails late in the loop. Mitigation: it runs as soon as the fast checks pass, not only at the end.
-* Reuse trusts `content_id`, which ignores gitignored files and the environment, and can keep a flaky pass. Mitigation: reuse only slow checks; CI reruns the suite.
+* An agent can skip A's text: that costs time, not quality.
 
 ## Open Questions
 
-1. Reuse fast checks too? Saves seconds, widens the `content_id` risk. Proposed: no.
-2. Is 60 s the right `slow_s` default?
-3. Should the PR table show when a reused result really ran?
+1. A only, or A plus B? B adds a flag and four tests, no time saved on #32.
+2. For projects without CI, is Alternative 4 worth its review risk, or is "keep the suite out of criteria" enough?
+3. Should the rule "never make the full suite a criterion" move from spawn's request text into code?
 
 ## Not proven
 
-* The saving: #32 recorded no per-verify durations, so how many verifies had a failing fast check, an edit after green (still a full run) or only a commit is unknown.
-* That the 10-minute docs-only bar of M3 is met: that also depends on the 0.13.1 speed work in #32.
+* M3's 10-minute docs-only bar: it also needs #32's docs-only skip and fewer review rounds.
 
 ## Sources
 
-* `scripts/herd.py`: `verify()`, `run_check()`, `content_id()`, `_task_sha()`, `problems()`, `add_review()`, `DEFAULT_TIMEOUT = 300`. `content_id()` took 67 ms on this repository (5 calls, averaged).
-* `CHANGELOG.md` 0.12.1 and 0.12.2.
-* Issue #39; the #32 evidence `.herd/tasks/speed/evidence.json`.
-* EGM review of the first draft (codebase-details, zoom-out, comprehension).
-* The owner: "PR 32 is running for 60 minutes?? thats way too mucch, root cause analysis of this".
+* `scripts/herd.py` (`verify()`, `problems()`, `main()`, `ATTACKS`); `skills/run/SKILL.md` steps 3, 8, 10.
+* The #32 log; `/tmp/speedbase/verifyN.txt` mtimes.
+* EGM reviews of both drafts.
+* The owner: "What is really doing herd verify ? Do we need to run it more than once per run?"; "remember that Herd is a lean solution, if start getting slow is not going to fit the purpose."

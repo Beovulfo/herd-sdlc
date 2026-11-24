@@ -19,7 +19,7 @@ Hard by design:
 
 - Earliest arrival on a timetable. A static graph search (Dijkstra on stops) is wrong: a bus that has left cannot be taken.
 - Waiting at a stop, trips past midnight (up to 30:00), staying on one bus (no change time) against changing (the minimum applies), trips that overtake each other.
-- Scale: networks of up to 6000 stops and 40000 trips, with a time limit per network.
+- Scale: networks of up to 6000 stops and about 45000 trips, with a time limit per network.
 - A refusal is a claim: "not possible" is accepted only when the oracle finds no journey.
 
 The verifier makes networks from six families (small hand cases, random, grid, radial, clusters with few links, overnight) at sizes S, M, L and XL, with several seeds. Each network has several queries. A case is valid when it finishes in time and every query is right:
@@ -34,6 +34,8 @@ Decisions the verifier makes for the prompt's open words, so any reading is judg
 - One global change time, passed to the adapter in `min_change`. A journey reported one leg per ride or one per stop-to-stop hop is judged the same.
 - A timetable is one service day. A generated query is either solvable that day or has no bus path at all, so it does not matter whether a run lets timetables repeat the next day.
 - "Departure time": leave at or after it.
+- A timetable has one time per stop (arrival equals departure), so a run that stores a single time loses nothing.
+- The probe counts no bad input as handled when the project fails the normal scenario.
 
 The reference solver is a reachability search over waiting and riding. `bus_verify.py reference` must pass every case; `static` (plain Dijkstra on stops, then follow the path) and `nochange` (ignores the change time) must fail the time-dependent and the change cases. `verifier/test_bus_verify.py` checks all three, and checks the oracle, the reference solver and a plain search against each other on generated and purely random networks.
 

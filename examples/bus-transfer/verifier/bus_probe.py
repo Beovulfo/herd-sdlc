@@ -73,7 +73,9 @@ def run_probe(project, mod, timeout=20):
 
 
 def handled(res):
-    """How many of the six bad inputs ended in a clean error (the normal scenario must also be ok)."""
+    """How many of the six bad inputs ended in a clean error; 0 when the normal scenario is not ok."""
+    if res[0] != "ok":
+        return 0
     return sum(r in GOOD[sc] for r, sc in zip(res, SCENARIOS) if sc != "normal")
 
 

@@ -112,9 +112,7 @@ def _add_route(trips, name, seq, rnd, first, last, headway, speed=(2, 9)):
         for j, stop in enumerate(seq):
             if j:
                 t += hop[j - 1] + (rnd.randint(1, 6) if slow else 0)
-            dwell = rnd.choice((0, 0, 1))
-            times.append([stop, t, t + dwell])
-            t += dwell
+            times.append([stop, t, t])  # one time per stop: a timetable with a single time column loses nothing
         if t <= LAST_TIME:
             trips.append({"id": f"{name}.{k}", "route": name, "times": times})
         k += 1
@@ -136,11 +134,13 @@ def _routes_grid(ids, rnd, n_routes):
 
 def _routes_radial(ids, rnd, n_routes):
     hub, rest = ids[0], ids[1:]
-    k = max(3, min(8, len(rest) // 3))
+    k = max(3, len(rest) // 10)  # short spokes, so a trip ends within the day at every size
     spokes = [rest[i::k] for i in range(k)]
     routes = [s[::-1] + [hub] + spokes[(i + 1) % k] for i, s in enumerate(spokes)]
     ring = [s[-1] for s in spokes]
-    return routes + [ring, ring[::-1]]
+    ring.append(ring[0])
+    arcs = [list(dict.fromkeys(ring[i:i + 12])) for i in range(0, len(ring) - 1, 11)]
+    return routes + arcs + [a[::-1] for a in arcs]
 
 
 def _routes_clusters(ids, rnd, n_routes):
@@ -301,13 +301,13 @@ def validate_answer(canon, query, answer, expected):
 
 def check_case(canon, result):
     """None when every query of the case is right, else the first reason."""
-    answers = (result or {}).get("answers")
+    answers = result.get("answers") if isinstance(result, dict) else None
     if not isinstance(answers, list) or len(answers) != len(canon["queries"]):
         return "wrong number of answers"
     for i, (q, ans) in enumerate(zip(canon["queries"], answers)):
         try:
             validate_answer(canon, q, ans, oracle_arrival(canon, q))
-        except (AssertionError, KeyError, TypeError) as e:
+        except Exception as e:  # the answer is untrusted program output: whatever it breaks is a wrong answer
             return f"query {i} ({q['from']} to {q['to']} at {q['depart']}): {type(e).__name__ if not str(e) else e}"
     return None
 

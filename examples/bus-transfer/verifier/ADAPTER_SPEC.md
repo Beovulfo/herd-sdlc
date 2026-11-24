@@ -12,7 +12,8 @@ Called in a fresh process. `sys.path.insert(0, str(project))` and import the pro
 `canon` (the scorer's network; times are whole minutes since midnight and may pass 1440, so 1510 is 01:10 the next day):
 - `stops`: `[[id, name], ...]`
 - `trips`: `[{"id": str, "route": str, "times": [[stop_id, arrival, departure], ...]}, ...]`; one bus run, stops in
-  order, never a stop twice. A route has many trips. Trips may overtake each other.
+  order, never a stop twice. In every generated trip arrival equals departure at each stop, so a project that stores
+  one time per stop takes that one value. A route has many trips. Trips may overtake each other.
 - `min_change`: the minimum minutes between getting off one bus and onto another. Staying on the same bus needs none.
   Pass it to the project however the project takes it (an option, a file field, a constant it exposes).
 - `queries`: `[{"from": stop_id, "to": stop_id, "depart": minutes}, ...]`; leave at or after `depart`.

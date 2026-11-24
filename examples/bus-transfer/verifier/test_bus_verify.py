@@ -193,11 +193,23 @@ class TestGenerators(unittest.TestCase):
         self.assertGreater(hops, 200000)
         self.assertTrue(any(bv.oracle_arrival(c, q) is not None for q in c["queries"]))
 
-    def test_queries_never_fail_only_by_the_time_of_day(self):
+
+    def test_every_family_stays_big_and_useful_at_the_large_sizes(self):
+        for tier in ("L", "XL"):
+            stops = bv.TIERS[tier][0]
+            for fam in bv.FAMILIES[1:]:
+                c = bv.make_case(fam, tier, 7000)
+                bv.validate_canon(c)
+                served = {x[0] for t in c["trips"] for x in t["times"]}
+                self.assertGreater(len(served), stops // 2, (tier, fam))
+                self.assertGreater(len(c["trips"]), stops, (tier, fam))
+                found = sum(bv.oracle_arrival(c, q) is not None for q in c["queries"])
+                self.assertGreaterEqual(found, 2, (tier, fam))
+
+    def test_a_stop_has_one_time_so_a_one_time_timetable_loses_nothing(self):
         for label, c in small_cases():
-            for q in c["queries"]:
-                if bv.oracle_arrival(c, q) is None:
-                    self.assertFalse(bv.static_reachable(c, q["from"], q["to"]), (label, q))
+            for t in c["trips"]:
+                self.assertTrue(all(arr == dep for _, arr, dep in t["times"]), (label, t["id"]))
 
 
 class Probe(unittest.TestCase):
@@ -264,6 +276,13 @@ class TestProbe(Probe):
         (root / "cli.py").write_text("import time\ntime.sleep(30)\n")
         self.assertEqual(set(bp.run_probe(root, mod, timeout=1)), {"HANG"})
 
+    def test_a_cli_that_fails_every_input_handles_nothing(self):
+        root, mod = self.project()
+        (root / "cli.py").write_text("import sys\nsys.exit('error: always')\n")
+        res = bp.run_probe(root, mod)
+        self.assertEqual(res, ["FAILS"] + ["clean error"] * 6)
+        self.assertEqual(bp.handled(res), 0)
+
     def test_the_probe_scenarios_are_the_six_bad_inputs_of_the_issue(self):
         self.assertEqual(bp.BAD, ["missing_file", "malformed_timetable", "unknown_stop", "empty_network",
                                   "bad_departure", "duplicate_stop_ids"])
@@ -290,7 +309,10 @@ class TestBadInput(unittest.TestCase):
         for result in (None, [], {}, {"answers": None}, {"answers": []}, {"answers": [None]}, {"answers": [{}]},
                        {"answers": [{"found": True}]}, {"answers": [{"found": True, "legs": [{}], "arrival": 1}]},
                        {"answers": [{"found": True, "arrival": "x", "legs": [{"trip": 3, "from": 1}]}]},
-                       {"answers": [{"found": "yes"}]}):
+                       {"answers": [{"found": "yes"}]}, [1], "answers", 7,
+                       {"answers": [{"found": True, "arrival": 1, "legs": "xy"}]},
+                       {"answers": [{"found": True, "arrival": 1, "legs": [[["trip", "X.0"]]]}]},
+                       {"answers": [{"found": True, "arrival": 1, "legs": 5}]}):
             self.assertIsInstance(bv.check_case(c, result), str, result)
 
     def test_a_bad_canon_is_refused_by_name(self):

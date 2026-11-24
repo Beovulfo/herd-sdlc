@@ -2,6 +2,13 @@
 
 All notable changes to Herd. Versions follow `.claude-plugin/plugin.json`.
 
+## 0.12.8
+
+The reviewer is capped at Sonnet. The owner asked for it after a workflow review: on the 0.12.1 Haiku benchmark ten reviews gave one real finding and none about lost stores, for 28% of a run's cost, and an Opus review of a Sonnet builder took 1 to 3 minutes a round.
+
+- **Changed:** a review counts when the reviewer is one tier above the builder, capped at `sonnet` (`REVIEW_CAP` in `scripts/herd.py`) and never below the builder's own tier: Haiku builds, Sonnet reviews; Sonnet reviews Sonnet; Opus reviews Opus. `herd status` names Sonnet for a Sonnet builder.
+- **Known limits:** the cap is a constant, not a `herd.toml` setting; custom `[review] tiers` without a `sonnet` tier are capped at their top tier only. No benchmark leg measured this change.
+
 ## 0.12.7
 
 A complexity limit for Herd's own code. The owner asked for a check against spaghetti code; the lean form is the linter Herd already runs in CI.

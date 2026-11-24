@@ -1232,7 +1232,7 @@ def _tier_rule(root, slug, n):
                        "ran no `git diff` or `git show`: spawn herd-reviewer again and have it read the diff")
     if n.get("verdict") != "PASS":
         return False, "the review found Blocker or Major issues, or gave no verdict: fix them and review again"
-    need = min(b + step, len(tiers) - 1)
+    need = _need(tiers, b, step)
     if t < need:
         return False, (f"review by {tiers[t]} does not count: the builder ran on {tiers[b]}, the reviewer must be "
                        f"{tiers[need]} or higher. Spawn herd-reviewer with model {tiers[need]}")
@@ -1252,6 +1252,17 @@ SUMMARY_ONLY = {"--stat", "--shortstat", "--numstat", "--dirstat", "--name-only"
 # `path:line` or `path:first-last` in a report: a path with a file extension or a folder; not a URL, time or C1:2
 REF = re.compile(r"(?<![\w/.:-])(/?(?:[\w.-]+/)*[\w-][\w.-]*\.[A-Za-z]\w*|/?(?:[\w.-]+/)+[\w.-]+):(\d+)(?:-(\d+))?(?![\w-])")
 MAX_REFS = 20
+
+
+REVIEW_CAP = "sonnet"  # 0.12.8, owner: a Sonnet builder gets a Sonnet reviewer, not Opus (low measured review yield)
+
+
+def _need(tiers, b, step):
+    """Index of the lowest reviewer tier that counts for a builder at index b: step tiers above, capped at the top
+    tier and at REVIEW_CAP, but never below the builder's own tier (Opus still reviews Opus)."""
+    top = len(tiers) - 1
+    cap = tiers.index(REVIEW_CAP) if REVIEW_CAP in tiers else top
+    return max(b, min(b + step, top, cap))
 
 
 def review_tiers(root, slug=None):
@@ -1353,7 +1364,7 @@ def review_need(root, slug):
     except OSError:
         since = None
     b, why = builder_tier(log, since, tiers) if isinstance(log, str) else (None, "the builder's model is not known yet")
-    return (tiers[min(tiers.index(b) + step, len(tiers) - 1)], b) if b else (None, why)
+    return (tiers[_need(tiers, tiers.index(b), step)], b) if b else (None, why)
 
 
 def _shows_change(words, cwd):

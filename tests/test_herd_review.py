@@ -93,7 +93,7 @@ class TestTierRule(ReviewBase):
                 for t, reviewer in enumerate(tiers):
                     self.review(builder=builder, reviewer=reviewer)
                     ok, why = self.state()
-                    need = min(b + step, 2)
+                    need = max(b, min(b + step, 1))  # capped at sonnet (0.12.8); opus still reviews opus
                     self.assertEqual(ok, t >= need, (step, builder, reviewer, why))
                     if not ok:
                         self.assertEqual(why, f"review by {reviewer} does not count: the builder ran on {builder}, "
@@ -103,8 +103,10 @@ class TestTierRule(ReviewBase):
         self.review(builder="opus", reviewer="opus")  # the top tier reviews itself
         self.assertTrue(self.state()[0])
         self.assertIn("same tier", herd._review(herd.load_notes(self.root, "t1")))
-        self.review(builder=["haiku", "sonnet", "haiku"], reviewer="sonnet")  # the builder's highest tier counts
+        self.review(builder=["haiku", "sonnet", "haiku"], reviewer="haiku")  # the builder's highest tier counts
         self.assertIn("the builder ran on sonnet", self.state()[1])
+        self.review(builder="sonnet", reviewer="sonnet")  # 0.12.8: the reviewer is capped at sonnet
+        self.assertTrue(self.state()[0])
 
     def test_tier_rule_with_random_tiers(self):
         rng = random.Random(9)

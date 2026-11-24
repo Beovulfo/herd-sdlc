@@ -13,6 +13,17 @@ Faster tests (issue #32). Tests only: nothing under `scripts/`, `hooks/`, `skill
 - **Why not 30 s:** what is left is process starts, not git setup. A test runs `herd verify`, `herd gate` and `herd done` many times; each runs about 5 git commands and each criterion check starts `python3` (about 40 ms here). `test_herd_quality` and `test_herd_review` start 400 to 500 `python3 -c` checks between them. Going lower means changing how Herd calls git or stubbing its checks, which this task excludes (tests only, Herd's behaviour unchanged).
 - **Known limits:** CI runs `unittest discover` in one process, so it does not get the class-level parallelism of `tests/check_suite_speed.py`. The git cache is keyed by file contents, not timestamps, and never caches commands that write.
 
+## 0.12.5
+
+`herd verify` reads git state once (issue #46). Owner: "Why is herd calling git ? I don't get it", "I want it yes", "2" (one git call per verify, keep git's ignore rules).
+
+- **Changed:** `herd verify` started 13 git processes (14 after a commit). It now starts 1: `git status --porcelain=v2 --branch -z --untracked-files=all -- . :!.herd`. HEAD comes from its `# branch.oid` header, the branch from `# branch.head`. The dirty flag, the changed and new files, red first, the risk floor, `fingerprint` and `content_id` all come from that one result. Git's ignore rules still apply, because git does the listing. The project root is found by walking up to `.git`, without `git rev-parse --show-toplevel`. The hints `herd verify` prints reuse the same read.
+- **Two reads kept, because status cannot answer them:** a diff against the start commit once HEAD has moved past it (a verify after a commit starts 2 git processes, shared by `content_id`, red first and the review rule), and `git stash list` in the red run (the first verify of a task).
+- **`content_id` changed meaning:** it is a hash of the files that differ from the start commit (path and content), not a git tree id, which needs `git add` and `git write-tree`. It is still the same before and after a commit and still changes with any edit. `fingerprint` hashes HEAD and every file that differs from it, so a `herd gate` or `herd done` fingerprint check reads git once (their other git calls stay). Evidence and review notes written by 0.12.4 show a different content id and fingerprint once: run `herd verify` again.
+- **Unchanged:** `herd init`, `herd done`, `herd pr` and the hooks keep their own git calls. No check decides differently.
+- **Added:** `tests/test_one_git.py` counts git processes per `herd verify` with a PATH shim that logs each call: 1 with uncommitted work, 2 in the red run, 2 after a commit; and that a commit leaves `content_id` unchanged.
+- **Measured once** (macOS, a clone of this repository, median of 5 runs of `herd verify` with one trivial check): 0.39 s before, 0.12 s after.
+
 ## 0.12.4
 
 Hard cap on review rounds (issue #45). A session ran 8 review rounds on one task ($7.42). Herd capped Stop-gate blocks (`MAX_BLOCKS`) and failing verifies of one criterion (`ESCALATE_AFTER`), but the only limit on reviews was 3 rounds that counted, so reviews by a low tier or without reading the diff never reached it.

@@ -28,7 +28,7 @@ LARGE = ("L", "XL") if FULL else ("L",)
 
 # Each generated network is built once per test process (key: family, size, seed). Tests must not change it.
 build_case = bv.make_case
-bv.make_case = functools.lru_cache(maxsize=None)(build_case)
+bv.make_case = functools.cache(build_case)
 
 
 def verify(adapter, *extra, project=None):

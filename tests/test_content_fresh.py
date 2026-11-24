@@ -142,6 +142,20 @@ class TestFinalCommit(Fresh):
         self.assertIn(new[:7], p.stdout)
         self.assertIn(new[:12], (herd._dir(self.root, "t1") / "evidence.md").read_text())
 
+    def test_verified_head_survives_a_refused_done(self):
+        (self.root / "extra.txt").write_text("x")
+        self.verify()
+        old = self.sha()
+        (herd._dir(self.root, "t1") / "pr").write_text("https://example.com/pr/1\n")
+        self.commit("greet.txt")
+        self.assertEqual(self.herd("done").returncode, 1)
+        T.git(self.root, "add", "extra.txt")
+        T.git(self.root, "commit", "-q", "-m", "rest")
+        (herd._dir(self.root, "t1") / "pr").unlink()
+        self.assertEqual(self.herd("done").returncode, 0)
+        self.assertEqual(self.evidence()["verified_head"], old)
+        self.assertEqual(self.evidence()["head"], self.sha())
+
     def test_partial_commit_with_prs_on_is_refused(self):
         (self.root / "extra.txt").write_text("x")
         self.verify()

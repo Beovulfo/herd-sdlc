@@ -1842,7 +1842,7 @@ def refresh_head(root, slug, ev):
     snap = git_state(root)
     head, dirty = (snap or {}).get("oid") or "none", bool(snap and snap["entries"])
     if head != ev["head"] or dirty != bool(ev.get("dirty")):
-        ev = dict(ev, verified_head=ev["head"], head=head, dirty=dirty)
+        ev = dict(ev, verified_head=ev.get("verified_head", ev["head"]), head=head, dirty=dirty)
         (_dir(root, slug) / "evidence.json").write_text(json.dumps(ev, indent=2))
     return ev
 

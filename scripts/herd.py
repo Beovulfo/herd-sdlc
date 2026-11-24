@@ -428,7 +428,7 @@ def load_task(root, slug):
     return tomllib.loads((_dir(root, slug) / "task.toml").read_text())
 
 
-def validate_task(task):
+def validate_task(task):  # noqa: C901
     errs, seen = [], set()
     if not str(task.get("goal", "")).strip():
         errs.append("goal is empty")
@@ -990,7 +990,7 @@ def verify_only(root, slug, only):
     return False, [f"{only} failing ({secs})", out[-TAIL_CHARS:].rstrip()]
 
 
-def verify(root, slug):
+def verify(root, slug):  # noqa: C901
     task = load_task(root, slug)
     errs = validate_task(task)
     if errs:
@@ -1356,7 +1356,7 @@ def _shows_change(words, cwd):
     return bool({"-p", "-u", "--patch"} & set(words)) or not any(w.split("=", 1)[0] in SUMMARY_ONLY for w in words)
 
 
-def reviewer_saw(root, cwd, lines):
+def reviewer_saw(root, cwd, lines):  # noqa: C901
     """(whether the reviewer ran a git command that prints the change, the files under root it read), from the tool
     calls in its log: Read, and Bash readers such as cat or sed. Shell text is read as the guard reads it."""
     base, diff, read = os.path.realpath(root), False, set()
@@ -1728,7 +1728,7 @@ def _rule_lines(ev, notes):
     return out
 
 
-def report(ev, notes=None):
+def report(ev, notes=None):  # noqa: C901
     s = ev["summary"]
     notes = ev.get("notes") or [] if notes is None else notes
     lines = [f"# Evidence: {ev['task']}", "", f"Goal: {ev['goal']}",
@@ -1820,7 +1820,7 @@ def _stale(root, slug, ev):
     return ev["task_sha"] != _task_sha(root, slug) or ev["fingerprint"] != fingerprint(root)
 
 
-def pr_body(root, slug):
+def pr_body(root, slug):  # noqa: C901
     """The PR description, evidence first: what is proven and by which check, then what is not, then how to re-run."""
     task, ev, notes = load_task(root, slug), load_evidence(root, slug), load_notes(root, slug)
     head = [f"# Evidence: {slug}", "", f"**Goal:** {task['goal']}", ""]
@@ -2065,7 +2065,7 @@ def next_step(probs):
     return f"fix this, then run `herd verify`: {_clip(probs[0], 200)}"
 
 
-def write_stop(root, slug, reason, detail=""):
+def write_stop(root, slug, reason, detail=""):  # noqa: C901
     """Write stopped.json: why the task stopped without `herd done`, what was left, and whether and how it can go on.
     `resumable` and `next` come from problems() and the state files, never from the agent."""
     if reason not in STOP_REASONS:
@@ -2204,7 +2204,7 @@ def guard_config(root):
     return list(GUARD_PATHS) + extra("protected_paths"), list(GUARD_COMMANDS) + extra("deny_commands")
 
 
-def _shell_text(command):
+def _shell_text(command):  # noqa: C901
     """The command without what the shell never runs: `#` comments (a `#` that starts a word outside quotes and
     substitutions, to the end of its line) and heredoc bodies (text such as a commit message). One pass that keeps
     a stack of quotes, `$(...)` and parentheses, so quotes nested in "$(...)" and `<<` in arithmetic are not
@@ -2411,7 +2411,7 @@ def _protected(root, cwd, path, globs):
     return None
 
 
-def guard(root, hook):
+def guard(root, hook):  # noqa: C901
     """PreToolUse hook on Bash and the edit tools. None allows; a dict is the deny output. Only while a task is
     active; each denial is a `guard` note. It reads command text, so bash -c, scripts and aliases pass (a Non-Goal)."""
     if not isinstance(hook, dict):
@@ -2489,7 +2489,7 @@ def guard_line(notes):
 
 # ---- gate -----------------------------------------------------------------
 
-def problems(root, slug):
+def problems(root, slug):  # noqa: C901
     """Reasons the task is not done, from stored evidence. Empty list means done."""
     ev = load_evidence(root, slug)
     if ev is None:
@@ -2682,7 +2682,7 @@ def _opt(args, flag):
     return args[i + 1], args[:i] + args[i + 2:]
 
 
-def main(argv):
+def main(argv):  # noqa: C901
     try:
         root = find_root(Path.cwd())
     except FileNotFoundError:  # the folder was deleted under the process: a hook must still exit 0

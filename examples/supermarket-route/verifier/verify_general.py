@@ -396,7 +396,7 @@ def run_worker(adapter, project, canon, limit):
         return json.loads(op.read_text()), wall, "ok"
 
 
-def main():
+def main():  # noqa: C901
     ap = argparse.ArgumentParser()
     ap.add_argument("adapter")
     ap.add_argument("project")

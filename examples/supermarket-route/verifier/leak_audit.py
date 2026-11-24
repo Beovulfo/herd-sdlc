@@ -34,7 +34,7 @@ def _text(content):
     return " ".join(b.get("text", "") for b in content if isinstance(b, dict)) if isinstance(content, list) else ""
 
 
-def check_settings(path):
+def check_settings(path):  # noqa: C901
     """Findings for isolation settings that are missing or weaker than run_leg.py writes."""
     try:
         s = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -65,7 +65,7 @@ def check_settings(path):
     return [Finding("settings", f"not isolated: {m}", False) for m in missing]
 
 
-def audit(log_path, work, plugin=None, settings=None):
+def audit(log_path, work, plugin=None, settings=None):  # noqa: C901
     settings = settings or Path(work).resolve().parent / "settings.json"
     findings = check_settings(settings)
     calls = {}

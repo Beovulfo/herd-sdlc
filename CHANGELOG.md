@@ -2,6 +2,14 @@
 
 All notable changes to Herd. Versions follow `.claude-plugin/plugin.json`.
 
+## 0.12.7
+
+A complexity limit for Herd's own code. The owner asked for a check against spaghetti code; the lean form is the linter Herd already runs in CI.
+
+- **Added:** `C901` in `ruff.toml` with `max-complexity = 10`, so a new function with more than 10 branches fails `ruff check .` and CI.
+- **Changed:** the 18 existing functions over the limit carry `# noqa: C901` (10 in `scripts/herd.py`, for example `main` at 67, `verify` at 25, `report` at 22). No behaviour changes; the version moves only because a plugin file changed.
+- **Known limits:** the old functions stay complex until someone splits them; the limit applies to Herd's own code, not to the projects Herd builds.
+
 ## Unreleased
 
 Faster tests (issue #32). Tests only: nothing under `scripts/`, `hooks/`, `skills/` or `agents/` changed, so the plugin version is not bumped. The 30 s goal was not reached; the owner accepted about 45 s ("Regarding 32, 45 seconds is fine, let's merge when all green", relayed by Collie), so the suite-speed limit is 50 s (45 s measured plus margin).

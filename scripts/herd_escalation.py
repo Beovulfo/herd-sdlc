@@ -69,7 +69,7 @@ def parse_answer(pairs, causes):
 
 # ---- replay and status ----------------------------------------------------
 
-def replay(events):
+def replay(events):  # noqa: C901
     """Replay events in order into {labels, escalations, blocked_removed_at}."""
     labels, escs, blocked_removed = set(), {}, None
     for e in events:
@@ -124,7 +124,7 @@ def herd_status(state):
     return "held" if held else "running"
 
 
-def apply_command(state, command, is_maintainer, issue=None):
+def apply_command(state, command, is_maintainer, issue=None):  # noqa: C901
     """Return {action, reply}. Non-maintainers and blocked features get no action."""
     none = {"action": None, "reply": ""}
     if not is_maintainer or command is None:

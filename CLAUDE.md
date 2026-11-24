@@ -13,7 +13,7 @@ review the evidence. Requirements: [`docs/PRD.md`](docs/PRD.md). Changes: [`CHAN
 - `examples/supermarket-route/`: the benchmark, with and without Herd.
 
 ## Checks
-- Tests: `python3 -m unittest discover -s tests -t .` (CI runs Python 3.11, 3.12 and 3.13).
+- Tests: `python3 -m unittest discover -s tests -t .` (CI runs Python 3.13).
 - Lint: `ruff check .`
 - Plugin: `claude plugin validate ./`
 

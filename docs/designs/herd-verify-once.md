@@ -1,7 +1,7 @@
 # Herd Verify Once: fewer full verifies, and a cheap way to run one check
 
 * **Author:** Toni
-* **Status:** Draft
+* **Status:** Built in 0.12.3. 0.12.5 replaced the content tree id with a hash of changed files.
 * **Date:** 2026-11-24
 * **Issue:** #39, milestone M3 Fast Herd tasks (0.13.1)
 

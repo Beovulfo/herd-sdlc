@@ -2,13 +2,25 @@
 
 All notable changes to Herd. Versions follow `plugin/.claude-plugin/plugin.json`.
 
+## 0.12.11
+
+Docs in sync with the code, and a small cleanup (issue #59). The owner asked: "In the same PR update docs to make sure is in sync with the code and clean up docs and code". No behaviour change.
+
+- **Changed:** the README is short: what Herd is, the problem, quickstart, one diagram, the main settings and the status. The owner asked: "Hey clean up the README , keep it short . You don't need to put all the details there, move the details to the wiki in GitHub to keep the README focusing on the main points" (relayed by another session). The details moved to GitHub wiki pages, kept outside this repository.
+- **Fixed (docs):** the flow diagram says 6 attacks and shows the review after a passing `herd verify`; the slugify example shows real output with the six attacks and `readings`; the commands table names all six attacks and the optional `slug`; the settings table adds the `api/**` medium floor, `path_extensions` and the lint defaults; the install steps no longer add EGM, which the plugin does not use; the Status line no longer quotes a test count; the roadmap says v0.12. `docs/PRD.md`, `CLAUDE.md`, the `herd-reviewer` agent (Sonnet cap, 2-review limit), the run skill's review step (the model `herd status` prints) and the criteria skill's example (`test_budget`, `known_limits`) match the code. Three design docs say which parts are built or superseded.
+- **Fixed (benchmark docs):** a `blocked` leak-audit finding counts as clean; only a read of the verifier, another run or the network voids a run. The text about installs shipping `examples/` and the sandbox launcher being on a branch is updated. No new benchmark numbers.
+- **Fixed:** `herd note`'s usage line lists all six attack names (it listed four).
+- **Removed:** the unused `notes` parameter of `narrowed_claims`, and a stale code comment about attack notes is corrected.
+- **Added:** `tests/test_docs_sync.py` reads the version, the command list, the attack names and the setting defaults from the code and fails when the docs disagree. The checks of the wiki pages run only when `HERD_WIKI` names a folder with them.
+- **Known limits:** the test covers listed facts, not every sentence. CI does not check the wiki pages. Four code messages in `plugin/scripts/herd.py` still say "one tier above" when the builder's model is unknown, without the Sonnet cap; changing them is a behaviour change and was left out.
+
 ## 0.12.10
 
 Installs no longer ship `examples/`. `.claude-plugin/marketplace.json` had `"source": "./"`, so an install copied the whole repository into the plugin cache, including `examples/` (the hidden benchmark verifier and old solutions). The 0.12.1 leak audit found this as a weakness of benchmark runs. Verified live: a fresh install into a temporary `CLAUDE_CONFIG_DIR` before the move held `examples/`, `tests/` and `docs/`; after it holds only `hooks`, `agents`, `skills`, `scripts`, `assets`, `LICENSE` and `NOTICE`, and `tests.test_layout` checks that.
 
 - **Changed:** the plugin moved into `plugin/` (`git mv`, so history follows): `plugin/.claude-plugin/plugin.json`, `plugin/hooks/`, `plugin/agents/`, `plugin/skills/`, `plugin/scripts/`. The marketplace stays at the repository root with `"source": "./plugin"`. `plugin/assets/icon.png` moved with it, because the manifest's `icon` is relative to the plugin; `assets/make_icon.py` writes it there. `LICENSE` and `NOTICE` are copied into `plugin/`, so an install carries them.
 - **Changed:** `tests/__init__.py` puts `plugin/` on the import path, so tests still `from scripts import herd`. Added `tests/test_layout.py`: marketplace source, no `examples/` in a live install, no `examples/` or `tests/` path named under `plugin/`, version and changelog. CI now also runs `test_run_leg`; the live install test skips itself where the `claude` CLI is missing, as on CI runners. `ruff.toml`, the README, CLAUDE.md and `assets/demo/start.sh` use the new paths. Run `claude plugin validate ./plugin` for the plugin and `claude plugin validate .` for the marketplace.
-- **Changed:** `examples/supermarket-route/verifier/run_leg.py` builds a run's plugin copy from the tag's `plugin/` folder for 0.12.2 and later, and from the whole tree minus `examples/`, `tests/` and `docs/` for older tags. Without this, a 0.12.2 benchmark run would have loaded no plugin.
+- **Changed:** `examples/supermarket-route/verifier/run_leg.py` builds a run's plugin copy from the tag's `plugin/` folder when the tag has one (0.12.10 and later), and from the whole tree minus `examples/`, `tests/` and `docs/` for older tags. Without this, a 0.12.2 benchmark run would have loaded no plugin.
 - **Known limits:** the open branches `herd/focus-review-impl`, `herd/focus-proof` and `herd/speed` must merge `main`; git carries their edits across the move, and `tests/test_herd_focus.py` on those branches needs the new path (`from scripts import herd` works through `tests/__init__.py`, but paths built as `ROOT / "scripts"` do not). `LICENSE` and `NOTICE` now exist twice, at the root and in `plugin/`. The old paths in earlier changelog entries and designs are left as they were.
 
 ## 0.12.9

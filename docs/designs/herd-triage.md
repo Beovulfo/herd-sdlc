@@ -1,7 +1,7 @@
 # Herd Triage
 
 * **Author:** Toni
-* **Status:** Draft
+* **Status:** Built: the CLI uses it for the risk floor; the GitHub parts wait for the automation phase. Kept as written.
 * **Date:** 2026-11-22
 
 --------------------------------------------------------------------------------

@@ -217,7 +217,8 @@ class TestInputsRefused(Base):
         self.assertTrue(probs[0].startswith("`inputs` must be a list of tables: write `[[inputs]]`"), probs)
 
     def test_complete_inputs_pass_and_are_shown_unchanged(self):
-        ev, probs = self.ready(NO_INPUTS + '\n[[inputs]]\nhuman = "a call"\nprogram = "a call, as typed"\n')
+        ev, probs = self.ready(NO_INPUTS + '\n[[inputs]]\nhuman = "a call"\nprogram = "a call, as typed"\n'
+                               'readings = ["typed by hand", "pasted from a file"]\n')  # 0.12.9: 2 readings required
         self.assertEqual(probs, [])
         self.assertEqual(herd.problems(self.root, "t1"), [])
         self.assertIn("Inputs (as you described them -> as the program receives them): a call -> a call, as typed",
@@ -263,6 +264,7 @@ class TestReviewerSaw(ReviewBase):
         return self.state()
 
     def test_a_review_that_saw_nothing_does_not_count(self):
+        self.lift = True
         self.ready()
         for calls in ([], [("Grep", {"pattern": "f"})], [("Bash", {"command": "git diff --stat"})],
                       [("Bash", {"command": "git show --name-only HEAD"})], [("Bash", {"command": "git log -3"})],

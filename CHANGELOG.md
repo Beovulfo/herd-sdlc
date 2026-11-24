@@ -2,7 +2,7 @@
 
 All notable changes to Herd. Versions follow `plugin/.claude-plugin/plugin.json`.
 
-## 0.12.2
+## 0.12.10
 
 Installs no longer ship `examples/`. `.claude-plugin/marketplace.json` had `"source": "./"`, so an install copied the whole repository into the plugin cache, including `examples/` (the hidden benchmark verifier and old solutions). The 0.12.1 leak audit found this as a weakness of benchmark runs. Verified live: a fresh install into a temporary `CLAUDE_CONFIG_DIR` before the move held `examples/`, `tests/` and `docs/`; after it holds only `hooks`, `agents`, `skills`, `scripts`, `assets`, `LICENSE` and `NOTICE`, and `tests.test_layout` checks that.
 
@@ -10,6 +10,90 @@ Installs no longer ship `examples/`. `.claude-plugin/marketplace.json` had `"sou
 - **Changed:** `tests/__init__.py` puts `plugin/` on the import path, so tests still `from scripts import herd`. Added `tests/test_layout.py`: marketplace source, no `examples/` in a live install, no `examples/` or `tests/` path named under `plugin/`, version and changelog. CI now also runs `test_run_leg`; the live install test skips itself where the `claude` CLI is missing, as on CI runners. `ruff.toml`, the README, CLAUDE.md and `assets/demo/start.sh` use the new paths. Run `claude plugin validate ./plugin` for the plugin and `claude plugin validate .` for the marketplace.
 - **Changed:** `examples/supermarket-route/verifier/run_leg.py` builds a run's plugin copy from the tag's `plugin/` folder for 0.12.2 and later, and from the whole tree minus `examples/`, `tests/` and `docs/` for older tags. Without this, a 0.12.2 benchmark run would have loaded no plugin.
 - **Known limits:** the open branches `herd/focus-review-impl`, `herd/focus-proof` and `herd/speed` must merge `main`; git carries their edits across the move, and `tests/test_herd_focus.py` on those branches needs the new path (`from scripts import herd` works through `tests/__init__.py`, but paths built as `ROOT / "scripts"` do not). `LICENSE` and `NOTICE` now exist twice, at the root and in `plugin/`. The old paths in earlier changelog entries and designs are left as they were.
+
+## 0.12.9
+
+A sixth standard attack, `other-reading`. The owner asked for it ("Hey I want to remove the Review and add the attack as proposed by Fable", "let's implement PR1"; this is PR 1 of 2, the review is unchanged) and then asked to add it earlier, when the criteria are written ("Could we add this new attack earlier when the model creates the criteria ?"). A program that serves only the reading of an input its builder chose passes every check the builder wrote.
+
+- **Added:** `other-reading` in `ATTACKS`: each input, generated in every way a person could read the human's words for it by code that calls no project code, is served without the caller choosing or preparing anything. The five existing checks apply to it unchanged. `n/a:` is refused while the task lists any `[[inputs]]` entry. The first-verify question and the late-log warning now cover both `refusal` and `other-reading` (`FIRST_VERIFY_ATTACKS`).
+- **Added:** each `[[inputs]]` entry takes `readings = ["...", "..."]`. `herd check` warns and, at medium and high risk on the standard route, `herd done` refuses an entry with fewer than 2 readings. Only list items are counted, never their wording. The report shows the readings next to the input. Low risk and the quick route are exempt.
+- **Added:** `skills/run/adversarial.md`, `skills/run/SKILL.md`, `skills/criteria/SKILL.md` and the README say six attacks and describe the new one. The attack section of `problems()` moved into `attack_problems()`.
+- **Known limits:** Herd enforces that the command exists, runs project code and passes, and that 2 readings are listed; not that the readings are honest. An agent can write `inputs = []` and then `n/a:`.
+
+## 0.12.8
+
+The reviewer is capped at Sonnet. The owner asked for it after a workflow review: on the 0.12.1 Haiku benchmark ten reviews gave one real finding and none about lost stores, for 28% of a run's cost, and an Opus review of a Sonnet builder took 1 to 3 minutes a round.
+
+- **Changed:** a review counts when the reviewer is one tier above the builder, capped at `sonnet` (`REVIEW_CAP` in `scripts/herd.py`) and never below the builder's own tier: Haiku builds, Sonnet reviews; Sonnet reviews Sonnet; Opus reviews Opus. `herd status` names Sonnet for a Sonnet builder.
+- **Known limits:** the cap is a constant, not a `herd.toml` setting; custom `[review] tiers` without a `sonnet` tier are capped at their top tier only. No benchmark leg measured this change.
+
+## 0.12.7
+
+A complexity limit for Herd's own code. The owner asked for a check against spaghetti code; the lean form is the linter Herd already runs in CI.
+
+- **Added:** `C901` in `ruff.toml` with `max-complexity = 10`, so a new function with more than 10 branches fails `ruff check .` and CI.
+- **Changed:** the 18 existing functions over the limit carry `# noqa: C901` (10 in `scripts/herd.py`, for example `main` at 67, `verify` at 25, `report` at 22). No behaviour changes; the version moves only because a plugin file changed.
+- **Known limits:** the old functions stay complex until someone splits them; the limit applies to Herd's own code, not to the projects Herd builds.
+
+## Unreleased
+
+Faster tests (issue #32). Tests only: nothing under `scripts/`, `hooks/`, `skills/` or `agents/` changed, so the plugin version is not bumped. The 30 s goal was not reached; the owner accepted about 45 s ("Regarding 32, 45 seconds is fine, let's merge when all green", relayed by Collie), so the suite-speed limit is 50 s (45 s measured plus margin).
+
+- **Done:** each test class builds one template git repository and each test copies it (`shutil.copytree`) instead of five git commands in `setUp` (`tests/test_herd_cli.py`, `tests/test_harness_rules.py`). 20 `python3 scripts/herd.py` subprocess call sites in those two files now call `herd.main(argv)` in process through `run_herd` (captured stdout, stderr, exit code). Test count and assertions are unchanged: 467 tests before; 470 after, with 3 new tests for the git cache in `tests/test_fastgit.py`.
+- **End-to-end tests that keep a real process:** `TestCli.run_cli` in `tests/test_herd_cli.py` (init, status, done, gate, triage, usage and help), `test_gate_reads_hook_json_from_stdin`, the `preinit` hook tests in `test_harness_rules` (the fast path at import is under test), the env tests, the concurrency tests, the old-Python tests, and every subprocess hook test in `tests/test_herd_guard.py`, `tests/test_herd_lint.py` and `tests/test_herd_review.py`.
+- **Added:** `tests/__init__.py` puts the real git first on PATH on macOS, where `/usr/bin/git` is a shim that costs about 20 ms per call instead of 7 ms. `tests/fastgit.py` answers repeated read-only git calls (`rev-parse`, `diff`, `ls-files`, `status`, `stash list`) from a cache keyed by a hash of the git directory and working tree, so any change gives a real git call. `tests/check_suite_speed.py` runs the whole suite once, one process per test class, and asserts time and count.
+- **Measured** (macOS, 10 cores, a corporate security agent that slows every process start; machine load varied, so treat as about +/- 15%). Each file, run alone, before then after: `test_herd_cli` 179 tests 128 s then 43 s; `test_harness_rules` 91 tests 120 s then 44 s; `test_herd_quality` 40 tests 77 s then 36 s; `test_herd_review` 32 tests 89 s then 43 s; `test_herd_guard` 30 tests 11 s then 7 s; `test_herd_lint` 17 tests 2.6 s then 2.0 s; the other four old files and `test_fastgit` under 0.1 s. Full suite (470 tests): several minutes (module by module, 6 at a time, 7 min with one `herd verify`) then 43 to 45 s wall with `tests/check_suite_speed.py`.
+- **Why not 30 s:** what is left is process starts, not git setup. A test runs `herd verify`, `herd gate` and `herd done` many times; each runs about 5 git commands and each criterion check starts `python3` (about 40 ms here). `test_herd_quality` and `test_herd_review` start 400 to 500 `python3 -c` checks between them. Going lower means changing how Herd calls git or stubbing its checks, which this task excludes (tests only, Herd's behaviour unchanged).
+- **Known limits:** CI runs `unittest discover` in one process, so it does not get the class-level parallelism of `tests/check_suite_speed.py`. The git cache is keyed by file contents, not timestamps, and never caches commands that write.
+
+## 0.12.6
+
+Evidence stays fresh across a commit (issue #50, milestone M3 Fast Herd tasks). Owner: "Run 1 and 2" (proposal 2 of the workflow review).
+
+- **Why:** `fingerprint` hashes HEAD, so a plain commit made the evidence stale and `herd done` refused until one more full `herd verify`, although run skill step 7 says "commit and run `herd done`".
+- **Changed:** freshness is decided by content. The evidence is stale when `task.toml` changed; otherwise, when it holds `content` and the content id can be computed, only when the two differ (a commit moves HEAD but not the files); otherwise the old fingerprint decides (outside git, or evidence without a content id). `herd gate`, `herd done` and `herd pr` use one `_stale`, and verify and `_stale` share one helper for the content id. When HEAD or the dirty flag differ from the evidence, `herd done` and `herd pr` record the current ones as `head` and `dirty`, keep the old head as `verified_head`, so the final report, the report and the PR description name the final commit. Messages no longer say to run `herd verify` after a commit. `fingerprint` is still written.
+- **Unchanged:** any edit is stale (also an amend, a reset or a checkout to other content, and a `task.toml` edit); `herd done` still refuses uncommitted work when pull requests are on; the review rule; `herd verify --only` writes nothing; no check is skipped.
+- **Known limits:** the freshness check adds one `git diff` when HEAD moved past the start commit. Outside git an edit to a file is not seen (it never was: only a `task.toml` edit is stale there). A commit with a different message or an empty commit is fresh, since only content counts.
+
+## 0.12.5
+
+`herd verify` reads git state once (issue #46). Owner: "Why is herd calling git ? I don't get it", "I want it yes", "2" (one git call per verify, keep git's ignore rules).
+
+- **Changed:** `herd verify` started 13 git processes (14 after a commit). It now starts 1: `git status --porcelain=v2 --branch -z --untracked-files=all -- . :!.herd`. HEAD comes from its `# branch.oid` header, the branch from `# branch.head`. The dirty flag, the changed and new files, red first, the risk floor, `fingerprint` and `content_id` all come from that one result. Git's ignore rules still apply, because git does the listing. The project root is found by walking up to `.git`, without `git rev-parse --show-toplevel`. The hints `herd verify` prints reuse the same read.
+- **Two reads kept, because status cannot answer them:** a diff against the start commit once HEAD has moved past it (a verify after a commit starts 2 git processes, shared by `content_id`, red first and the review rule), and `git stash list` in the red run (the first verify of a task).
+- **`content_id` changed meaning:** it is a hash of the files that differ from the start commit (path and content), not a git tree id, which needs `git add` and `git write-tree`. It is still the same before and after a commit and still changes with any edit. `fingerprint` hashes HEAD and every file that differs from it, so a `herd gate` or `herd done` fingerprint check reads git once (their other git calls stay). Evidence and review notes written by 0.12.4 show a different content id and fingerprint once: run `herd verify` again.
+- **Unchanged:** `herd init`, `herd done`, `herd pr` and the hooks keep their own git calls. No check decides differently.
+- **Added:** `tests/test_one_git.py` counts git processes per `herd verify` with a PATH shim that logs each call: 1 with uncommitted work, 2 in the red run, 2 after a commit; and that a commit leaves `content_id` unchanged.
+- **Measured once** (macOS, a clone of this repository, median of 5 runs of `herd verify` with one trivial check): 0.39 s before, 0.12 s after.
+
+## 0.12.4
+
+Hard cap on review rounds (issue #45). A session ran 8 review rounds on one task ($7.42). Herd capped Stop-gate blocks (`MAX_BLOCKS`) and failing verifies of one criterion (`ESCALATE_AFTER`), but the only limit on reviews was 3 rounds that counted, so reviews by a low tier or without reading the diff never reached it.
+
+- **Why:** the owner asked for the simplest workflow: a lean tool must stop a review loop in code, not in advice.
+- **Added:** `MAX_REVIEW_ROUNDS = 2`, no setting. Every reviewer run the hook recorded since the last PASS that counts is one, whether or not it counted as a round. At 2, `herd verify` and `herd review-brief` print `review limit reached` with the open Blocker and Major lines of the last review and say to stop and ask the human (`review-brief` prints no brief and exits 1). The hook still records a further review but marks it `over_cap`, so it cannot pass the task or reset the count. The Stop gate releases with the existing `escalated` stop reason.
+- **Added:** a human lifts the limit with `herd note --decision "Review limit: <what the human said>"`. A decision note that starts with `Review limit` resets the count; other decision notes do not.
+- **Changed:** this replaces the old escalation after 3 counting rounds. The run skill says to stop and ask at 2 reviews without a PASS.
+- **Known limits:** the agent can write the reset note itself; Herd does not check who wrote it. The count reads `notes.jsonl`, which a hand edit can change. Only reviews the hook recorded count. A review that fails to record (an error in the hook) is not counted.
+
+## 0.12.3
+
+A full `herd verify` now runs at fixed points, and `herd verify --only <id>` runs one check for the builder in between (issue #39, design `docs/designs/herd-verify-once.md`). In the #32 session a whole-suite criterion ran in 9 of 11 verifies at 4 to 5 minutes each.
+
+- **Why:** `herd verify` runs every criterion and attack and writes the evidence the gate reads, so it is the wrong tool to call after every edit. The owner asked: "Do we need to run it more than once per run?" and asked to keep the workflow simple.
+- **Added:** `herd verify --only <id>` takes a criterion id or an attack name (its latest note), runs that command with its timeout and prints `C1 passing (221 s)` or the failure; exit 0 or 1. It writes nothing under `.herd/` (no `evidence.json`, `evidence.md`, `green.json`, `fails.json`), so the gate and the Stop hook never see it and stale evidence stays stale. An unknown id lists the ids; before the red run it refuses and asks for a full verify, so red first holds. Tests: `TestVerifyOnly`.
+- **Changed:** run skill step 8 said "Run `herd verify` after every change". It now says to run it once the work is done and after each review fix, and to run only the changed tests or `--only <id>` while working. Steps 3 and 10 are unchanged. The skill stays within its 845-word budget (844 words): two short phrases elsewhere were cut for room ("otherwise work in short steps yourself" in step 5, "Code written earlier is flagged" in step 3; the README still documents the flag).
+- **Known limits:** the saving (5 to 11 minutes on #32) is measured on one session log, and the skill text is advice an agent can ignore: that costs time, never correctness. `--only` does not reuse or defer slow checks (dropped in the design). A whole-suite criterion still runs in every full verify.
+
+## 0.12.2
+
+Reviews now count in headless `claude -p "/herd:run ..."` sessions (issue #40). Before, every review note had `builder_tier` null and `round` false, with the reason "the main session log is not one Herd saw", so the builder reran reviews and tasks took an hour.
+
+- **Why:** the review hook counts a review only when the main session log is one Herd recorded. Only the pre-init hook (right before `herd init`) and the Stop gate recorded it. A real headless run showed the first failed: the agent ran `H="python3 .../herd.py"; $H init calc ...`, and the hook reads the command text, so it cannot see through the variable. `start.json` then had no `sessions` until the first Stop block, which comes after the review. A run that happened to write the literal `herd.py init` was fine, so the bug looked random.
+- **Fixed:** the guard hook (PreToolUse, Bash and edit tools) now records the session log from Claude Code's own hook input on every call while a task is active, through the same `_see_session` the Stop gate uses. The first tool call after `herd init` records it, long before a review. A subagent's call (it has an `agent_id`) records nothing.
+- **Kept:** the trust rule. Only a session recorded from Claude Code's own hook input counts. `herd guard` and `herd gate` run by hand are denied by the guard when written out as `herd.py guard`, and no path in a command or a note is ever read as a session.
+- **Added:** `tests/headless_check.py`, a real headless run (about $0.10) that exits 0 only when a review note shows a builder tier and round true. It is a criterion check, not a unittest.
+- **Known limits:** the session is recorded at the first Bash or edit tool call after `herd init`; a review spawned before any such call would not count. Through an alias (`$H guard`) the denial does not see the command, as before (aliases are a stated Non-Goal of the guard). A Claude Code version that omits `transcript_path` from PreToolUse input records nothing, and the review then does not count. The real run depends on the model, so one failure is rerun once before it is called a bug.
 
 ## 0.12.1
 

@@ -140,7 +140,7 @@ def start(cmd, run_dir, log, err, env):
                                 stdout=out, stderr=errf, start_new_session=True)
 
 
-def run(argv, env=None, scan_dirs=None):
+def run(argv, env=None, scan_dirs=None):  # noqa: C901
     env = dict(os.environ if env is None else env)
     ns = parse(argv)
     if ns.selftest:

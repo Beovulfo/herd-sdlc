@@ -63,6 +63,7 @@ if sys.argv[1:2] == ["guard"]:  # the PreToolUse guard runs before every Bash co
     if _found is None:
         sys.exit(0)
 
+import contextlib
 import fnmatch
 import hashlib
 import json
@@ -71,7 +72,7 @@ import re
 import shlex
 import shutil
 import subprocess
-import tempfile
+import time
 import tomllib
 import unicodedata
 from datetime import datetime, timezone
@@ -151,10 +152,16 @@ ATTACKS = {"bad-input": "bad input at every entry point ends in a clear message,
            "recount": "every reported number recomputed from the output with separate code, on the generated and "
                       "collision inputs too",
            "refusal": "every kind of input the program refuses (cannot be reached, not found, invalid) is confirmed "
-                      "refusable by separate, simpler code on generated inputs, so nothing it could serve is refused"}
+                      "refusable by separate, simpler code on generated inputs, so nothing it could serve is refused",
+           "other-reading": "each input, generated in every way a person could read the human's words for it, by code "
+                            "that calls no project code, is served without the caller choosing or preparing anything"}
 REFUSAL_FIRST = ("no refusal attack yet: before building, list what the program will refuse (cannot be reached, "
                  "not found, invalid) and log `herd note --tried --attack refusal --check \"<command>\"` with "
                  "separate code; it should fail now")
+OTHER_READING_FIRST = ("no other-reading attack yet: before building, name at least two readings of the human's words "
+                       "for each input and log `herd note --tried --attack other-reading --check \"<command>\"` with "
+                       "code that calls no project code; it should fail now (`n/a:` only when the task has no inputs)")
+FIRST_VERIFY_ATTACKS = (("refusal", REFUSAL_FIRST), ("other-reading", OTHER_READING_FIRST))
 # at medium and high risk on the standard route `herd done` refuses while one is empty; what to write, for the message
 REQUIRED = {"test_budget": "<what is tested and what is not, at which level>",
             "known_limits": "<when the claim may fail or has not been shown>"}
@@ -311,7 +318,14 @@ def find_root(path):
 
     A project in a subfolder of a repository (a monorepo package) keeps its own `.herd/`.
     """
-    path, top = Path(path).resolve(), toplevel(path).resolve()
+    path = Path(path).resolve()
+    plain = not (os.environ.get("GIT_DIR") or os.environ.get("GIT_WORK_TREE"))
+    for d in (path, *path.parents):
+        if (d / ".herd").is_dir() or (d / "herd.toml").is_file():
+            return d
+        if plain and (d / ".git").exists():  # the work tree root: no git process needed to find it
+            return d
+    top = toplevel(path).resolve()  # not found by walking up (git environment variables, bare setups)
     for d in (path, *path.parents):
         if (d / ".herd").is_dir() or (d / "herd.toml").is_file():
             return d
@@ -420,7 +434,7 @@ def load_task(root, slug):
     return tomllib.loads((_dir(root, slug) / "task.toml").read_text())
 
 
-def validate_task(task):
+def validate_task(task):  # noqa: C901
     errs, seen = [], set()
     if not str(task.get("goal", "")).strip():
         errs.append("goal is empty")
@@ -551,10 +565,17 @@ def length_warnings(task):
     return out
 
 
+def _readings(x):
+    """The `readings` of one input: its list items, never read for wording (anything but a list counts as none)."""
+    r = x.get("readings")
+    return [str(i).strip() for i in r] if isinstance(r, list) else []
+
+
 def inputs_line(inputs):
     """`Inputs: <as the human described it> -> <as the program receives it>`, for the human to compare."""
     return "Inputs (as you described them -> as the program receives them): " + "; ".join(
-        f"{str(x.get('human', '?')).strip()} -> {str(x.get('program', '?')).strip()}" for x in inputs if isinstance(x, dict))
+        f"{str(x.get('human', '?')).strip()} -> {str(x.get('program', '?')).strip()}"
+        + (f" (readings: {'; '.join(_readings(x))})" if _readings(x) else "") for x in inputs if isinstance(x, dict))
 
 
 INPUTS_TABLE = ('`[[inputs]]`, `human = "<the input as the human described it>"`, `program = "<the input as the '
@@ -577,17 +598,26 @@ def input_warnings(task):
         return out + [f"`inputs` must be a list of tables: write {INPUTS_TABLE}"]
     bad = [i for i, x in enumerate(ins, 1) if not (isinstance(x, dict) and str(x.get("human", "")).strip()
                                                     and str(x.get("program", "")).strip())]
-    return out + [f"inputs #{i}: give `human` (the input as the human described it) and `program` (as the program "
-                  "receives it)" for i in bad]
+    out += [f"inputs #{i}: give `human` (the input as the human described it) and `program` (as the program "
+            "receives it)" for i in bad]
+    return out + [f"inputs #{i}: `readings` needs at least 2 items, the ways a person could read the human's words "
+                  f"for it, such as `readings = [\"<one reading>\", \"<another>\"]`" for i, x in enumerate(ins, 1)
+                  if i - 1 not in [b - 1 for b in bad] and len(_readings(x)) < 2]
 
 
 def refusal_late(root, slug, red):
-    """The refusal attack first logged after the first verify (by note order, not by time): it did not shape the design."""
-    notes = load_notes(root, slug)
-    i = next((i for i, n in enumerate(notes) if n["kind"] == "tried" and n.get("attack") == "refusal"), None)
-    if i is None or not red or not isinstance(red.get("notes"), int) or i < red["notes"]:
+    """The refusal and other-reading attacks first logged after the first verify (by note order, not by time):
+    they did not shape the design."""
+    if not red or not isinstance(red.get("notes"), int):
         return []
-    return ["refusal attack was logged after the first verify, so it did not shape the design: log it before building"]
+    notes = load_notes(root, slug)
+    out = []
+    for name, _ in FIRST_VERIFY_ATTACKS:
+        i = next((i for i, n in enumerate(notes) if n["kind"] == "tried" and n.get("attack") == name), None)
+        if i is not None and i >= red["notes"]:
+            out.append(f"{name} attack was logged after the first verify, so it did not shape the design: "
+                       "log it before building")
+    return out
 
 
 def coverage_warnings(task):
@@ -714,37 +744,154 @@ def _git(root, *args):
     return p.stdout if p.returncode == 0 else b""
 
 
-def fingerprint(root):
-    """Hash of HEAD, tracked changes and untracked file contents, ignoring .herd/."""
+EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+_once = None  # {root: state} while one command reads git state once (see git_state_once)
+
+
+def _prefix(root):
+    """The folder of root inside its work tree ("" at the top, else "pkg/"), the way `git status` names paths."""
+    root = Path(root).resolve()
+    if not (os.environ.get("GIT_DIR") or os.environ.get("GIT_WORK_TREE")):
+        for d in (root, *root.parents):
+            if (d / ".git").exists():
+                rel = root.relative_to(d).as_posix()
+                return "" if rel == "." else rel + "/"
+    return _git(root, "rev-parse", "--show-prefix").decode().strip()
+
+
+def _read_status(root):
+    """Git state from one `git status --porcelain=v2 --branch -z --untracked-files=all` call (this checkout's work
+    only, never .herd/): {"oid": HEAD or None, "branch": name, "entries": [(xy, mH, mW, hH, path, from_path)],
+    "diffs": {}}. Paths are relative to root. None when git cannot answer (not a repository)."""
+    out = _git(root, "status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all", "--", *OWN_FILES)
+    if not out:  # even a clean repository prints its branch lines
+        return None
+    prefix, items = _prefix(root), out.decode(errors="surrogateescape").split("\0")
+    snap, i = {"oid": None, "branch": "", "entries": [], "diffs": {}}, 0
+    while i < len(items):
+        item, i = items[i], i + 1
+        if item.startswith("# branch.oid "):
+            snap["oid"] = None if item.endswith("(initial)") else item[13:]
+            continue
+        elif item.startswith("# branch.head "):
+            snap["branch"] = item[14:]
+            continue
+        elif item[:2] in ("1 ", "2 ", "u "):
+            f = item.split(" ", {"1": 8, "2": 9, "u": 10}[item[0]])
+            orig = None
+            if item[0] == "2":
+                orig, i = items[i], i + 1
+            e = ((f[1], f[3], f[5], f[6], f[8], orig) if item[0] == "1" else (f[1], f[3], f[5], f[6], f[9], orig)
+                 if item[0] == "2" else (f[1], f[3], f[6], None, f[10], None))  # unmerged: always counts as changed
+        elif item.startswith("? "):
+            e = ("??", None, None, None, item[2:], None)
+        else:
+            continue
+        snap["entries"].append(tuple(x[len(prefix):] if k >= 4 and x and x.startswith(prefix) else x
+                                     for k, x in enumerate(e)))
+    return snap
+
+
+def git_state(root, fresh=False):
+    """The git state of root, read with one `git status` call. Inside git_state_once the first read is kept for the
+    rest of the command; fresh=True reads again (after checks changed files)."""
+    key = str(root)
+    if _once is not None and not fresh and key in _once:
+        return _once[key]
+    snap = _read_status(root)
+    if _once is not None:
+        _once[key] = snap
+    return snap
+
+
+@contextlib.contextmanager
+def git_state_once():
+    global _once
+    saved, _once = _once, {}
+    try:
+        yield
+    finally:
+        _once = saved
+
+
+def _differs(root, entry):
+    """Whether a status entry's working file differs from HEAD (a change staged and then undone does not)."""
+    _xy, mH, mW, hH, path, orig = entry
+    if hH is None or orig:  # unmerged, or renamed: HEAD's blob is the old path's
+        return True
+    p = Path(root) / path
+    try:
+        data = os.readlink(p).encode() if p.is_symlink() else p.read_bytes()
+    except OSError:
+        return True  # deleted, or a submodule folder
+    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest() != hH or mW != mH
+
+
+def _since(root, base, snap):
+    """Paths (relative to root, deleted ones included) that differ from commit or tree `base`, tracked or new;
+    None when that cannot be told. A diff against another commit than HEAD is the one thing status cannot answer."""
+    if not base or snap is None:
+        return None
+    base = snap["oid"] if base == "HEAD" else base
+    if base is not None and base == snap["oid"]:
+        names = {x for e in snap["entries"] if _differs(root, e) for x in (e[4], e[5]) if x}
+    else:
+        if base not in snap["diffs"]:
+            p = subprocess.run(["git", "diff", "-z", "--name-only", "--relative", "--no-renames", base or EMPTY_TREE],
+                               cwd=root, capture_output=True)
+            snap["diffs"][base] = None if p.returncode else set(p.stdout.decode(errors="surrogateescape").split("\0"))  # -z: names are never quoted
+        if snap["diffs"][base] is None:
+            return None
+        names = snap["diffs"][base] | {e[4] for e in snap["entries"] if e[0] == "??"}
+    return sorted(x for x in names if x and not x.startswith(".herd/"))
+
+
+def _file_bytes(root, name):
+    """Mode and content of a working file, or a marker when it is gone."""
+    try:
+        p = Path(root) / name
+        st = p.lstat()
+        return b"%o\0" % (st.st_mode & 0o111) + (os.readlink(p).encode() if p.is_symlink() else p.read_bytes())
+    except OSError:
+        return b"gone"
+
+
+def fingerprint(root, snap=False):
+    """Hash of HEAD and of every file that differs from it, tracked or new, ignoring .herd/."""
+    snap = git_state(root) if snap is False else snap
     h = hashlib.sha1()
-    h.update(_git(root, "rev-parse", "HEAD"))
-    h.update(_git(root, "diff", "HEAD", "--", *OWN_FILES))
-    for name in sorted(_git(root, "ls-files", "--others", "--exclude-standard", "--", *OWN_FILES).decode().splitlines()):
-        h.update(name.encode())
-        try:
-            h.update((Path(root) / name).read_bytes())
-        except OSError:
-            pass
+    if snap is None:
+        return h.hexdigest()
+    h.update((snap["oid"] or "none").encode())
+    for e in sorted(snap["entries"], key=lambda e: e[4]):
+        if _differs(root, e):
+            h.update(b"\0" + e[4].encode(errors="surrogateescape") + b"\0" + (e[2] or "").encode()
+                     + _file_bytes(root, e[4]))
     return h.hexdigest()
 
 
-def content_id(root):
-    """Git tree id of the working tree's content, ignoring .herd/: the same before and after a commit."""
-    index = _git(root, "rev-parse", "--git-path", "index").decode().strip()
-    if not index:
+def content_id(root, base=None, snap=False):
+    """Hash of the work done since commit `base` (the task's start commit): every file that differs from it, with
+    its content. The same before and after a commit, since a commit moves HEAD but not the files. None outside git."""
+    snap = git_state(root) if snap is False else snap
+    if snap is None:
         return None
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp_index = Path(tmp) / "index"
-        try:
-            shutil.copy(Path(root) / index, tmp_index)  # reuses git's file cache: only changed files are hashed
-        except OSError:
-            pass
-        env = dict(os.environ, GIT_INDEX_FILE=str(tmp_index))
-        run = lambda *a: subprocess.run(["git", *a], cwd=root, env=env, capture_output=True, text=True)  # noqa: E731
-        if run("add", "-A", "--", *OWN_FILES).returncode:
-            return None
-        out = run("write-tree")
-        return out.stdout.strip() if out.returncode == 0 else None
+    names = _since(root, base, snap)
+    if names is None:  # a start commit that is gone: everything counts
+        names = _since(root, EMPTY_TREE, snap)
+    h = hashlib.sha1()
+    for n in names or []:
+        h.update(b"\0" + n.encode(errors="surrogateescape") + b"\0" + _file_bytes(root, n))
+    return h.hexdigest()
+
+
+def task_content(root, slug, snap=False):
+    """The content id of this task's work, taken against the task's start commit as `herd verify` takes it."""
+    try:
+        start = json.loads((_dir(root, slug) / "start.json").read_text())
+    except (OSError, ValueError):
+        start = {}
+    return content_id(root, start.get("head") if isinstance(start, dict) else None, snap)
 
 
 def _task_sha(root, slug):
@@ -771,13 +918,13 @@ def _stash_shas(root):
     return [s.split("\t", 1)[0] for s in _git(root, "stash", "list", "--format=%H%x09%gs").decode().splitlines()]
 
 
-def _stashed_since(root, before):
+def _stashed_since(root, before, snap=None):
     """Stash entries made on this branch since `herd init` (before: the stash ids then): a way to hide code
     from the red run. The stash list is shared by all worktrees; a branch is checked out in only one."""
     if before is None:
         return []
-    branch = _branch(root)
-    branch = "(no branch)" if branch in ("", "HEAD") else branch
+    branch = snap["branch"] if snap else _branch(root)  # status names it; "(detached)" there, "HEAD" from rev-parse
+    branch = "(no branch)" if branch in ("", "HEAD", "(detached)") else branch
     subject = re.compile(r"(WIP on|On) " + re.escape(branch) + ":")
     return [s.split("\t", 1)[1] for s in _git(root, "stash", "list", "--format=%H%x09%gs").decode().splitlines()
             if "\t" in s and s.split("\t", 1)[0] not in before and subject.match(s.split("\t", 1)[1])]
@@ -805,16 +952,10 @@ def is_code(path, root=None):
     return not (TEST_DIRS & {s.lower() for s in parts[:-1]} or TEST_FILE.match(name))
 
 
-def changed_since(root, head):
+def changed_since(root, head, snap=False):
     """Paths (relative to root) changed since commit head, tracked or new; None when that cannot be told."""
-    if not head:
-        return None
-    p = subprocess.run(["git", "diff", "--name-only", "--relative", "--diff-filter=d", head], cwd=root,
-                       capture_output=True, text=True)
-    if p.returncode:
-        return None
-    new = _git(root, "ls-files", "--others", "--exclude-standard").decode().splitlines()
-    return sorted({x for x in p.stdout.splitlines() + new if x and not x.startswith(".herd/")})
+    names = _since(root, head, git_state(root) if snap is False else snap)
+    return None if names is None else [x for x in names if os.path.lexists(Path(root) / x)]
 
 
 def task_changes(root, start, changed):
@@ -852,7 +993,35 @@ def run_check(root, check, timeout, full=False):
         return None, f"timeout after {timeout}s"
 
 
-def verify(root, slug):
+def verify_only(root, slug, only):
+    """Run one criterion or attack check and report it: (passing, lines). Writes nothing under .herd/, so it
+    never changes what the gate reads. Needs the red run, so red first still holds."""
+    task = load_task(root, slug)
+    errs = validate_task(task)
+    if errs:
+        raise ValueError("; ".join(errs))
+    if not (_dir(root, slug) / "red.json").exists():
+        return False, [f"no red run yet: run `herd verify` once first, then `herd verify --only {only}`"]
+    crit = {c["id"]: c for c in task["criteria"]}
+    tried = {n["attack"]: n for n in load_notes(root, slug) if n["kind"] == "tried" and n.get("attack") and n.get("check")}
+    if only in crit:
+        check, timeout = crit[only]["check"], crit[only].get("timeout_s", DEFAULT_TIMEOUT)
+    elif only in tried:  # the latest note of that attack: a later one replaces an earlier one
+        check, timeout = tried[only]["check"], tried[only].get("timeout_s", DEFAULT_TIMEOUT)
+    else:
+        return False, [f"no criterion or attack `{only}`: criteria {', '.join(crit) or 'none'}; "
+                       f"attacks with a command {', '.join(tried) or 'none'}"]
+    if not check.strip():
+        return False, [f"{only} unchecked: it has no command"]
+    began = time.monotonic()
+    code, out = run_check(root, check, timeout, full=True)
+    secs = f"{time.monotonic() - began:.0f} s"
+    if code == 0:
+        return True, [f"{only} passing ({secs})" + (" (ran zero tests)" if ran_zero_tests(out) else "")]
+    return False, [f"{only} failing ({secs})", out[-TAIL_CHARS:].rstrip()]
+
+
+def verify(root, slug):  # noqa: C901
     task = load_task(root, slug)
     errs = validate_task(task)
     if errs:
@@ -887,8 +1056,9 @@ def verify(root, slug):
             a["zero_tests"] = a["status"] == "passing" and ran_zero_tests(out)
             a["vacuous"] = bool(VACUOUS.fullmatch(a["check"]))  # runs no project code: proves nothing
         attacks.append(a)
-    head = _git(root, "rev-parse", "HEAD").decode().strip() or "none"
-    dirty = bool(_git(root, "status", "--porcelain", "--", *OWN_FILES).strip())
+    snap = git_state(root, fresh=True)  # the one git read of this verify, after the checks changed files
+    head = (snap or {}).get("oid") or "none"
+    dirty = bool(snap and snap["entries"])
     d = _dir(root, slug)
     if (d / "started").exists() and not (d / "start.json").exists():  # a task from before Herd 0.4.0, or deleted:
         req = d / "request.md"  # red first cannot be checked (the gate wants a --late-red reason), the risk is
@@ -900,7 +1070,7 @@ def verify(root, slug):
             (d / "frozen.json").write_text(json.dumps(
                 {c["id"]: {"text": c["text"], "source": c["source"], "check": c["check"]} for c in task["criteria"]}))
     start = _state(d / "start.json", {})  # missing or corrupt: red first and the stored risk are unknown
-    changed = changed_since(root, start.get("head"))
+    changed = changed_since(root, start.get("head"), snap)
     red_path, frozen_path = d / "red.json", d / "frozen.json"
     checked = [r for r in results if r["status"] != "unchecked"]
     mine = task_changes(root, start, changed)
@@ -919,7 +1089,7 @@ def verify(root, slug):
             "at": now(), "at_epoch": datetime.now(timezone.utc).timestamp(), "notes": len(load_notes(root, slug)),
             "failed": sum(r["status"] == "failing" for r in checked), "total": len(checked),
             "code_before": None if mine is None else [f for f in mine if is_code(f, root)], "seen": mine or [],
-            "stashed": _stashed_since(root, start.get("stashes"))}))
+            "stashed": _stashed_since(root, start.get("stashes"), snap)}))
     red = _state(red_path, {}) or None
     red_unreadable = sorted(set(lost)) or False
     hidden = []  # code that existed before the first verify but was moved aside for it (mv keeps the mtime)
@@ -962,7 +1132,8 @@ def verify(root, slug):
     inputs_left = input_warnings(task)
     warnings = (check_warnings(task, request_text, load_notes(root, slug)) + coverage_warnings(task) + length_warnings(task)
                 + inputs_left
-                + ([REFUSAL_FIRST] if first and not any(a.get("attack") == "refusal" for a in attacks) else [])
+                + [msg for name, msg in FIRST_VERIFY_ATTACKS
+                   if first and not any(a.get("attack") == name for a in attacks)]
                 + refusal_late(root, slug, red))
     fails_path = d / "fails.json"  # consecutive failing verifies per criterion, for the escalation rule
     fails = _state(fails_path, {})
@@ -982,11 +1153,11 @@ def verify(root, slug):
           "known_limits": task.get("known_limits"), "notes": load_notes(root, slug),
           "inputs": task.get("inputs"), "inputs_left": inputs_left, "red": {"failed": red.get("failed", 0), "total": red.get("total", 0), "code_before": red.get("code_before"),
                   "code_hidden": hidden, "stashed": red.get("stashed") or []} if red else None, "red_unreadable": red_unreadable, "timing": timing,
-          "human_not_verbatim": human_not_verbatim, "risk": risk_of(root, start, changed if changed is not None else changed_since(root, "HEAD")),
+          "human_not_verbatim": human_not_verbatim, "risk": risk_of(root, start, changed if changed is not None else changed_since(root, "HEAD", snap)),
           "legacy": bool(start.get("legacy") or not start), "human_changed": human_changed, "human_corrected": corrected, "checks_changed": checks_changed, "human_checks_changed": human_checks,
           "added_after_red": added,
           "warnings": warnings, "escalate": [cid for cid, n in fails.items() if n >= ESCALATE_AFTER],
-          "fingerprint": fingerprint(root), "content": content_id(root), "task_sha": _task_sha(root, slug),
+          "fingerprint": fingerprint(root, snap), "content": task_content(root, slug, snap), "task_sha": _task_sha(root, slug),
           "results": results, "summary": summary, "attacks": attacks}
     (_dir(root, slug) / "evidence.json").write_text(json.dumps(ev, indent=2))
     return ev
@@ -1048,6 +1219,8 @@ def review_state(root, slug, ev, notes):
     if not rv:
         return False, "no review recorded"
     n, green = rv[-1], _state(_dir(root, slug) / "green.json", {})
+    if n.get("over_cap"):
+        return False, "the review limit was reached before this review, so it cannot pass the task: stop and ask the human"
     if not green or notes.index(n) < green.get("notes", len(notes)):
         return False, "the review was recorded before all checks first passed: review the finished change"
     risk = (ev.get("risk") or {}).get("effective", "medium")
@@ -1082,7 +1255,7 @@ def _tier_rule(root, slug, n):
                        "ran no `git diff` or `git show`: spawn herd-reviewer again and have it read the diff")
     if n.get("verdict") != "PASS":
         return False, "the review found Blocker or Major issues, or gave no verdict: fix them and review again"
-    need = min(b + step, len(tiers) - 1)
+    need = _need(tiers, b, step)
     if t < need:
         return False, (f"review by {tiers[t]} does not count: the builder ran on {tiers[b]}, the reviewer must be "
                        f"{tiers[need]} or higher. Spawn herd-reviewer with model {tiers[need]}")
@@ -1102,6 +1275,17 @@ SUMMARY_ONLY = {"--stat", "--shortstat", "--numstat", "--dirstat", "--name-only"
 # `path:line` or `path:first-last` in a report: a path with a file extension or a folder; not a URL, time or C1:2
 REF = re.compile(r"(?<![\w/.:-])(/?(?:[\w.-]+/)*[\w-][\w.-]*\.[A-Za-z]\w*|/?(?:[\w.-]+/)+[\w.-]+):(\d+)(?:-(\d+))?(?![\w-])")
 MAX_REFS = 20
+
+
+REVIEW_CAP = "sonnet"  # 0.12.8, owner: a Sonnet builder gets a Sonnet reviewer, not Opus (low measured review yield)
+
+
+def _need(tiers, b, step):
+    """Index of the lowest reviewer tier that counts for a builder at index b: step tiers above, capped at the top
+    tier and at REVIEW_CAP, but never below the builder's own tier (Opus still reviews Opus)."""
+    top = len(tiers) - 1
+    cap = tiers.index(REVIEW_CAP) if REVIEW_CAP in tiers else top
+    return max(b, min(b + step, top, cap))
 
 
 def review_tiers(root, slug=None):
@@ -1203,7 +1387,7 @@ def review_need(root, slug):
     except OSError:
         since = None
     b, why = builder_tier(log, since, tiers) if isinstance(log, str) else (None, "the builder's model is not known yet")
-    return (tiers[min(tiers.index(b) + step, len(tiers) - 1)], b) if b else (None, why)
+    return (tiers[_need(tiers, tiers.index(b), step)], b) if b else (None, why)
 
 
 def _shows_change(words, cwd):
@@ -1215,7 +1399,7 @@ def _shows_change(words, cwd):
     return bool({"-p", "-u", "--patch"} & set(words)) or not any(w.split("=", 1)[0] in SUMMARY_ONLY for w in words)
 
 
-def reviewer_saw(root, cwd, lines):
+def reviewer_saw(root, cwd, lines):  # noqa: C901
     """(whether the reviewer ran a git command that prints the change, the files under root it read), from the tool
     calls in its log: Read, and Bash readers such as cat or sed. Shell text is read as the guard reads it."""
     base, diff, read = os.path.realpath(root), False, set()
@@ -1367,8 +1551,8 @@ def review_hook(root, hook):
     if isinstance(main, str) and os.path.realpath(main) in known:
         btier, bwhy = builder_tier(main, since, tiers)
     else:  # logs the agent wrote itself, handed to a copy of this hook: not a session Claude Code ran
-        btier, bwhy = None, ("the main session log is not one Herd saw (only the pre-init hook and the Stop gate "
-                             "record sessions)")
+        btier, bwhy = None, ("the main session log is not one Herd saw (only the pre-init hook, the guard and the "
+                             "Stop gate record sessions)")
     unread = (f"the reviewer's log is not where Claude Code keeps it ({rev})" if not placed
               else None if tier else f"{model} matches no tier" if model else f"no model in the reviewer's log {rev}")
     diff, read = reviewer_saw(root, str(hook.get("cwd") or root), lines)
@@ -1384,6 +1568,8 @@ def review_hook(root, hook):
              "saw": code is None or all(f in read for f in code) or (diff and not new)}
     # a round, for escalation and the report: after all checks first passed, by a reviewer whose tier would count
     extra["round"] = (_dir(root, slug) / "green.json").exists() and _tier_rule(root, slug, dict(extra, verdict="PASS"))[0]
+    if len(_reviews_since_pass(load_notes(root, slug))) >= MAX_REVIEW_ROUNDS:  # recorded, but it cannot pass or reset
+        extra.update(over_cap=True, round=False)
     add_review(root, slug, by=model or "an unknown model", text=_clip((text or "").strip() or "(no report)", REVIEW_CHARS),
                extra=extra)
 
@@ -1485,6 +1671,34 @@ def _failed_rounds(notes):
     return len(rv) - next((i + 1 for i in range(len(rv) - 1, -1, -1) if rv[i].get("verdict") == "PASS"), 0)
 
 
+MAX_REVIEW_ROUNDS = 2  # reviewer runs since the last PASS that counts; the next one is refused (issue #45)
+LIMIT_RESET = "review limit"  # a `herd note --decision` starting with these words, from the human, resets the count
+OPEN_FINDING = re.compile(r"^\W*(Blocker|Major)\b", re.I)
+
+
+def _reviews_since_pass(notes):
+    """Reviews the hook recorded since the last PASS that counts as a round, or the last reset decision note."""
+    start = 0
+    for i, n in enumerate(notes):
+        if (n.get("kind") == "review" and n.get("round") and n.get("verdict") == "PASS") or (
+                n.get("kind") == "decision" and str(n.get("text", "")).lower().startswith(LIMIT_RESET)):
+            start = i + 1
+    return [n for n in notes[start:] if n.get("kind") == "review" and n.get("source") == "hook"]
+
+
+def review_limit(notes):
+    """The message once MAX_REVIEW_ROUNDS reviews ran since the last PASS (every run counts, round or not): stop and
+    ask the human, with the open Blocker and Major lines of the last review. None below the limit."""
+    rv = _reviews_since_pass(notes)
+    if len(rv) < MAX_REVIEW_ROUNDS:
+        return None
+    open_ = [x.strip() for x in str(rv[-1].get("text", "")).splitlines() if OPEN_FINDING.match(x)]
+    return (f"review limit reached: {len(rv)} reviews since the last PASS (limit {MAX_REVIEW_ROUNDS}). Run no more "
+            "reviews: stop and ask the human one question. Open Blocker and Major findings from the last review: "
+            + ("; ".join(open_) if open_ else "none listed")
+            + ". The human lifts the limit with `herd note --decision \"Review limit: <what the human said>\"`.")
+
+
 def _seen(n):
     """How much of the change a hook-recorded reviewer saw, from its log: `ran git diff or git show, read 2 of 3
     changed code files`; empty for a review recorded before 0.10.0."""
@@ -1557,7 +1771,7 @@ def _rule_lines(ev, notes):
     return out
 
 
-def report(ev, notes=None):
+def report(ev, notes=None):  # noqa: C901
     s = ev["summary"]
     notes = ev.get("notes") or [] if notes is None else notes
     lines = [f"# Evidence: {ev['task']}", "", f"Goal: {ev['goal']}",
@@ -1646,10 +1860,28 @@ def _clip(text, limit=60):
 
 
 def _stale(root, slug, ev):
-    return ev["task_sha"] != _task_sha(root, slug) or ev["fingerprint"] != fingerprint(root)
+    """The task or the work changed since the last verify. A commit alone changes neither: the content id decides;
+    the HEAD fingerprint is the fallback outside git and for evidence without a content id."""
+    if ev["task_sha"] != _task_sha(root, slug):
+        return True
+    if ev.get("content"):
+        now_id = task_content(root, slug)
+        if now_id is not None:
+            return ev["content"] != now_id
+    return ev["fingerprint"] != fingerprint(root)
 
 
-def pr_body(root, slug):
+def refresh_head(root, slug, ev):
+    """Evidence that is still fresh after a commit names the final commit: keep the verified one as verified_head."""
+    snap = git_state(root)
+    head, dirty = (snap or {}).get("oid") or "none", bool(snap and snap["entries"])
+    if head != ev["head"] or dirty != bool(ev.get("dirty")):
+        ev = dict(ev, verified_head=ev.get("verified_head", ev["head"]), head=head, dirty=dirty)
+        (_dir(root, slug) / "evidence.json").write_text(json.dumps(ev, indent=2))
+    return ev
+
+
+def pr_body(root, slug):  # noqa: C901
     """The PR description, evidence first: what is proven and by which check, then what is not, then how to re-run."""
     task, ev, notes = load_task(root, slug), load_evidence(root, slug), load_notes(root, slug)
     head = [f"# Evidence: {slug}", "", f"**Goal:** {task['goal']}", ""]
@@ -1781,10 +2013,13 @@ def open_pr(root, slug, yes=False):
     if branch != f"herd/{slug}":
         raise ValueError(f"herd pr pushes only the task's branch herd/{slug}; this is `{branch or 'no branch'}`")
     if _git(root, "status", "--porcelain", "--", *OWN_FILES).strip():
-        raise ValueError("herd pr needs a clean working tree: commit the work, run `herd verify`, then `herd pr`, "
+        raise ValueError("herd pr needs a clean working tree: commit the work, then run `herd pr`, "
                          "so the pull request contains exactly the code the evidence is about")
     if not shutil.which("gh"):
         raise ValueError("herd pr needs the GitHub CLI `gh` on PATH")
+    ev = load_evidence(root, slug)
+    if ev is not None and not _stale(root, slug, ev):
+        refresh_head(root, slug, ev)
     body = pr_body(root, slug)
     p = subprocess.run(["git", "push", "-u", "origin", branch], cwd=root, capture_output=True, text=True)
     if p.returncode:
@@ -1873,15 +2108,14 @@ NEXT_STEPS = ((re.compile(r"^(.+?) is failing: "), "fix {0}, then run `herd veri
 
 
 def _escalations(root, slug):
-    """Why the agent must ask the human now: criteria that failed ESCALATE_AFTER verifies in a row, and
-    ESCALATE_AFTER review rounds since all checks first passed without a PASS (design B7)."""
+    """Why the agent must ask the human now: criteria that failed ESCALATE_AFTER verifies in a row, and the
+    review limit (MAX_REVIEW_ROUNDS reviews since the last PASS)."""
     try:
         out = [f"{cid} failed {ESCALATE_AFTER} times in a row" for cid in (load_evidence(root, slug) or {}).get("escalate") or []]
-        notes = load_notes(root, slug)
-        failed = _failed_rounds(notes + [{"kind": "review", "source": "hook", "round": True, "verdict": "?"}])
+        limit = review_limit(load_notes(root, slug))
     except STATE_ERRORS:
         return []
-    return out + ([f"{ESCALATE_AFTER} review rounds since all checks passed gave no PASS"] if failed >= ESCALATE_AFTER else [])
+    return out + ([f"review limit reached (limit {MAX_REVIEW_ROUNDS} reviews since the last PASS)"] if limit else [])
 
 
 def next_step(probs):
@@ -1895,7 +2129,7 @@ def next_step(probs):
     return f"fix this, then run `herd verify`: {_clip(probs[0], 200)}"
 
 
-def write_stop(root, slug, reason, detail=""):
+def write_stop(root, slug, reason, detail=""):  # noqa: C901
     """Write stopped.json: why the task stopped without `herd done`, what was left, and whether and how it can go on.
     `resumable` and `next` come from problems() and the state files, never from the agent."""
     if reason not in STOP_REASONS:
@@ -1940,7 +2174,7 @@ def write_stop(root, slug, reason, detail=""):
     else:
         resumable, step = True, next_step(probs)
         if not probs and _git(root, "status", "--porcelain", "--", *OWN_FILES).strip():
-            step = "commit the work, run `herd verify`, then run `herd done`"
+            step = "commit the work, then run `herd done`"
     if causes and not detail:  # released while an escalation is open: the reason alone would hide it
         detail = "; ".join(causes)
     try:
@@ -2034,7 +2268,7 @@ def guard_config(root):
     return list(GUARD_PATHS) + extra("protected_paths"), list(GUARD_COMMANDS) + extra("deny_commands")
 
 
-def _shell_text(command):
+def _shell_text(command):  # noqa: C901
     """The command without what the shell never runs: `#` comments (a `#` that starts a word outside quotes and
     substitutions, to the end of its line) and heredoc bodies (text such as a commit message). One pass that keeps
     a stack of quotes, `$(...)` and parentheses, so quotes nested in "$(...)" and `<<` in arithmetic are not
@@ -2241,7 +2475,7 @@ def _protected(root, cwd, path, globs):
     return None
 
 
-def guard(root, hook):
+def guard(root, hook):  # noqa: C901
     """PreToolUse hook on Bash and the edit tools. None allows; a dict is the deny output. Only while a task is
     active; each denial is a `guard` note. It reads command text, so bash -c, scripts and aliases pass (a Non-Goal)."""
     if not isinstance(hook, dict):
@@ -2249,6 +2483,9 @@ def guard(root, hook):
     slug = active_slug(root)
     if not slug or not _dir(root, slug).exists() or cancelled(root, slug):
         return None
+    if "agent_id" not in hook:  # a subagent's own call: the main session is what the review hook asks about
+        # issue #40: `herd init` through $H or an alias is unreadable to the pre-init hook
+        _see_session(root, slug, hook.get("transcript_path"))
     tool, inp = hook.get("tool_name"), hook.get("tool_input")
     inp, cwd = inp if isinstance(inp, dict) else {}, str(hook.get("cwd") or root)
     globs, commands = guard_config(root)
@@ -2316,12 +2553,35 @@ def guard_line(notes):
 
 # ---- gate -----------------------------------------------------------------
 
-def problems(root, slug):
+def attack_problems(root, slug, ev):
+    """The standard-route attack rules: each attack passing or n/a, and n/a for other-reading only without inputs."""
+    out = []
+    ran = {(a["at"], a["text"], a.get("check")) for a in ev.get("attacks") or []}
+    if any(n["kind"] == "tried" and n.get("attack") and (n["at"], n["text"], n.get("check")) not in ran
+           for n in load_notes(root, slug)):
+        out.append("attack commands were logged after the last verify and have not run: run `herd verify`")
+    best = _attack_states(ev.get("attacks"))
+    why = {"failing": "its command fails", "zero": "its command ran zero tests", "nocheck": "logged without a command",
+           "vacuous": "its command runs no project code"}
+    missing = [a for a in ATTACKS if best.get(a, ("none",))[0] not in ("passing", "na")]
+    if missing:
+        out.append("adversarial pass incomplete (skills/run/adversarial.md): "
+                   + "; ".join(f"{a} ({why.get(best.get(a, ('none',))[0], 'no passing command')}): {ATTACKS[a]}"
+                               for a in missing)
+                   + ". Log each with `herd note --tried --attack <name> --check \"<command>\" \"what it shows\"`,"
+                   " then run `herd verify`")
+    if best.get("other-reading", ("",))[0] == "na" and ev.get("inputs"):
+        out.append("other-reading marked n/a, but the task lists inputs: name two readings of the human's words "
+                   "for each and log `herd note --tried --attack other-reading --check \"<command>\"`")
+    return out
+
+
+def problems(root, slug):  # noqa: C901
     """Reasons the task is not done, from stored evidence. Empty list means done."""
     ev = load_evidence(root, slug)
     if ev is None:
         return ["no evidence yet: run `herd verify`"]
-    if ev["task_sha"] != _task_sha(root, slug) or ev["fingerprint"] != fingerprint(root):
+    if _stale(root, slug, ev):
         return ["evidence is stale (the workspace or task.toml changed after the last verify): run `herd verify`"]
     out = [f"{r['id']} is failing: {r['text']}" for r in ev["results"] if r["status"] == "failing"]
     if not ev["summary"]["passing"] and not out:
@@ -2359,33 +2619,23 @@ def problems(root, slug):
         out += ev.get("inputs_left") or []  # structure only: missing, misplaced inside a criterion, or incomplete
     risk = (ev.get("risk") or {}).get("effective")
     ok, why = review_state(root, slug, ev, notes)
-    if review_needed(ev) and not ok:
+    if review_needed(ev) and not ok and review_limit(notes):
+        out.append(review_limit(notes))  # at the limit: stop and ask, never "spawn another reviewer"
+    elif review_needed(ev) and not ok:
         need, _ = review_need(root, slug)
         model = (re.search(r"Spawn herd-reviewer with model ([\w.-]+)", why or "") or [None, need])[1]
         out.append(f"review missing ({why}): risk is {risk}. Spawn the herd-reviewer subagent "
                    + (f"with model {model}" if model else "one tier above yours")
                    + ", giving it only what `herd review-brief` prints; the review hook records it")
     if ev.get("route") != "quick":
-        ran = {(a["at"], a["text"], a.get("check")) for a in ev.get("attacks") or []}
-        if any(n["kind"] == "tried" and n.get("attack") and (n["at"], n["text"], n.get("check")) not in ran
-               for n in load_notes(root, slug)):
-            out.append("attack commands were logged after the last verify and have not run: run `herd verify`")
-        best = _attack_states(ev.get("attacks"))
-        why = {"failing": "its command fails", "zero": "its command ran zero tests", "nocheck": "logged without a command",
-               "vacuous": "its command runs no project code"}
-        missing = [a for a in ATTACKS if best.get(a, ("none",))[0] not in ("passing", "na")]
-        if missing:
-            out.append("adversarial pass incomplete (skills/run/adversarial.md): "
-                       + "; ".join(f"{a} ({why.get(best.get(a, ('none',))[0], 'no passing command')}): {ATTACKS[a]}"
-                                   for a in missing)
-                       + ". Log each with `herd note --tried --attack <name> --check \"<command>\" \"what it shows\"`,"
-                       " then run `herd verify`")
+        out += attack_problems(root, slug, ev)
     return out
 
 
 def _see_session(root, slug, log):
-    """Record a session log the Stop gate saw (from Claude Code's own hook input): the review hook counts only
-    reviews from sessions recorded here or by the pre-init hook, and `herd status` reads the latest."""
+    """Record a session log the Stop gate or the guard saw (from Claude Code's own hook input; `herd gate` and
+    `herd guard` are denied to the agent): the review hook counts only reviews from sessions recorded here or by
+    the pre-init hook, and `herd status` reads the latest."""
     start = _state(_dir(root, slug) / "start.json", None)
     if not (isinstance(log, str) and log and start is not None):
         return
@@ -2438,6 +2688,8 @@ def gate(root, hook):
     causes = _escalations(root, slug)
     if causes:
         _stop(root, slug, "escalated", "; ".join(causes))
+        if any(c.startswith("review limit") for c in causes):  # the agent must ask, not loop: release the stop
+            return None
     esc = [f"{c}: ask the human one question" for c in causes]
     reason = (f"Herd task `{slug}` is not done ({n + 1}/{MAX_BLOCKS} stop attempts blocked). "
               + "; ".join(probs + esc) + f". Run `{cmd}` after fixing. If you are stuck, ask the human one question and stop."
@@ -2478,7 +2730,7 @@ USAGE = {
                     "inputs, the files it must read, the diff command)",
     "detect": "herd detect",
     "lint": "herd lint [--suggest]   (without --suggest: the PostToolUse hook, reads hook JSON on stdin)",
-    "verify": "herd verify [slug] [--verbose]",
+    "verify": "herd verify [slug] [--verbose] [--only <id>]   (--only: run one criterion or attack, write nothing)",
     "status": "herd status [slug] [--json]   (--json: the stop record, or null)",
     "done": "herd done [slug] [--verbose]",
     "cancel": 'herd cancel [slug] [--reason "text"]',
@@ -2504,7 +2756,7 @@ def _opt(args, flag):
     return args[i + 1], args[:i] + args[i + 2:]
 
 
-def main(argv):
+def main(argv):  # noqa: C901
     try:
         root = find_root(Path.cwd())
     except FileNotFoundError:  # the folder was deleted under the process: a hook must still exit 0
@@ -2586,30 +2838,39 @@ def main(argv):
                 if out:
                     print(json.dumps(out))
         elif cmd == "verify":
+            only, args = _opt(args, "--only")
+            if only is not None:
+                ok, lines = verify_only(root, _slug_arg(root, [a for a in args if a != "--verbose"]), only)
+                print("\n".join(lines))
+                return 0 if ok else 1
             verbose = "--verbose" in args
-            ev = verify(root, _slug_arg(root, [a for a in args if a != "--verbose"]))
-            s = ev["summary"]
-            print(f"{s['passing']} passing, {s['failing']} failing, {s['unchecked']} unchecked")
-            for r in ev["results"]:  # by default only what needs attention
-                zero = " (ran zero tests)" if r.get("zero_tests") else ""
-                if verbose or r["status"] != "passing" or zero:
-                    print(f"  {r['id']} {r['status']}{zero}: {r['text']}")
-            words = {"failing": "failing", "zero": "passing (ran zero tests)", "vacuous": "runs no project code",
-                     "nocheck": "has no command", "na": "n/a", "passing": "passing"}
-            states = _attack_states(ev.get("attacks"))
-            for name, (state, what) in states.items():  # attacks like criteria: only what needs attention
-                if verbose or state != "passing":
-                    print(f"  attack {name} {words[state]}: {what}")
-            if ev.get("warnings"):  # one line here; the full list is in the report (`herd status`)
-                w = ev["warnings"]
-                print(f"  {len(w)} herd check warning{'s' if len(w) != 1 else ''}: {w[0]}"
-                      + (" (and more: `herd check` lists them)" if len(w) > 1 else ""))
-            for cid in ev.get("escalate") or []:
-                print(f"  {cid} failed {ESCALATE_AFTER} times in a row: ask the human one question (see the run skill)")
-            hint = pass_hint(root, ev["task"], ev, load_notes(root, ev["task"]))
-            if hint:
-                print(f"  {hint}")
-            return 1 if s["failing"] or any(st == "failing" for st, _ in states.values()) else 0
+            with git_state_once():  # verify reads git state once; the hints below reuse that read
+                ev = verify(root, _slug_arg(root, [a for a in args if a != "--verbose"]))
+                s = ev["summary"]
+                print(f"{s['passing']} passing, {s['failing']} failing, {s['unchecked']} unchecked")
+                for r in ev["results"]:  # by default only what needs attention
+                    zero = " (ran zero tests)" if r.get("zero_tests") else ""
+                    if verbose or r["status"] != "passing" or zero:
+                        print(f"  {r['id']} {r['status']}{zero}: {r['text']}")
+                words = {"failing": "failing", "zero": "passing (ran zero tests)", "vacuous": "runs no project code",
+                         "nocheck": "has no command", "na": "n/a", "passing": "passing"}
+                states = _attack_states(ev.get("attacks"))
+                for name, (state, what) in states.items():  # attacks like criteria: only what needs attention
+                    if verbose or state != "passing":
+                        print(f"  attack {name} {words[state]}: {what}")
+                if ev.get("warnings"):  # one line here; the full list is in the report (`herd status`)
+                    w = ev["warnings"]
+                    print(f"  {len(w)} herd check warning{'s' if len(w) != 1 else ''}: {w[0]}"
+                          + (" (and more: `herd check` lists them)" if len(w) > 1 else ""))
+                for cid in ev.get("escalate") or []:
+                    print(f"  {cid} failed {ESCALATE_AFTER} times in a row: ask the human one question (see the run skill)")
+                limit = review_limit(load_notes(root, ev["task"]))
+                if limit:
+                    print(f"  {limit}")
+                hint = pass_hint(root, ev["task"], ev, load_notes(root, ev["task"]))
+                if hint:
+                    print(f"  {hint}")
+                return 1 if s["failing"] or any(st == "failing" for st, _ in states.values()) else 0
         elif cmd == "status":
             as_json = "--json" in args
             slug = _slug_arg(root, [a for a in args if a != "--json"])
@@ -2647,7 +2908,12 @@ def main(argv):
             add_review(root, _slug_arg(root, []), by=by, text=args[0])
             print(f"review recorded by {by}: a note; at medium and high risk only a review the hook records counts")
         elif cmd == "review-brief":
-            print(review_brief(root, _slug_arg(root, args)), end="")
+            slug = _slug_arg(root, args)
+            limit = review_limit(load_notes(root, slug))
+            if limit:
+                print(limit)
+                return 1
+            print(review_brief(root, slug), end="")
         elif cmd == "review-hook":  # SubagentStop hook: never blocks the session
             try:
                 raw = sys.stdin.read() if not sys.stdin.isatty() else ""
@@ -2659,18 +2925,19 @@ def main(argv):
         elif cmd == "done":
             verbose = "--verbose" in args
             slug = _slug_arg(root, [a for a in args if a != "--verbose"])
-            probs = problems(root, slug)
+            with git_state_once():  # the freshness check and the head refresh share one git read
+                probs = problems(root, slug)
+                ev = None if probs else refresh_head(root, slug, load_evidence(root, slug))
             if probs:
                 print("not done: " + "; ".join(probs), file=sys.stderr)
                 return 1
             if _git(root, "status", "--porcelain", "--", *OWN_FILES).strip():  # work outside a commit
                 if pr_wanted(root) or (_dir(root, slug) / "pr").exists():
                     print("not done: commit the work first: pull requests are on, and the pull request must hold "
-                          "exactly the verified code (commit, `herd verify`, then `herd done`)", file=sys.stderr)
+                          "exactly the verified code (commit, then `herd done`)", file=sys.stderr)
                     return 1
                 print("warning: uncommitted work: the evidence names the commit plus uncommitted changes; "
                       "commit on the task branch if the project allows it", file=sys.stderr)
-            ev = load_evidence(root, slug)
             notes = load_notes(root, slug)
             stop = load_stop(root, slug)
             if stop and not stop.get("resolved_at"):  # the record stays; it says the task went on and finished

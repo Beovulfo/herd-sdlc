@@ -3,8 +3,11 @@ extend-exclude = ["examples/supermarket-route/with-herd", "examples/supermarket-
                   "examples/supermarket-route/runs"]
 
 [lint]
-select = ["E4", "E7", "E9", "F"]  # pyflakes and syntax-level pycodestyle, fixed so new ruff defaults do not move the bar
+select = ["E4", "E7", "E9", "F", "C901"]  # pyflakes, syntax-level pycodestyle and a complexity limit, fixed so new ruff defaults do not move the bar
 ignore = ["E731"]  # small lambdas in tests read fine
+
+[lint.mccabe]
+max-complexity = 10  # new functions stay under 10 branches; older ones carry `# noqa: C901` until they are split
 
 [lint.per-file-ignores]
 "plugin/scripts/herd.py" = ["E402"]  # the hooks' fast paths run before the imports, so a hook with nothing to do stays cheap

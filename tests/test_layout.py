@@ -46,7 +46,7 @@ class TestLayout(unittest.TestCase):
 
     def test_version_and_changelog(self):
         v = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text())["version"]
-        self.assertEqual(v, "0.12.2")
+        self.assertEqual(v, "0.12.10")
         self.assertIn("## 0.12.2", (ROOT / "CHANGELOG.md").read_text())
         self.assertEqual(sorted(p.name for p in PLUGIN.iterdir() if p.name != ".DS_Store"),
                          [".claude-plugin", "LICENSE", "NOTICE", "agents", "assets", "hooks", "scripts", "skills"])

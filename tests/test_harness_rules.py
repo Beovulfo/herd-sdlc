@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 
 from scripts import herd
-from tests.test_herd_cli import hook_review, late_review
+from tests.test_herd_cli import hook_review, late_review, run_herd
 
 OK = "python3 -c \"import json\""  # an attack command that passes and is not vacuous
 REQUEST = "Add f() to app.py. It must return 1 for any call."
@@ -40,23 +40,35 @@ def git(root, *args):
 
 
 class Base(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        """One template repository per test class; each test works in a copy of it (git init is not under test)."""
+        super().setUpClass()
+        cls.template = tempfile.TemporaryDirectory()
+        root = Path(cls.template.name)
+        git(root, "init", "-q")
+        git(root, "config", "user.email", "t@example.com")
+        git(root, "config", "user.name", "t")
+        git(root, "config", "core.excludesFile", "/dev/null")  # like CI: no global gitignore hides __pycache__
+        (root / "README.md").write_text("x")
+        git(root, "add", "-A")
+        git(root, "commit", "-q", "-m", "init")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.template.cleanup()
+        super().tearDownClass()
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
-        git(self.root, "init", "-q")
-        git(self.root, "config", "user.email", "t@example.com")
-        git(self.root, "config", "user.name", "t")
-        git(self.root, "config", "core.excludesFile", "/dev/null")  # like CI: no global gitignore hides __pycache__
-        (self.root / "README.md").write_text("x")
-        git(self.root, "add", "-A")
-        git(self.root, "commit", "-q", "-m", "init")
+        shutil.copytree(self.template.name, self.root, dirs_exist_ok=True)
 
     def tearDown(self):
         self.tmp.cleanup()
 
     def cli(self, *args):
-        return subprocess.run([sys.executable, str(Path(herd.__file__)), *args], cwd=self.root,
-                              capture_output=True, text=True)
+        return run_herd(self.root, *args)
 
     def start(self, text=TASK, goal="Add f() to app.py"):
         herd.init_task(self.root, "t1", goal, request=REQUEST)
@@ -710,7 +722,7 @@ class TestPreInitEdits(Base):
             "hook_event_name": "PreToolUse", "tool_name": "Bash", "cwd": str(self.root),
             "transcript_path": str(log) if log else "", "tool_input": {"command": command}})
         return subprocess.run([sys.executable, str(Path(herd.__file__)), "preinit"], cwd=self.root, input=data,
-                              capture_output=True, text=True)
+                              capture_output=True, text=True)  # a real process: the fast path at import is under test
 
     INIT = f'python3 "{Path(herd.__file__)}" init t1 "Add f() to app.py" --request "{REQUEST}"'
 
@@ -856,7 +868,7 @@ class TestStopRecord(Base):
         self.assertEqual(rec["reason"], "done_refused")
         self.assertEqual(rec["problems"], [])
         self.assertTrue(rec["resumable"])
-        self.assertEqual(rec["next"], "commit the work, run `herd verify`, then run `herd done`")  # app.py is uncommitted
+        self.assertEqual(rec["next"], "commit the work, then run `herd done`")  # app.py is uncommitted
         self.assertTrue(self.cli("status").stdout.startswith(f"Stopped {rec['at']}: done_refused. Next: "))
 
     def test_stop_record_on_cancel(self):

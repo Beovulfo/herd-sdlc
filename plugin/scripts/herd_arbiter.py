@@ -92,7 +92,7 @@ def _row(f, verdict, arbiter_verdict, cause, conf, citation, reason):
             "effective": verdict == "accept" or (verdict in ("decline", "contest") and f["severity"] == "Nit")}
 
 
-def validate(findings, raw_output, spec_path, spec_lines, prior):
+def validate(findings, raw_output, spec_path, spec_lines, prior):  # noqa: C901
     """One ruling per finding after the policy checks. Never raises.
 
     If the whole output is unparseable every ruling has cause `malformed`; the caller

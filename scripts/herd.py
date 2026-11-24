@@ -1552,6 +1552,19 @@ def review_brief(root, slug):
     if isinstance(task.get("inputs"), list) and any(isinstance(x, dict) for x in task["inputs"]):
         out.append(inputs_line(task["inputs"]))
     out += ["", "The human's request, word for word:", req.strip() if req else "(none recorded)", ""]
+    notes = load_notes(root, slug)
+    items, cut = focus_items(task, notes, files or ()), focus_cut(task, notes)
+    brief = add_focus_round(root, slug, items)
+    note = f" ({cut} older open note{'s' if cut != 1 else ''} {'were' if cut != 1 else 'was'} cut)" if cut else ""
+    out += [f"Focus list: answer every id{note}",
+            "Put `BRIEF <id>` (the id on the Brief line below) on a line of your report. Then write one line per id: "
+            "`FOCUS <id>: holds: <command>` or `FOCUS <id>: breaks: <command>`. Attack the item: write a small input and "
+            "run the program. A command is one line, self-contained, idempotent, at most 20 s, and writes no file; Herd "
+            "runs it again from the project root. A `holds` command exits 0. A `breaks` command exits 3 when the defect "
+            "is present and for no other reason.", ""]
+    for i in items:
+        out += [f"- {i['id']}: {i['quote']}", f"  Attack with: {i['attack_with']}"]
+    out += ["", f"Brief: {brief}", ""]
     if files is None:
         out.append("Changed files: unknown (no commit at `herd init`): read the diff with `git diff HEAD` and "
                    "`git status`.")
@@ -2210,7 +2223,7 @@ def stop_line(rec):
 # Herd's state files, written only by the herd CLI: the design's list (G3), plus `started` (the review window),
 # `request.md` (the human's words) and `.herd/active` (removing it switches the gate off). task.toml is the agent's.
 GUARD_STATE = ("evidence.json", "notes.jsonl", "start.json", "red.json", "frozen.json", "green.json", "fails.json",
-               "stopped.json", "gate_blocks", "done_blocks", "cancelled", "started", "request.md", "base", "pr")
+               "focus.json", "stopped.json", "gate_blocks", "done_blocks", "cancelled", "started", "request.md", "base", "pr")
 # the design's list, with .env and .env.* in every folder (a monorepo keeps apps/web/.env) and .git itself
 GUARD_PATHS = ("**/.env", "**/.env.*", "**/*.pem", "**/*.key", "**/id_rsa*", ".git", ".git/**")  # herd.toml only adds
 ENV_TEMPLATES = ("**/.env.example", "**/.env.sample", "**/.env.template", "**/.env.dist")  # committed, no secrets

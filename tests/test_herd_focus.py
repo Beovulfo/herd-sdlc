@@ -392,6 +392,43 @@ class FocusHookTests(FocusBase):
         self.assertEqual(n["focus"]["unanswered"], self.ids())
 
 
+class FocusBriefTests(FocusBase):
+    def test_review_brief_prints_focus(self):
+        self.ready()
+        text = herd.review_brief(self.root, "t1")
+        rounds = herd.focus_rounds(self.root, "t1")
+        self.assertEqual(len(rounds), 1)
+        self.assertIn(f"\nBrief: {rounds[0]['brief']}\n", text)
+        self.assertIn("Focus list: answer every id", text)
+        task, notes = herd.load_task(self.root, "t1"), herd.load_notes(self.root, "t1")
+        items = herd.focus_items(task, notes, herd.review_files(self.root, "t1")[0] or ())
+        self.assertEqual(rounds[0]["items"], [{"id": i["id"], "qhash": i["qhash"]} for i in items])
+        for i in items:
+            self.assertIn(f"- {i['id']}: {i['quote']}\n  Attack with: {i['attack_with']}\n", text)
+        self.assertLess(text.index("Focus list"), text.index("Read every one of these"))  # before the file list
+        self.assertIn("FOCUS <id>: holds: <command>", text)
+        self.assertIn("exits 3", text)
+        herd.review_brief(self.root, "t1")  # a second brief adds a round and overwrites nothing
+        again = herd.focus_rounds(self.root, "t1")
+        self.assertEqual((len(again), again[0]), (2, rounds[0]))
+        self.assertNotEqual(again[1]["brief"], rounds[0]["brief"])
+        for k in range(32):  # past the cap: the oldest open notes are cut and the brief says how many
+            herd.add_note(self.root, "t1", "open", f"limit {k}")
+        self.assertIn("(10 older open notes were cut)", herd.review_brief(self.root, "t1"))
+        p = self.cli("review-brief")  # the CLI prints the same brief and records the round
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(len(herd.focus_rounds(self.root, "t1")), 4)
+        self.assertIn(f"Brief: {herd.focus_rounds(self.root, 't1')[-1]['brief']}", p.stdout)
+
+    def test_the_agent_cannot_write_focus_json(self):
+        self.ready()
+        d = herd._dir(self.root, "t1")
+        self.assertIn("focus.json", herd.GUARD_STATE)
+        self.assertTrue(herd._protected(self.root, self.root, str(d / "focus.json"), []))
+        out = herd.guard(self.root, {"tool_name": "Write", "tool_input": {"file_path": str(d / "focus.json")}, "cwd": str(self.root)})
+        self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
+
+
 class FocusAttackTests(FocusBase):
     """The five standard attacks on the focus code, one command each (`herd note --tried --attack`)."""
 

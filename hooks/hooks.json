@@ -1,5 +1,5 @@
 {
-  "description": "Herd hooks: the Stop gate blocks finishing without fresh passing evidence; before `herd init`, a Bash hook records the files the session already edited, for red first; the optional lint hook feeds lint errors back after edits; while a task is active, the guard denies edits to secrets and Herd's state files and irreversible git and GitHub commands; when the herd-reviewer or herd-intake-reviewer subagent stops, the review hook records its review from the session logs.",
+  "description": "Herd hooks: the Stop gate blocks finishing without fresh passing evidence; before `herd init`, a Bash hook records the files the session already edited, for red first; the optional lint hook feeds lint errors back after edits; while a task is active, the guard denies edits to secrets and Herd's state files and irreversible git and GitHub commands; when the herd-reviewer subagent stops, the review hook records its review from the session logs.",
   "hooks": {
     "Stop": [
       {
@@ -49,16 +49,6 @@
     "SubagentStop": [
       {
         "matcher": "^herd:herd-reviewer$",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/herd.py\" review-hook",
-            "timeout": 30
-          }
-        ]
-      },
-      {
-        "matcher": "^herd:herd-intake-reviewer$",
         "hooks": [
           {
             "type": "command",

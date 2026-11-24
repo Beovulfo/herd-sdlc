@@ -212,7 +212,7 @@ class TestWiringAndStatus(ReviewBase):
             self.assertIn(word, body)
         hooks = json.loads((ROOT / "hooks/hooks.json").read_text())["hooks"]["SubagentStop"]
         self.assertEqual([(e["matcher"], h["command"].rsplit(" ", 1)[-1]) for e in hooks for h in e["hooks"]],
-                         [("^herd:herd-reviewer$", "review-hook"), ("^herd:herd-intake-reviewer$", "review-hook")])
+                         [("^herd:herd-reviewer$", "review-hook")])
         self.assertIn('["review-hook"]', Path(herd.__file__).read_text().split("import hashlib", 1)[0])
 
     def test_status_and_stop_record_name_the_tier(self):
@@ -354,8 +354,7 @@ class TestReviewFindings(ReviewBase):
         self.assertEqual(len(lines), 7)
         review = lines[-1]
         self.assertEqual(review, "Review: claude-sonnet-5-5 (sonnet, builder on haiku; PASS, after 2 rounds "
-                                 "without PASS; ran git diff or git show, read 0 of 1 changed code file): No Blocker or Major; "
-                                 "intake review: a fresh subagent (opus, builder on opus; PASS): no Blocker or Major.")
+                                 "without PASS; ran git diff or git show, read 0 of 1 changed code file): No Blocker or Major.")
         body = herd.pr_body(self.root, "t1")
         self.assertIn("2 review rounds found Blocker or Major issues before the PASS", body)
         self.assertNotIn("\nHERD-REVIEW: PASS", body)
@@ -422,6 +421,28 @@ class TestReviewRound2(ReviewBase):
         self.assertNotIn("same tier", herd._review(herd.load_notes(self.root, "t1")))  # only at the top tier
         self.review(builder="opus", reviewer="opus")
         self.assertIn("same tier", herd._review(herd.load_notes(self.root, "t1")))
+
+
+
+class TestIntakeRemoved(ReviewBase):
+    """0.12.0 removed the 0.11.0 intake reviewer: a task started on 0.11.x still finishes, and its stop is ignored."""
+
+    def test_a_0_11_task_with_intake_records_finishes_and_new_intake_stops_record_nothing(self):
+        self.ready()
+        start = self.root / ".herd/tasks/t1/start.json"
+        start.write_text(json.dumps(dict(json.loads(start.read_text()), intake=True)))
+        with open(self.root / ".herd/tasks/t1/notes.jsonl", "a") as f:
+            f.write(json.dumps({"at": herd.now(), "kind": "intake", "text": "HERD-INTAKE: FAIL", "verdict": "FAIL",
+                                "source": "hook"}) + "\n")
+        self.review(builder="haiku", reviewer="sonnet")
+        herd.verify(self.root, "t1")
+        self.assertEqual(herd.problems(self.root, "t1"), [])
+        self.assertNotIn("ntake review", herd.report(herd.verify(self.root, "t1"), herd.load_notes(self.root, "t1")))
+        before = len(herd.load_notes(self.root, "t1"))
+        self.review(agent_type="herd:herd-intake-reviewer", text="Fine.\nHERD-INTAKE: PASS")
+        self.assertEqual(len(herd.load_notes(self.root, "t1")), before)
+        self.assertFalse((ROOT / "agents/herd-intake-reviewer.md").exists())
+        self.assertNotIn("intake", herd.NOTE_KINDS)
 
 
 if __name__ == "__main__":

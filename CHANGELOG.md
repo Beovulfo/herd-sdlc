@@ -2,6 +2,19 @@
 
 All notable changes to Herd. Versions follow `.claude-plugin/plugin.json`.
 
+## 0.12.0
+
+Removes the intake reviewer added in 0.11.0 ([`herd-intake-review.md`](docs/designs/herd-intake-review.md), now marked removed). A live Haiku run on 0.11.0 showed it did not catch the flaw it was built for. The Sonnet intake reviewer passed an `inputs` entry whose `program` form took a pre-chosen walkable pick cell for each product. Its only catch, non-verbatim human criteria, the 0.10.0 verbatim block already refuses in code. It also added review rounds and cost.
+
+- **Removed:**
+  - the `herd-intake-reviewer` agent and its SubagentStop entry;
+  - its path in `herd review-hook`, the `intake` note kind and `criteria_sha`;
+  - the `problems()` rule that needed an intake PASS, its `next` steps, and the escalation after 3 failed intake rounds;
+  - the `Intake review` lines in the report, the final report and the PR;
+  - the `intake` key `herd init` wrote to `start.json`, and the run skill's intake sentence (run skill budget back from 875 to 845 words).
+- **Kept:** the final `herd-reviewer` one tier above the builder, its evidence checks (what it read, its `path:line` references), and its brief with the request and the `inputs` list. Also kept: the `inputs` enforcement, the verbatim block, the required fields, and the 0.11.1 corrections rule.
+- **Compatibility:** a task started on 0.11.x keeps its `intake` notes and its `intake` key in `start.json`; nothing reads them now, so it no longer needs an intake review to finish.
+
 ## 0.11.1
 
 Fixes a deadlock a live Haiku run hit on 0.11.0. Its human criteria at the first verify were cut quotes, and C4 was its own sentence. The intake reviewer failed them twice, so the agent re-split the request into verbatim quotes under the same ids: new C2 and C3 were other sentences of the request, and C4 joined the old C2 and C3. The intake review then passed, but the frozen-criteria rule from 0.4.0 refused every change until the human's words were recorded with `herd note --human-change`. The agent rightly would not claim the human changed them, and the task stopped.

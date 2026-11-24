@@ -1,10 +1,14 @@
 # Herd Intake Review: the criteria read as the human would, before the code
 
 * **Author:** Toni
-* **Status:** Implemented in 0.11.0
+* **Status:** Implemented in 0.11.0, removed in 0.12.0 (see Removal below). Kept as a record; none of it is in the code.
 * **Date:** 2026-11-24
 
 --------------------------------------------------------------------------------
+
+## Removal (0.12.0)
+
+A live Haiku run on 0.11.0 showed the intake review did not do its job. The Sonnet intake reviewer passed an `inputs` entry whose `program` form took a pre-chosen walkable pick cell for each product, the exact flaw it was built to catch. Its one real catch, human criteria that were not verbatim quotes, the 0.10.0 verbatim block already refuses in code. Meanwhile it added review rounds and cost, and it played a part in the deadlock 0.11.1 fixed. 0.12.0 removes the agent, its hook entry and the `intake` note, along with the `problems()` rule, the escalation rule, the report lines and the run skill step. Kept: the final reviewer also gets the request and the `inputs` list (I4), and the 0.10.0 checks. Old tasks keep any `intake` notes and `intake` key in `start.json`; Herd ignores them.
 
 ## Overview
 

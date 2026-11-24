@@ -145,7 +145,7 @@ TEST_DIRS = {"test", "tests", "spec", "specs", "__tests__", "testdata", "fixture
 TEST_FILE = re.compile(r"^test_.*|.*_test\.[^.]+$|.*\.(test|spec)\.[^.]+$|.*_spec\.[^.]+$|^conftest\.py$")
 LEVELS = ("low", "medium", "high")
 ESCALATE_AFTER = 3  # consecutive failing verifies of one criterion before the agent must ask the human
-# the standard attacks of the adversarial pass (skills/run/adversarial.md): `herd done` needs a tried note for each
+# the standard attacks of the adversarial pass (skills/run/adversarial.md): `herd done` needs a passing command or an n/a for each
 ATTACKS = {"bad-input": "bad input at every entry point ends in a clear message, never a traceback",
            "collision": "two inputs on the same key or position each still count",
            "one-bad-part": "one broken entry the request does not ask for does not reject the whole input, while a broken requested one still fails clearly",
@@ -184,7 +184,7 @@ def narrowing(criteria, known_limits):
     return (claims, hits) if claims else ([], [])
 
 
-def narrowed_claims(ev, notes=()):
+def narrowed_claims(ev):
     """One line per known limit that narrows a human any/every claim: shown as not proven, for the human."""
     claims, hits = narrowing(ev.get("results", []), ev.get("known_limits"))
     out = [f"{', '.join(claims)}; narrowed by: {s}" for s in hits[:MAX_NARROWED]]
@@ -1758,7 +1758,7 @@ def _rule_lines(ev, notes):
     out += [f"{cid}: check changed after the first verify, so it was never seen failing"
             for cid in ev.get("checks_changed") or []]
     out += [f"{cid}: added after the first verify, so it was never seen failing" for cid in ev.get("added_after_red") or []]
-    out += narrowed_claims(ev, notes)
+    out += narrowed_claims(ev)
     if (ev.get("red") or {}).get("stashed"):
         out.append("Red first not proven: a git stash was made on this branch before the first verify")
     out += [f"Human criterion changed with the human's words, for you to confirm: {n['text']}"
@@ -2723,7 +2723,7 @@ def _slug_arg(root, args):
 USAGE = {
     "init": 'herd init <slug> "<goal>" [--request "<message>"] [--quick "<check>"] [--worktree]',
     "check": "herd check [slug]",
-    "note": 'herd note --found|--fixed|--open|--decision|--late-red|--human-change|--tried [--attack bad-input|collision|one-bad-part|recount --check "<command>" [--timeout S]] "text"',
+    "note": 'herd note --found|--fixed|--open|--decision|--late-red|--human-change|--tried [--attack bad-input|collision|one-bad-part|recount|refusal|other-reading --check "<command>" [--timeout S]] "text"',
     "review": 'herd review --by "<reviewer>" "<what they found>"   (a note; at medium and high risk only the review hook counts)',
     "review-hook": "herd review-hook   (the SubagentStop hook for herd-reviewer: records its review from the session logs)",
     "review-brief": "herd review-brief [slug]   (the brief to pass to herd-reviewer as it is: criteria, request, "

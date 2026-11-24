@@ -665,8 +665,8 @@ class TestNarrowedClaims(Base):
         human_any = [{"id": "C1", "source": "human", "text": "works for any layout"}]
         for ev in ({}, {"results": []}, {"results": human_any, "known_limits": None},
                    {"results": human_any, "known_limits": ""}, {"results": [{"id": "C1"}], "known_limits": "only x"}):
-            self.assertEqual(herd.narrowed_claims(ev, []), [], ev)
-        self.assertEqual(herd.narrowed_claims({"results": human_any, "known_limits": "Only small maps."}, []),
+            self.assertEqual(herd.narrowed_claims(ev), [], ev)
+        self.assertEqual(herd.narrowed_claims({"results": human_any, "known_limits": "Only small maps."}),
                          ["C1 says 'any'; narrowed by: Only small maps."])
 
     def test_sentences_split_only_at_sentence_ends(self):

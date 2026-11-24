@@ -15,7 +15,7 @@ One benchmark: the same prompt, given 6 times each to four arms (Claude Sonnet 5
 
 ## Run isolation
 
-The Herd plugin is installed from this repository, so it ships this folder, including `verifier/` (the hidden verifier) and `runs/` (the published solutions). The repository is public. A run that can read the disk can read both. `verifier/run_leg.py` starts every run of a leg in a sandbox that denies:
+Since 0.12.10 an install ships only `plugin/`, not this folder. But the repository is public and a checkout holds `verifier/` (the hidden verifier) and `runs/` (the published solutions), so a run that can read the disk can read both. `verifier/run_leg.py` starts every run of a leg in a sandbox that denies:
 
 - your home folder (`~/`), so a run cannot read your other projects;
 - every other entry in the leg's parent folder, such as earlier benchmark legs;
@@ -47,4 +47,8 @@ Do not put the root directly in `/tmp`: every other entry of the root's parent i
 
 A leg's siblings are denied as they are when it starts, so start a leg only after the earlier legs in the same parent exist. `--dry-run` also creates the root and the run folders, so delete the root before the real start. A checkout outside your home folder is added to the deny list.
 
-Score results count only for runs whose audit prints `leak audit: clean`.
+### Which runs count
+
+A finding marked `blocked` is an attempt that the sandbox refused, such as `mktemp -d` in the system temp folder or an access to `__pycache__`. It counts as clean. Only a read of the hidden verifier, of another run or of the network voids a run.
+
+So a run's score counts when the audit prints `leak audit: clean`, or when every finding it lists is `blocked`, or is a refused network call as below. The audit still exits 1 for blocked findings, so read its lines. Two kinds of finding print as `not blocked` and need a look. A `not isolated` finding is different: it shows no read, but the sandbox is not proven to be on, so do not score the run. A `network tool call` finding can be a refused call: check its tool result. A refused call counts as blocked.

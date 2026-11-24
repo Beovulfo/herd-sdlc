@@ -1,7 +1,7 @@
 # Herd Guardrails: guard hook, tier-up review, stop record
 
 * **Author:** Toni
-* **Status:** Draft
+* **Status:** Built. Parts are superseded: the review limit is 2 reviews (0.12.4), and the reviewer is capped at Sonnet (0.12.8). See the [changelog](../../CHANGELOG.md); the text below is kept as written.
 * **Date:** 2026-11-23
 
 --------------------------------------------------------------------------------

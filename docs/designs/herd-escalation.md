@@ -1,7 +1,7 @@
 # Herd Escalation, Hold and Resume
 
 * **Author:** Toni
-* **Status:** Draft
+* **Status:** Module built and unit tested; not wired into the CLI.
 * **Date:** 2026-11-22
 
 --------------------------------------------------------------------------------

@@ -979,7 +979,7 @@ class TestStopRecord(Base):
         path = self.root / ".herd/tasks/t1/stopped.json"
         self.assertEqual(herd.gate(self.root, {})["decision"], "block")  # passing: a reminder, not a stop
         self.assertFalse(path.exists())
-        (self.root / "app.py").write_text("def f():\n    return 2\n")
+        (self.root / "app.py").write_text("def f():\n    return 1 + 1\n")  # another size: no stale .pyc
         herd.verify(self.root, "t1")
         self.assertEqual(herd.gate(self.root, {})["decision"], "block")  # one blocked attempt is not a stop
         self.assertFalse(path.exists())
@@ -1133,7 +1133,7 @@ class TestStopRecordAttacks(Base):
         for _ in range(herd.MAX_BLOCKS + 1):
             herd.gate(self.root, {})
         self.assertEqual((self.record()["reason"], self.record()["gate_blocks"]), ("done_refused", herd.MAX_BLOCKS))
-        (self.root / "app.py").write_text("def f():\n    return 2\n")
+        (self.root / "app.py").write_text("def f():\n    return 1 + 1\n")  # another size: no stale .pyc
         for _ in range(herd.ESCALATE_AFTER):
             herd.verify(self.root, "t1")
         for _ in range(herd.MAX_BLOCKS + 1):

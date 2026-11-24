@@ -1,7 +1,7 @@
 # Herd Project Agent: ground check, learning across tasks, a graph agent that runs the task
 
 * **Author:** Toni
-* **Status:** Draft. Spike S4 done; nothing else built. The owner approved Part B as Collie's first job. A revision of Part B (one graph agent per repository) is under review on a separate branch and will replace this text when it lands.
+* **Status:** Draft. Spike S4 done; nothing built. Parts B and C are superseded by [`herd-pastor.md`](herd-pastor.md); Part A stays here.
 * **Date:** 2026-11-24
 
 --------------------------------------------------------------------------------

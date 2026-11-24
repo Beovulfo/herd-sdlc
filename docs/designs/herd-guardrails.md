@@ -160,7 +160,7 @@ Unreadable or missing config means the defaults above. A model id that matches n
 
 Never block, never print to stdout. On an exception: one stderr line, exit 0.
 
-As built, after a fresh review: the hook counts only a main session log Herd saw itself (the pre-init hook at `herd init` and the Stop gate record each session into `start.json`), and only a reviewer log at `<session>/subagents/agent-<id>.jsonl` next to it. The guard denies running Herd's hook commands by hand, writing the session logs, and editing the installed plugin. `[review]` is fixed at `herd init`.
+As built, after a fresh review: the hook counts only a main session log Herd saw itself (the pre-init hook at `herd init`, the guard on each tool call since 0.12.2, and the Stop gate record each session into `start.json`), and only a reviewer log at `<session>/subagents/agent-<id>.jsonl` next to it. The guard denies running Herd's hook commands by hand, writing the session logs, and editing the installed plugin. `[review]` is fixed at `herd init`.
 
 **B4. Counting.** `review_state()` gains these rules, checked after the existing ones:
 * The note has no `source == "hook"`: "recorded by hand, not by the review hook: spawn herd-reviewer".

@@ -1,445 +1,546 @@
-# Herd Pastor: a named graph agent per repository that runs Herd and learns from every task
+# Herd Pastor: an opt-in graph agent that coordinates Herd agents on your project and learns
 
 * **Author:** Toni
-* **Status:** Draft v4: v2 after two EGM review rounds (round 1: design, implementation readiness, scope, code accuracy, comprehension; round 2: implementation readiness), plus corrections (D8) at the owner's request; round 3 (implementation readiness) found 0 Blockers and 5 Majors, all fixed. v4 adds the user's own agent and the ON/OFF switch (G13), at the owner's request; round 4 (implementation readiness) found 0 Blockers and 3 Majors, all fixed. Spike S5 done; nothing built. Supersedes Parts B and C of [`herd-project-agent.md`](herd-project-agent.md); its Part A (ground check) stays there.
+* **Status:** Draft v5, revised after two EGM rounds. Rewritten from v4 (commit c63fb51) on the owner's M4 decisions of 2026-11-24. The agent lives in a kennel repository, never in the product repository. It coordinates headless Herd agents from GitHub, learns for itself through stacked pull requests, files feedback for Herd, and can be driven from a phone. "Changes from v4" lists what v5 drops and why. EGM review round 1 (design, implementation readiness, scope, code accuracy, comprehension) found 3 Blockers and 27 Majors; round 2 (implementation readiness, code accuracy) found 0 Blockers and 13 Majors. This revision answers both. Spike S5 is done, spike S6 is planned, nothing is built. Supersedes Parts B and C of [`herd-project-agent.md`](herd-project-agent.md); its Part A (ground check) stays there.
 * **Date:** 2026-11-24
+* **Tracking:** issue #33, milestone "M4 Graph agents in Herd", draft PR #25.
 
 --------------------------------------------------------------------------------
 
 ## Overview
 
-A **pastor** is a graph agent that belongs to one repository. Herd creates it from a template that ships in the plugin and gives it a random pet name. The pastor replaces Claude's default agent in that repository and runs the Herd workflow as a graph. Every time a task there reaches `herd done` or stops, Herd's code turns the task's records into lessons, and the next task starts by reading them. The user decides whether the pastor and its lessons are committed, so the whole team uses and improves the same pastor, or kept local to their clone.
+Herd offers, as an opt-in feature, a **pastor**: a graph agent that works on one project for one human. `herd pastor new` writes it into the human's **kennel**, a git repository of agents with agent-kennel's layout, as `plugins/<name>/`. The product repository gets no file from it.
 
-The owner's request, in their words: "whenever user start working on a given repository it uses a specific "graph-agent" with a name, based on the template of "agent-kennel" repository, with some pet name given at random the first time the agent starts. herd-sdlc will look for existent agents in the local repostory, ask the user to select the one it wants to use, or ask the user if he/she wants to create a new one. This agent will handle the herd workflow and learn to improve with specific knowlege on the repository every time a task reaches "herd done", the learnings and the agent [...] will be kept in the local repository and decided by the user if he wants to gitignore it in the project or commit it also in their repository [...], each new pastor agent starts with some basic knowledge on how herd works and the typical moments in the workflow that require some special attention). The idea is that this pastor agent will replace the "default" agent used by Claude during the development in a given repository, if user want to extend the scope of the pastor agent beyond the herd workflow (for example letting it merge and other tasks, is up to the user to decide)" (2026-11-24).
+A new pastor starts from a **baseline**: the setup the owner's agent Collie uses to build Herd (graphs, gates, agent roster, GitHub tracking, milestone reports), written as rules without the owner's private context. From then on it learns from its own human:
+* its **Learner** turns the human's corrections into rules in the pastor's agent file, as stacked pull requests the human merges;
+* problems it meets in Herd become **customer-feedback** issues on Beovulfo/herd-sdlc.
+
+At work the pastor is a **coordinator**:
+
+1. An Opus session reads the plan from GitHub: the project board, milestones and issues.
+2. It spawns headless Sonnet or Haiku sessions with the herd-sdlc plugin, one per issue, in parallel, and passes each one its issue, milestone and context.
+3. It accepts a session's work only when Herd's `herd done` evidence and a pull request in the right milestone exist.
+4. It reports to its human in the milestone format.
+5. It stops for the human at design, merge and release gates.
+
+After setup it runs under Claude Code's Remote Control, so the human can drive it from the Claude mobile app.
+
+**M4** is herd-sdlc's milestone "M4 Graph agents in Herd". It closes when this feature is proven on a new project: the pastor Magpie, made for a new repository Beovulfo/picturebook, passes the acceptance in D9. Picturebook's own product, a visual pull-request review, is Magpie's ongoing work after M4.
+
+The owner's words for the coordinator (2026-11-24): "the way you are working for this porject Collie, is what -i would like the graph agents we want to build next as a feature in herd-sdlc behave --> they are Opus models that control the work and spawn agents in parallel when needed and are able to update on the progress to the human, they should act as kwnoledgable coordinators and pass to the headless agents the right context and plugins. All the coding agents spawn by these graph agents must use herd-sdcl plugin for all the development lifecycle".
 
 Herd's existing rules still apply:
 - standard library only, and `gh` is the only external service;
-- every decision is made from files, git state, session logs and exit codes;
-- a hook never breaks the session;
-- no decision depends on parsing what the agent wrote.
-
-### Herd in brief
-
-Herd runs one task at a time, in these steps:
-
-1. `herd init <slug>` opens the task in `.herd/tasks/<slug>/` and creates the `herd/<slug>` branch.
-2. The agent writes the task's success criteria in `task.toml`. Each criterion is a sentence plus a shell `check` command. Criteria marked `human` must quote the user's request.
-3. `herd verify` runs every check and writes `evidence.json`. Before any code exists the checks must fail. This is *red first*: it proves the checks test something.
-4. The agent builds the change, then tries to break it with five standard *attacks*. These are extra checks, for example the *refusal* attack, which confirms that every input the program refuses is really impossible to serve.
-5. At medium and high risk, a reviewer subagent one model tier above the builder reviews the change. A hook records the review.
-6. `herd done` closes the task, but only if the *done gate* accepts the evidence. The done gate is the code in `herd done` and in the Stop hook that refuses a task whose evidence is missing, stale or failing.
-7. While a task is open, the *guard* hook denies edits to Herd's own files and irreversible commands such as `git push`.
-
-When a task stops without `herd done`, Herd writes `stopped.json` with the reason. The run skill, `/herd:run`, tells Claude's default agent these steps as text.
+- decisions are made from files, git state, session logs and exit codes, never by matching the agent's wording;
+- a hook never breaks the session.
 
 ### Terms
 
-- **Records**: the files Herd's code writes about a task. These are `evidence.json`, `fails.json` (consecutive failing verifies per criterion), `stopped.json`, and the notes in `notes.jsonl`, such as `human-change` and the hook-recorded `review` notes. The agent cannot edit any of them during a task, because the guard denies it.
-- **Graph agent**: an agent whose file holds two things. One is its knowledge: rules, each with its source. The other is a graph: the steps it follows, one node per line. This is the format of the owner's agent-kennel repository, where Collie, the agent that develops Herd, lives.
-- **Gate node**: a node of type `gate` in a graph. The agent stops there and asks the user, and goes on only after the user's explicit reply. Not the same as the done gate.
-- **Pastor**: a graph agent that `herd pastor new` makes for one repository. It is a Claude Code project agent, `.claude/agents/<name>.md`.
-- **Lesson**: one row that Herd's code copies from a task's records into the store.
-- **Correction**: a `correction` note. It records the human's own words when the human corrects the agent, and Herd accepts it only when it quotes a message the human typed (D8).
-- **Store**: the file of lessons for one clone, `<git-common-dir>/herd/lessons.json`. The git common dir is the `.git` folder that the main checkout and all its worktrees share (spike S4).
-- **Shared** or **local**: a pastor whose file is committed, or one that is listed in `.git/info/exclude`. That is the clone's own ignore file, which is never committed.
-- **Main checkout**: the repository's first working folder. Herd's worktrees live in `.claude/worktrees/` under it.
+Herd's own:
+- **Herd task**: one change run by `/herd:run`, kept in `.herd/tasks/<slug>/` on branch `herd/<slug>`. `.herd/active` names the open task and is removed by `herd done`.
+- **`evidence.json`**: the result of each success criterion's check, written by `herd verify`. **`evidence.md`**: the report `herd done` writes when it accepts the task.
+- **`stopped.json`**: written when a task stops without `herd done`. `herd done` later sets its `resolved_at`; a stop without it is **unresolved**.
+- **Guard**: Herd's PreToolUse hook. During a task it denies edits to Herd's files and irreversible commands such as `git push`.
+- **Done gate**: the code in `herd done` and the Stop hook that refuses a task whose evidence is missing, stale or failing.
+
+This design's:
+- **Graph agent**: an agent whose file holds its knowledge (rules, each with its source) and who follows graphs, YAML files of steps, one node per line. D3 gives the format, from agent-kennel's `graphs/README.md`, which is private.
+- **Gate node**: a graph node where the agent stops and asks its human, and goes on only after the human's explicit reply. Not the same as the done gate.
+- **Kennel**: a git repository holding graph agents as Claude Code plugins, `plugins/<name>/`, listed in its `.claude-plugin/marketplace.json`. The owner's kennel is agent-kennel. Below, `<kennel>` is the kennel's checkout path and `<market>` the `name` in its `marketplace.json` (`agent-kennel`).
+- **Pastor**: a graph agent made by `herd pastor new` for one product repository.
+- **Product repository**: the repository the pastor works on; its **checkout** is the local folder of its main working tree.
+- **Headless session**: `claude -p "<request>"`, a session with no human, started by the pastor's `bin/spawn`.
+- **Spawn record**: the JSON file `bin/spawn` writes for each session (D5).
+- **Learner**: the pastor's learning agent, `plugins/<name>/agents/learner.md`.
+- **Customer-feedback issue**: an issue on Beovulfo/herd-sdlc with the label `customer-feedback`. The label exists: "Feedback on Herd filed by a graph agent from a user's project".
+- **EGM**: the Elephant-Goldfish Model, the design review method of the egm plugin: fresh-context reviewer agents each read the design from one angle.
+
+## Changes from v4
+
+| v4 | v5 | Why |
+| --- | --- | --- |
+| The pastor is `.claude/agents/<name>.md` in the product repository, shared or local | `plugins/<name>/` in a kennel | The owner: the agent lives in agent-kennel, never in the product repository |
+| A SessionStart hook asks on every new session whether to use or create a pastor; an ON/OFF switch silences it | No hook, no switch: nothing happens until the human runs `herd pastor new` | The feature is opt-in. It also removes the only per-session cost Herd added |
+| `herd note --correction` records the human's words inside a Herd task | The Learner records corrections in the kennel | The human talks to the coordinator. A headless session has no human messages to quote |
+| The lessons store from task records (v4 D5), its guard rules (v4 D6), a committed shared copy | Not in this design; Open Question 1 | The M4 bar does not need them, and the shared copy would put a file in the product repository |
+| One `run` graph that replaces `/herd:run` | A `coordinate` graph above Herd; every coding session still runs `/herd:run` | The owner: all coding agents use the herd-sdlc plugin for the whole lifecycle |
+| Random pet names | `--name` is required | Every pastor so far was named by its human; one less table in code |
 
 ## Problem
 
-* **Every task starts from zero.** In the benchmark, a supermarket route planner, Haiku built with Herd 0.3.1, 0.4.0 and 0.7.0 and made the same mistake each time: it reported a product as unreachable although another side of its shelf was open. Each time, the lesson reached Herd only because a human read the runs and changed Herd. Inside a user's project, the same mistake in the same module repeats until a human notices.
-* **The run flow is skill text read by Claude's default agent.** The done gate enforces most steps. But the order of steps, when to read a reference file and what to do at intake are text that an agent can skip. The owner prefers a graph over a persona for agents, as in agent-kennel. The owner also prefers code over skill text for rules (CHANGELOG 0.4.0).
-* **Nothing a team learns travels.** What one developer's tasks taught never reaches a teammate's clone, and a project cannot see or review what its agent was told.
+* **Coordination is a person's job today.** Collie shows that an Opus coordinator can run several Herd sessions at once and track them in GitHub. It works only in herd-sdlc, for the owner, with rules the owner taught it over three days. Every other project starts from zero.
+* **Without code, coordination rules slip.** Collie's `spawn` refuses an issue without a milestone and refuses work that skipped Herd. It was built after the headless session that wrote herd-sdlc PR #28 (a benchmark docs change) committed without `herd init` or `herd done`. A generic agent without that code would repeat the mistake.
+* **Herd hears about its problems only from the owner.** When Herd blocks or misleads an agent in another project, nobody files it.
+* **Agents do not keep what their human taught them.** Collie's agent file holds rules from the owner's corrections, each with a source. A new agent has no such file and no Learner to keep one.
 
 ## Goals
 
-* G1: `herd pastor new` creates a pastor from the plugin's template. `--shared` writes `.claude/agents/<name>.md` in the current work tree, for the user to commit. `--local` writes it in the main checkout and adds `/.claude/agents/<name>.md` to `.git/info/exclude`. With neither flag it refuses and names both, because that choice is the user's. Check: `test_pastor_new_shared`, `test_pastor_new_local_excluded`, `test_pastor_new_needs_mode`.
-* G2: Without `--name`, the name is `random.choice` from `PET_NAMES` in code, excluding names already in `.claude/agents/` of the work tree or the main checkout. When every name is taken, it says so and asks for `--name`. A given name must match `[a-z][a-z0-9-]{1,30}` and must not exist. Check: `test_pastor_name_random_and_unused`, `test_pastor_name_rejected`.
-* G3: `herd pastor list` prints every `.claude/agents/*.md` of the work tree and of the main checkout, without duplicates; the work tree's copy wins. For a pastor it also prints the mode, the template version and any graph problems (D2). Other agents are marked `not a pastor`. `herd pastor use <name>` accepts any of them. It reads the `agent` setting the way Claude Code layers it: the main checkout's `.claude/settings.local.json`, then the work tree's and the main checkout's `.claude/settings.json`, then `~/.claude/settings.json`, taking the first non-empty value and skipping unreadable JSON. When that names a different agent, `use` refuses, names the file, and prints how to change it by hand: Herd never replaces or edits an agent the user chose. When it names the same agent, `use` says so and exits 0. A name that `list` does not show is refused too, with the same hand-edit hint for a plugin or user agent. Otherwise it writes `"agent": "<name>"` into the main checkout's `.claude/settings.local.json`, keeps the file's other keys, adds the file to `.git/info/exclude` when it is untracked, and says the change takes effect in the next session. Check: `test_pastor_list_worktree`, `test_pastor_use_keeps_settings`, `test_pastor_use_never_replaces_own_agent` (local, project and user scope).
-* G4: A SessionStart hook, `herd session-hook`, prints at most one `additionalContext` block, and only when `source` is `startup` inside a git repository:
-  * the session's agent is a pastor: the block names it, its lesson count, `lessons.md`, and a newer template when there is one;
-  * the session has no agent (`agent_type` absent) and pastors are on (G13): the block tells the agent to ask the user one question in its first reply, with three options. The options are use an existing agent (named), create a pastor (shared or local), or continue without one (`herd pastor off`);
-  * any other agent, from any settings scope or `--agent`, such as Collie: nothing. `agent_type` carries the agent whichever way it was chosen: spike S5 saw `pip` for a project agent in settings and `egm:egm-style` for a plugin agent by `--agent` or by setting. A name with `:` is never a pastor;
-  * pastors off (G13): the no-agent question is not asked. A session whose agent is still a pastor gets its block anyway, since that block is how it learns to call `herd`.
+* **G1 Create in the kennel only.** `herd pastor new --name N --kennel DIR --repo OWNER/NAME --checkout PATH` writes `plugins/<N>/` in DIR from the template (D1), and appends `{"name": "<N>", "source": "./plugins/<N>", "description": "<N>, a Herd pastor for OWNER/NAME", "category": "development"}` to `plugins` in DIR's `.claude-plugin/marketplace.json`. PATH is the product's checkout, which may not exist yet. It refuses when:
+  * DIR is not a git checkout or has no `.claude-plugin/marketplace.json` (it names the file a kennel needs);
+  * DIR is inside PATH, or PATH inside DIR;
+  * `plugins/<N>/` exists, or N does not match `[a-z][a-z0-9-]{1,30}`.
 
-  Both blocks start with the line `herd <command> means python3 "<path>/scripts/herd.py" <command>; reference files are in <path>/skills/`, where `<path>` is the plugin folder the hook itself runs from. A project agent gets no `${CLAUDE_PLUGIN_ROOT}` expansion, and the plugin folder changes with every upgrade, so the path is never written into the agent file.
+  It writes nothing outside DIR. Check: `test_pastor_new_writes_kennel_plugin` (files of D1 and the marketplace entry), `test_pastor_new_writes_nothing_in_product_repo` (the checkout's `git status --porcelain` is empty after the run), `test_pastor_new_refuses_nested`, `test_pastor_new_refuses_existing_name`, `test_pastor_new_refuses_non_kennel`.
+* **G2 A baseline from the owner's setup, without the owner's private context.** The template's agent file has D4's sections. Every rule line (a line matching `^\s*[-*] ` under a `## ` section other than `## Learnt rules`) ends with a source tag matching `\[(baseline: [^\]]+|human \d{4}-\d{2}-\d{2}[^\]]*|evidence: [^\]]+)\]$`. The template's text holds none of these: `/Users/`, `/home/`, an email address (`[\w.+-]+@[\w-]+\.[\w.]+`), the word `\bToni\b`, or `Beovulfo` except in `Beovulfo/herd-sdlc`. The template's graphs pass D3's checks. Check: `test_template_rules_have_sources`, `test_template_privacy`, `test_template_graphs_valid`.
+* **G3 Setup behind a gate.** The `setup` graph (D3) creates the GitHub side only after `gate_setup`:
+  * the repository when it does not exist, with its license, a `CLAUDE.md` with Herd's rules, a CI workflow that runs the checks the human named, and a `herd.toml` with `[pr] open = true` (Herd's `herd pr` opens a pull request only when that is set or `--yes` is given);
+  * the clone at the checkout path;
+  * the labels and the private project board with D5's fields;
+  * the first milestones.
 
-  Check: `test_session_hook_names_pastor` (asserts the `herd` line), `test_session_hook_asks_until_decided`, `test_session_hook_silent_for_other_agent`, `test_session_hook_silent_when_off`, `test_session_hook_names_pastor_when_off`, `test_session_hook_silent_outside_git`.
-* G5: `herd done` and `write_stop` (the code that writes `stopped.json`) add lessons to the store, from records only (D4). Each lesson keeps its source (`herd`, `reviewer`, `human`), the tasks and the commit it came from. Check: `test_lessons_from_done`, `test_lessons_from_stop`.
-* G6: A task adds each key at most once. A key already in the store from another task increments `seen`, and the final report says `recurred: L3f9a2c (3rd time)`. `L3f9a2c` is the lesson's id, derived from its key. Check: `test_lesson_recurrence`, `test_lesson_once_per_task`.
-* G7: `herd init` writes `.herd/tasks/<slug>/lessons.md`, at most 10 lessons ranked by `seen` then `last`, both descending, and prints one line naming the file. Check: `test_lessons_ranked_and_capped`.
-* G8: When the repository has a shared pastor, `herd init` merges the committed `.claude/pastors/lessons.json` into the store. A `herd verify` whose checks all pass writes that file in the task's work tree, as the store plus the lessons this task would add, before it takes the evidence fingerprint. The agent commits it with the change, so the verified commit and the PR hold the task's own lessons. Check: `test_shared_lessons_merge_and_export`, `test_shared_lessons_in_verified_commit`.
-* G9: During a task, the guard denies edits, from any work tree, to:
-  * the store folder `<git-common-dir>/herd/`;
-  * `.claude/pastors/**` of the work tree and of the main checkout;
-  * every pastor file in `.claude/agents/` of either;
-  * the new task files `history.json` and `lessons.md`.
+  It writes `owner`, `project` and `checkout` into `plugins/<name>/pastor.json`. Check: `test_template_setup_side_effects_gated`. In the Magpie test: `gh project view <n> --owner Beovulfo --format json` shows D5's fields.
+* **G4 Parallel work from the board.** `bin/pick` prints the Queued issues, other than `role:design` ones, whose `Depends on:` issues are all Done and whose `Touches:` paths share no leading path component sequence with a Running issue's (`src/a` and `src/a/b` overlap; `src/a` and `src/ab` do not). The issue body lines match `^Depends on: #\d+(, #\d+)*$` and `^Touches: \S+(, \S+)*$`; an issue without a `Touches:` line overlaps everything. `bin/spawn` starts one headless session per issue (D5). It refuses:
+  * an issue without a milestone;
+  * an issue already labelled `status:running`, or claimed by another coordinator;
+  * a coding or small-fix request that does not start with `/herd:run`;
+  * a worktree on the default branch;
+  * a worktree whose `.herd/active` names a task, unless the request continues that slug (D5).
 
-  It also denies `herd lessons --drop` and `herd session-hook`. Outside a task, all of these are the user's. Check: `test_guard_protects_pastor_and_store_from_worktree`, `test_guard_denies_lessons_drop`, `test_guard_allows_lessons_list`.
-* G10: The template's graph passes the graph rules in D2, and so does any graph `herd pastor list` checks. Check: `test_template_graph_valid`, `test_graph_rejects_ungated_side_effect`.
-* G12: `herd note --correction "<the human's words>"` records a `correction` note only when its text is a verbatim quote, by the 0.10.0 comparison, of a message the human typed in the task's sessions since `herd init` (D8). Otherwise it refuses and says why. At `herd done` each correction becomes a lesson. The template's `learn` step drafts a rule from each new correction lesson, and writes it into the knowledge section only on the user's yes at a gate node. Check: `test_correction_must_quote_human`, `test_correction_rejects_peer_and_tool_text`, `test_lessons_from_corrections`.
-* G13: Pastors have an ON/OFF switch, ON by default. `herd pastor off` and `herd pastor on` write `<git-common-dir>/herd/pastor.json` (`{"enabled": false}` or `true`), which belongs to this clone only, so one person can turn pastors off without changing a team file. A team can set the default in `herd.toml` with `[pastor] enabled = false`. The clone's file, when present, wins over `herd.toml`. While OFF, the SessionStart hook does not ask its question, and `herd pastor new` and `use` refuse with `pastors are off: run herd pastor on`. `list`, `on` and `off` still work. `herd pastor off` does not touch the `agent` setting: when the main checkout's `.claude/settings.local.json` still names a pastor, it prints `<name> is still this clone's agent: remove "agent" from .claude/settings.local.json to use the default agent`. An unreadable `pastor.json` or `herd.toml`, or an `enabled` that is not a boolean, is ignored, as `[review]` treats odd values, so the default ON holds. `on` and `off` create `<git-common-dir>/herd/` when it is missing. Lessons (D5), corrections (D8) and their guard rules (D6) are Herd's own records and stay on either way, for any agent: `herd init` still writes `lessons.md`, and any agent that runs Herd can read it. Check: `test_pastor_switch_off_and_on`, `test_pastor_switch_clone_wins_over_toml`, `test_lessons_written_when_off`.
-* G11: The SessionStart hook adds at most 20 ms over a bare `python3 -c pass`. Lessons add at most 50 ms to `herd init`, `herd verify` and `herd done` with 200 lessons and 1,000 files. Both are measured as the median of 5 runs against the same command without the feature. Check: `test_pastor_and_lessons_cost`.
+  Check: `test_pick_skips_blocked_overlapping_and_design`, `test_spawn_refuses_issue_without_milestone`, `test_spawn_refuses_running_issue`, `test_spawn_refuses_request_without_herd_run`, `test_spawn_refuses_default_branch`, `test_spawn_allows_continuation`, `test_spawn_command_loads_herd`.
+* **G5 Accept only Herd-made work.** `bin/spawn check --issue N` finds the worktree and slug in the newest spawn record for N. It exits 0 only when all of these hold:
+  * `.herd/tasks/<slug>/evidence.md` exists (written by `herd done`);
+  * every result in `evidence.json` is `passing`;
+  * `stopped.json` is absent or has `resolved_at`;
+  * `.herd/active` does not name the slug;
+  * a pull request from `herd/<slug>` exists and its body says `Closes #N`;
+  * at least one CI check ran on it and all passed. While any check is still pending, it exits 3 and changes nothing; the coordinator's `wait` node runs it again every 5 minutes, and after 60 minutes pending counts as a failure.
+
+  On success it then sets the pull request's milestone to the issue's (`gh pr edit --milestone`), makes it a draft (`gh pr ready --undo`), fills the spawn record's end time and cost, and sets the issue to Review. Herd's `herd pr` opens a ready PR with no milestone, so this step is code. On failure it sets the issue to Blocked and comments why. Check: `test_spawn_check_finds_slug_from_record`, `test_spawn_check_needs_herd_done`, `test_spawn_check_needs_closes_line`, `test_spawn_check_refuses_no_ci`, `test_spawn_check_sets_milestone_and_draft`.
+* **G6 Milestone reports from data.** `bin/report` prints one block per open milestone from `gh` data, in D5's format. The coordinator prints it after every `spawn check`, passed or failed, at every gate, and when the human types `status`; never on a timer. Check: `test_report_milestone_blocks` (D5's fixture to D5's example, byte for byte), `test_report_names_every_pr`.
+* **G7 The human decides design, merge, release and feedback.** In the template's graphs, every node that merges, tags, releases, opens a learning pull request or files an issue on another repository has `side_effect: true` and is reached only through a gate. A design runs as an Opus side session that stops at its own gate and returns the question. Check: `test_template_graphs_valid` (D3 rule 5), `test_template_external_actions_gated` (every node whose `does` names `merge`, `tag`, `release`, `bin/feedback --file` or `bin/learn-pr` has `side_effect: true`; the check reads the template's own text, written by Herd).
+* **G8 Learning for itself, as stacked pull requests.** `bin/learn-check --base B` exits 0 only when, for the diff from B to the working tree:
+  * it touches only `plugins/<name>/agents/<name>.md`, `plugins/<name>/graphs/*.yaml` and `plugins/<name>/.claude-plugin/plugin.json`;
+  * `plugin.json`'s `version` is higher than at B, so installed copies update;
+  * every graph passes D3's checks;
+  * every added rule line in the agent file ends with a source tag;
+  * every quoted phrase (text in double quotes) in an added agent-file line is found in a message the human typed (D7).
+
+  `bin/learn-pr --topic T --start` creates a worktree `<kennel>/runs/<name>/learn/<T>` on a new branch `learn/<T>`, and the Learner edits only there, so the kennel's own checkout, which the pastor reads live, never changes branch. `bin/learn-pr --topic T` then runs `learn-check --base <base>` in that worktree, commits, and pushes. The base is the newest open learning branch (the open kennel pull request with a `learn/` head that was created last), or from `main` when none is open. It opens a pull request whose base is that branch, so learning pull requests stack; each bumps `plugin.json`'s version from its own base, so they merge in order without conflict. It refuses to push `main`, to force-push, or to merge: the human merges the stack. Check: `test_learn_check_allowed_paths`, `test_learn_check_needs_version_bump`, `test_learn_check_needs_source_tag`, `test_learn_check_quote_must_be_typed`, `test_learn_check_rejects_peer_and_tool_text`, `test_learn_pr_stacks_on_newest_open`, `test_learn_pr_from_main_when_none_open`, `test_learn_pr_never_pushes_main`.
+* **G9 Learning for Herd.** `bin/feedback --draft --issue N` builds a customer-feedback issue body from Herd's records only (D8); `bin/feedback --file --issue N` rebuilds the same body and files it. The body has the literal lines `filed-by: <name>` and `feedback-key: <key>`. It holds no file content, diff or path from the product repository except `.herd/tasks/<slug>/` record names. `--file`, after `gate_feedback`, runs `gh issue list -R Beovulfo/herd-sdlc --label customer-feedback --state open --search "feedback-key: <key>"`. It comments on a match, or opens a new issue with the label. Check: `test_feedback_body_from_records_only`, `test_feedback_body_has_filed_by_and_key`, `test_feedback_dedups_by_key`, `test_feedback_label_and_repo`.
+* **G10 No cost for those who do not opt in.** No new hook and no change to what `herd done` accepts. `herd pastor new` is the only new Herd command. Check: `test_hooks_unchanged` (the hook events and commands in `hooks/hooks.json` equal 0.12.1's), and the existing suite passes.
+* **G11 Drive it from a phone.** The last step of `setup`, after its gate, starts `claude remote-control --name <Name> --spawn same-dir --permission-mode <mode> --settings <kennel>/plugins/<name>/remote.json`, detached, in the product's checkout. The human then drives the pastor from the Claude mobile app or claude.ai/code, and the terminal session that ran `setup` ends.
+  * `herd pastor new` writes `remote.json`: settings that make a new Remote Control session open as the pastor with the herd-sdlc and kennel plugins loaded. Which keys do that is not verified (spike S6, item 4), and the build does not rely on them before the spike passes.
+  * The permission mode is the human's choice at `gate_setup`, with `default` proposed.
+  * `setup` writes the server's PID and the reattach command (`claude remote-control -c`, in the same folder) into run state.
+
+  Check: `test_pastor_new_writes_remote_settings` (blocked on S6 item 4), `test_template_remote_start_gated`. In the Magpie test: a session named `Magpie` is listed in the app, and asked "who are you?" it answers as Magpie and names `herd` among its plugins.
+* **G12 The Magpie test meets the M4 bar** (CUJ 6, D9). Check: `examples/pastor-m4/accept.py --kennel K --name magpie --repo Beovulfo/picturebook` exits 0 only when each line of D9's acceptance table holds, and prints the evidence for each. Its own tests, `test_accept_m4_*`, run it on fixture spawn records, session logs and `gh` output.
 
 ## Non-Goals
 
-* Lessons written by an agent in free text. A summary an agent writes is a claim, not evidence. That is PRD principle P4: "Evidence is stored, not asserted" ([`docs/PRD.md`](../PRD.md)).
-* Matching words in lessons or in the agent's text to decide anything (no word lists).
-* Enforcing the graph. The pastor follows its graph as text, like any agent instructions. What is enforced stays in code: the done gate, the guard, and Claude Code's own permissions (CUJ 4).
-* Sharing lessons across repositories, or through anything but the repository itself.
-* Fetching the template from agent-kennel. That repository is private and `gh` is the only service, so the template ships in the plugin.
-* Upgrading a pastor in place when the template changes. In this version, `herd pastor list` and the SessionStart hook only say that a newer template exists.
-* Changing what `herd done` accepts.
-* Starting sessions for the user, or switching the agent of a running session.
+* Putting any agent file, graph, lesson or run state in the product repository.
+* Enforcing the graph. The pastor follows it as text. What is enforced is code: `bin/spawn`, `bin/spawn check`, `bin/learn-check`, `bin/learn-pr`, Herd's done gate and guard.
+* Fetching the template from agent-kennel, which is private. The template ships in the herd-sdlc plugin.
+* Creating a kennel. `herd pastor new` needs an existing one.
+* Upgrading an existing pastor when the template changes. `pastor.json` records the template version for a later version to compare.
+* Lessons learnt from Herd's task records (v4 D5). See Open Question 1.
+* Designing picturebook's product here. Magpie designs it in picturebook, through its own design gate (CUJ 6). D9 only seeds its first milestone.
 
 ## Open Questions
 
-1. Should a later version also accept a correction typed outside the task's sessions, for example in a review comment on the PR? Default: no, `gh` comments are not read.
-2. Should `herd pastor use` write the shared `.claude/settings.json` when the pastor is shared, so the whole team starts on it? Default: always `.claude/settings.local.json`, since which agent a person works with is that person's choice.
-3. Should a lesson that recurs 3 times raise the risk floor of the next task that touches its paths, so a review becomes mandatory? Default: no.
+1. Should v4's lessons store (lessons from Herd's task records, shown at `herd init`) come back as its own design after M4, without the committed shared copy? Default: yes, as a separate design that works for any agent.
+2. The M4 bar says the human gets reports "without asking", while Collie's rule since 2026-11-24 is to report only when the owner types `status`. G6 reports on events (each accepted or refused session, each gate) and on `status`, never on a timer. Is that the intended meaning? Default: yes.
+3. The M4 bar needs at least one customer-feedback issue, which needs a real Herd problem in Magpie's run. If none happens, should M4 wait for one, or count a recorded run with no Herd problem? Filing feedback only to meet the bar is not allowed. Default: report it at the gate and let the owner decide.
+4. Should `bin/feedback` file without a gate under a standing approval? Default: no. The body goes to a public repository and may describe a private project.
+5. The agent file and `pastor.json` hold the kennel's absolute path, which a public kennel would publish. Default: allowed; a kennel is expected to be private.
 
 ### Decided by the owner (2026-11-24)
 
-* Lessons are kept per repository, not per pastor: "Per repository (Recommended)".
-* `--local` uses `.git/info/exclude`, not `.gitignore`: ".git/info/exclude (Recommended)".
-* Corrections: "maybe we should inlcude a herd record as a correction?" This became D8 and G12.
-* Own agents and a switch: "we should allow the user to use their own agents instead of creating a new one in the repo. For example I will be using Collie directly to work in herd-sdlc repository, so we need to enable the user to turn if OFF or ON,obviously". This became G13, CUJ 7 and CUJ 8, and the own-agent rules in G3 and G4.
+* The feature is opt-in. The agent lives in agent-kennel (`plugins/<name>/`, with its own Learner and run state), never in the product repository.
+* The baseline comes from the owner's projects: Collie's setup.
+* Two kinds of learning: for itself (Learner), and for Herd (customer-feedback issues on Beovulfo/herd-sdlc, label `customer-feedback`).
+* The coordinator is an Opus session that plans from GitHub and spawns headless Sonnet or Haiku agents with the herd-sdlc plugin, one per issue. It reports in the milestone format and stops at design, merge and release gates.
+* The first test is Magpie, for Beovulfo/picturebook: public, MIT, herd-sdlc's rules, its own private project "Picturebook". Its first priority, P1, is a visual pull-request review (D9).
+* Learnings reach the kennel as stacked pull requests the human merges, for every graph agent and its Learner: "I approve the commit, next time create stacked PRs and i will merge them, lets make this the normal flow to update learnings with any graph agent, (include it in the PASTOR design)" (the owner, relayed verbatim by Collie, 2026-11-24 15:35 UTC). This replaces direct pushes to the kennel's `main`. Collie's own setup follows it since agent-kennel commit 1a7e442. G8.
+* M4's scope: "the idea is that magpie will keep working on the Picture Book and you will close M4 as soon as you proof that Pastor can work on new projects and magpie works correctly with herd-sdlc" (relayed verbatim by Collie, 15:50 UTC). M4 closes on D9's acceptance. Picturebook's product bars are Magpie's ongoing work. After M4, Collie fixes the pastor feature only from Magpie's customer-feedback issues.
+* Remote Control after setup: "is it possible to incliude in the pastor design that when you create and setup the first time to Magpie, then you spawn a headless session with RC (remote control) so i can control it thorugh my cellphone?" (relayed verbatim by Collie, 15:45 UTC). G11.
 
 ## Critical User Journeys (CUJs)
 
-### CUJ 1: First session in a repository
+### CUJ 1: A human creates a pastor
 
-* **Given**: Herd is installed. The repository has no pastor and no `agent` setting, and pastors are on (the default).
-* **When**: The user starts a session.
-* **Then**: The SessionStart hook adds the question to the context. The agent's first reply asks it: use an existing agent (none here), create a pastor, or continue without. The user chooses to create one and keep it local. The agent runs `herd pastor new --local`, and Herd writes `.claude/agents/juniper.md` in the main checkout and adds it to `.git/info/exclude`. The agent then runs `herd pastor use juniper`, and Herd prints `juniper is set as this repository's agent; it starts with your next session`. Test: `test_session_hook_asks_until_decided`, `test_pastor_new_local_excluded`.
+* **Given**: Herd is installed. The human has a kennel checkout at `~/kennel` and a product repository `acme/shop` cloned at `~/shop`.
+* **When**: The human runs `herd pastor new --name juniper --kennel ~/kennel --repo acme/shop --checkout ~/shop`.
+* **Then**: Herd writes `~/kennel/plugins/juniper/` and a `juniper` entry in the marketplace. It prints the next steps: commit the kennel, `claude plugin marketplace add ~/kennel` (once per kennel), `claude plugin install juniper@<market>`, then `claude --agent juniper:juniper` in `~/shop`. `git status` in `~/shop` is empty. Test: `test_pastor_new_writes_kennel_plugin`, `test_pastor_new_writes_nothing_in_product_repo`.
 
-### CUJ 2: A pastor runs a task and learns
+### CUJ 2: The first session sets up GitHub
 
-* **Given**: Juniper is the main agent. In task `route-v1`, the refusal attack failed at two verifies before it passed, and the reviewer's report has a line `Major: src/planner.py:40 ...`.
-* **When**: The task reaches `herd done`.
-* **Then**: The store gets an `attack-failed` lesson and a `review-finding` lesson. At the next task's `herd init`, `lessons.md` lists both, quoted, with source and task. If the refusal attack fails again in a task that changes `src/`, the report says `recurred: L3f9a2c (2nd time)`. Test: `test_lessons_from_done`, `test_lesson_recurrence`.
+* **Given**: Juniper is installed at user scope (the default of `claude plugin install --scope`), and `pastor.json` has no board yet.
+* **When**: The human starts `claude --agent juniper:juniper` in `~/shop` and gives a goal.
+* **Then**: Juniper runs `setup`. At `gate_setup` it shows the labels, the board and its fields, the CI workflow, the milestones it proposes (each named by its outcome, with a measurable bar), and the Remote Control permission mode. On the human's yes it creates them, starts Remote Control, and ends the terminal session. Test: `test_template_setup_side_effects_gated`.
 
-### CUJ 3: A shared pastor for the team
+### CUJ 3: Two issues in parallel
 
-* **Given**: Juniper was created with `--shared` and is committed, and so is `.claude/pastors/lessons.json`. A teammate pulls.
-* **When**: The teammate runs `herd pastor use juniper`, starts a new session and runs a task.
-* **Then**: `herd init` merges the committed lessons into the teammate's store. When all checks pass, `herd verify` rewrites `.claude/pastors/lessons.json` with this task's lessons added. The agent commits it with the change, so the PR diff shows the task's own lessons for review. `herd done` then adds the same lessons to the store. Test: `test_shared_lessons_merge_and_export`, `test_shared_lessons_in_verified_commit`.
+* **Given**: The board has issues #4 and #5 Queued in milestone "M1 Checkout works offline", with no dependency between them and disjoint `Touches:` paths.
+* **When**: Juniper reaches `pick` in `coordinate`.
+* **Then**:
+  1. `bin/pick` prints both.
+  2. `bin/spawn coding --issue 4 ...` and `bin/spawn small-fix --issue 5 ...` start two headless sessions, each in its own worktree with the herd-sdlc plugin, and set both issues to Running with Session and Branch filled.
+  3. Juniper waits on the two PIDs and keeps answering the human.
+  4. When #4's session ends, `bin/spawn check --issue 4` finds `evidence.md`, passing evidence, PR #6 from `herd/offline-cache` with `Closes #4`, and green CI. It puts PR #6 in M1 as a draft and sets #4 to Review.
+  5. Juniper prints `bin/report`.
 
-### CUJ 4: The user widens the pastor's job
+  Test: `test_pick_skips_blocked_overlapping_and_design`, `test_spawn_check_sets_milestone_and_draft`.
 
-* **Given**: The user wants Juniper to merge its own PRs once CI is green.
-* **When**: The user adds two nodes after `done`: a gate node `gate_merge`, then a `merge` node with `side_effect: true`. The user also adds `"Bash(gh pr merge:*)"` to `permissions.ask` in `.claude/settings.local.json`.
-* **Then**: `herd pastor list` shows no graph problems, because the merge sits behind a gate node. During a task, the guard still denies `gh pr merge`. After `herd done` the task is closed. The pastor reaches `gate_merge`, asks the user, and runs the merge on a yes, and Claude Code's permission prompt asks again. Herd does not check the permission rule; the user's settings enforce it. Test: `test_graph_rejects_ungated_side_effect`.
+### CUJ 4: A session fails in Herd, and Herd hears about it
 
-### CUJ 5: A stopped task still teaches
+* **Given**: #5's session ended without `herd done`. Its `notes.jsonl` holds a `guard` note: the guard denied a write the task needed, and `stopped.json` says the task stopped.
+* **When**: `bin/spawn check --issue 5` exits 1 and sets #5 to Blocked. Juniper prints `bin/report`.
+* **Then**:
+  1. At `triage` Juniper quotes the `guard` note and judges that Herd caused it.
+  2. `bin/feedback --draft --issue 5 --record guard:1` prints a body with the Herd version and the denied command, taken from the task's `guard` note.
+  3. At `gate_feedback` the human says yes. `bin/feedback --file` opens a `customer-feedback` issue on Beovulfo/herd-sdlc, or comments on the open one with the same key.
+  4. Juniper sends #5 again with a sharper request that continues slug `export`, at most twice.
 
-* **Given**: In task `export`, criterion C2 failed at 3 verifies in a row, so `evidence.json` lists it under `escalate`. The agent tries to stop 3 times, and the done gate blocks each time.
-* **When**: The done gate lets the agent go and writes `stopped.json` with reason `released`, with the escalation in `detail`.
-* **Then**: The store gets one `criterion-escalated` lesson that quotes C2's text and check command, and one `stopped` lesson. Writing `stopped.json` on each blocked attempt adds nothing new, because a task adds each key once. Test: `test_lessons_from_stop`, `test_lesson_once_per_task`.
+  Test: `test_feedback_body_from_records_only`, `test_feedback_dedups_by_key`, `test_spawn_allows_continuation`.
 
-### CUJ 6: The user corrects the pastor
+### CUJ 5: The human corrects the pastor
 
-* **Given**: During task `export`, the user types "never write to the real config in tests, use a temp dir".
-* **When**: The pastor runs `herd note --correction "never write to the real config in tests, use a temp dir"`.
-* **Then**: Herd finds that text in a message the human typed in this task's session and records the note. A note with words the user did not type is refused. At `herd done` the store gets a `correction` lesson. The `learn` node drafts the rule "Never write to the real config in tests; use a temp dir (L8c21e0, the user's words)" and asks at `gate_learn`. On the user's yes, the pastor adds it under `## Knowledge` in its own file in the main checkout, never as a commit on the done task's branch. For a shared pastor the edit stays uncommitted for the user to commit. Test: `test_correction_must_quote_human`, `test_lessons_from_corrections`.
+* **Given**: During the run the human types "always put the issue number in the branch name". An earlier learning pull request from `learn/report-format` is still open.
+* **When**: Juniper sends the correction to its Learner.
+* **Then**:
+  1. The Learner adds the rule `Put the issue number in the branch name: "always put the issue number in the branch name" [human 2026-11-24]` to `juniper.md` and bumps `plugin.json`'s version.
+  2. `bin/learn-check` finds the quote in a line the human typed, and passes.
+  3. At `gate_learn` the human approves. `bin/learn-pr --topic branch-names` commits on `learn/branch-names`, cut from `learn/report-format`, and opens a kennel pull request based on it.
+  4. The human merges the stack. Sessions started after the merge and a `claude plugin update` have the rule.
 
-### CUJ 7: The user brings their own agent
+  Test: `test_learn_check_quote_must_be_typed`, `test_learn_pr_stacks_on_newest_open`.
 
-* **Given**: The owner works on herd-sdlc with Collie, their own graph agent, which is installed as the plugin `collie@agent-kennel` at local scope. herd-sdlc's git-ignored `.claude/settings.local.json` has `"agent": "collie:collie"`. Pastors are on.
-* **When**: The owner starts a session and runs a Herd task.
-* **Then**: The SessionStart hook sees `agent_type` set to a non-pastor agent and adds nothing. No question is asked, and no file under `.claude/` changes. `herd init` still writes `lessons.md` and names it, and Collie reads it as it would any file. Corrections Collie records with `herd note --correction` become lessons too. If anyone runs `herd pastor use juniper`, it refuses because the settings already name `collie:collie`. Test: `test_session_hook_silent_for_other_agent`, `test_pastor_use_never_replaces_own_agent`.
+### CUJ 6: The Magpie test
 
-### CUJ 8: The user turns pastors off
-
-* **Given**: A team repository with `[pastor] enabled = true` in `herd.toml` and a shared pastor. One developer prefers Claude's default agent.
-* **When**: The developer runs `herd pastor off`.
-* **Then**: Herd writes `<git-common-dir>/herd/pastor.json` with `{"enabled": false}`. Nothing committed changes, so the team is not affected. The next session starts with no question. Had the developer earlier run `herd pastor use juniper`, `off` would also print that Juniper is still this clone's agent and how to remove it. `/herd:run` works as before, and `lessons.md` is still written at `herd init`. `herd pastor on` turns the question back on. Test: `test_pastor_switch_off_and_on`, `test_lessons_written_when_off`.
+* **Given**: The owner's kennel is agent-kennel. Beovulfo/picturebook does not exist yet.
+* **When**: The owner runs `herd pastor new --name magpie --kennel ~/Documents/beovulfo/agent-kennel --repo Beovulfo/picturebook --checkout ~/Documents/beovulfo/picturebook`, commits and installs it, runs `claude` once in an empty `~/Documents/beovulfo/picturebook` folder to trust it, and starts Magpie there with the goal "P1 Visual PR review".
+* **Then**:
+  1. Magpie's `setup` creates, at its gate, the public repository (MIT, a `CLAUDE.md` with herd-sdlc's Rules, CI), the clone, and the private project "Picturebook". It then moves to Remote Control.
+  2. From the phone, Magpie designs P1 through a design side session and stops at `gate_design`.
+  3. After the owner approves, it runs at least two issues in parallel and reports.
+  4. It files any Herd problem as feedback and opens a learning pull request with what the owner taught it.
+  5. `examples/pastor-m4/accept.py` passes (D9).
 
 ## Design
 
-### Spike S5 (done)
+### D1. Where things live
 
-[`s5-pastor.md`](../spikes/s5-pastor.md), Claude Code 2.1.330, found three things.
+| Path | Holds | Written by |
+| --- | --- | --- |
+| `<kennel>/plugins/<name>/.claude-plugin/plugin.json` | `{"name": "<name>", "version": "0.1.0", "description": ...}`; the plugin name makes the agent `<name>:<name>` | `herd pastor new`; the Learner bumps `version` |
+| `<kennel>/plugins/<name>/agents/<name>.md` | the pastor's knowledge: baseline rules (D4), then learnt rules | `herd pastor new`, then the Learner |
+| `<kennel>/plugins/<name>/agents/learner.md` | the Learner (D4) | `herd pastor new` |
+| `<kennel>/plugins/<name>/graphs/{setup,coordinate,design}.yaml` | the control flow (D3) | `herd pastor new`; graph fixes by the Learner |
+| `<kennel>/plugins/<name>/bin/{spawn,pick,report,feedback,learn-check,learn-pr}` | the code that enforces the coordination rules | `herd pastor new` |
+| `<kennel>/plugins/<name>/pastor.json` | `{"name", "repo", "checkout", "owner", "project": <board number or null>, "kennel": <path>, "template": 1}` | `herd pastor new`, then `setup` |
+| `<kennel>/plugins/<name>/remote.json` | the settings Remote Control starts new sessions with (G11) | `herd pastor new` |
+| `<kennel>/runs/<name>/state.json` | run state: `{"graph", "at_node", "path", "nodes", "waiting": {"gate", "question", "issue", "session_id"} or null, "remote": {"pid", "reattach"} or null}` | the pastor after every node; `bin/spawn check` fills `waiting`; `setup` fills `remote` |
+| `<kennel>/runs/<name>/spawn/`, `learn/` | spawn records and session logs; learning worktrees. All of `runs/` is git-ignored by the kennel | `bin/spawn`, `bin/learn-pr` |
+| the product's checkout and worktrees | its code, `CLAUDE.md`, CI, and Herd's `.herd/` task folders as today | `setup` once, then the headless Herd sessions |
 
-- A project agent named by `"agent"` in `.claude/settings.local.json` becomes the main agent.
-- A SessionStart hook's `additionalContext` reaches the model. Its input carries `agent_type` when an agent is set and omits it otherwise; `source` is `startup` on a new session.
-- A linked worktree with no `.claude/` folder still uses the main checkout's untracked agent and settings. The spike used a sibling folder, so this is not a walk up the folders. Herd's worktrees are nested under the main checkout, and work either way.
+The template lives in the herd-sdlc plugin as `templates/pastor/`. `herd pastor new` copies it and fills `{name}`, `{repo}`, `{kennel}`, `{checkout}` and the Herd version with `string.Template`. The `bin/` scripts are Python standard library only, like Herd, and read every machine- or person-specific value from `pastor.json`: owner, kennel and checkout. Each script has the kennel path filled in as a constant and always reads `{kennel}/plugins/<name>/pastor.json` and `{kennel}/runs/<name>/`, never paths relative to itself, because the installed copy in the plugin cache can be stale. The agent file tells the pastor to call `{kennel}/plugins/<name>/bin/<script>`. Collie's `spawn` hard-codes its GitHub account and kennel path; the template does not. Their tests live in herd-sdlc, in `tests/test_pastor_template.py`, with a fake `gh` on `PATH`, because the template ships with Herd.
 
-### D1. Files
+The pastor is started with `claude --agent <name>:<name>` in the product's checkout, or by Remote Control (G11). The agent file names its kennel checkout by absolute path. Claude Code runs the installed copy from its plugin cache, which can be older than the kennel (agent-kennel's `graphs/README.md`, rule 7), so the pastor reads its live files from the kennel.
 
-| File | Holds | Shared | Local |
-| --- | --- | --- | --- |
-| `.claude/agents/<name>.md` | frontmatter, marker line, knowledge, graph | committed by the user, in the work tree | main checkout, in `.git/info/exclude` |
-| `.claude/pastors/lessons.json` | the committed copy of the store | in the task's work tree | not written |
-| `<git-common-dir>/herd/lessons.json` | the store | always | always |
-| `<git-common-dir>/herd/pastor.json` | this clone's ON/OFF switch, `{"enabled": true}` or `false` (G13) | | |
-| `.claude/settings.local.json` (main checkout) | `"agent": "<name>"` | per person | per person |
-| `.herd/tasks/<slug>/history.json` | one row per verify: `{"at", "failing_attacks": [...], "escalate": [...]}` | | |
-| `.herd/tasks/<slug>/lessons.md` | the lessons shown for this task | | |
+### D2. Herd's side
 
-The repository has a **shared pastor** when `git ls-files .claude/agents` lists a file with the marker line.
+* `herd pastor new` (G1) is a subcommand in `scripts/herd.py`, about 80 lines: argument checks, the copy, the marketplace entry. It needs no task and touches no Herd state.
+* `templates/pastor/` ships in the plugin folder.
+* `examples/pastor-m4/accept.py` is the M4 acceptance script (D9). It is not part of the template, because only M4 needs it.
+* No hook, no change to `herd done` or the guard (G10).
 
-The agent file has frontmatter `name` and `description`, then the marker line `<!-- herd pastor, template 1 -->`, then `## Knowledge`, then `## Graph` holding one fenced `yaml` block. The graph sits in the agent file because Claude Code loads the whole file into the agent's context. So the pastor never has to find a second file, and an untracked graph that a worktree lacks cannot break it. Herd finds pastors by the marker line, a fixed line Herd itself writes, and reads the template version from it.
+### D3. Graph format, checks and the template's graphs
 
-### D2. The graph format and its rules
+The format is agent-kennel's. Each graph is a YAML file with `name`, `start` and `nodes`, one node per line, `  <id>: {type: ..., does: "...", <edge>: <id>, ...}`. Types:
+* `act` does one thing, `think` is a judgment;
+* `check` has `pass` and `fail` edges;
+* `gate` has `approve`, `edit` and `skip` edges, and an optional `standing` field that only the human adds;
+* `sub` runs another graph, `end` reports.
 
-This is agent-kennel's format, written out here because that repository is private.
+Other keys are `max`, the loop bound (default 2), `on_exhausted`, `side_effect: true`, `parallel` (independent reads a node may do at once) and, for `sub`, `graph`. Two rules are the pastor's own, not agent-kennel's: at a gate whose question offers numbered options, the human's reply is carried into the next node as the human's own words, and `approve` means "go on with the chosen option".
 
-- The block holds `name: run`, `start: <id>` and `nodes:`. Then one node per line, matching `^  (\w+):\s*(\{.*\})\s*$`.
-- The keys inside the braces are:
-  - `type`, one of `act`, `think`, `check`, `gate`, `sub`, `end`;
-  - `does` or `ask`, the text;
-  - the edges `next`, `pass`, `fail`, `approve`, `edit`, `skip` and `on_exhausted`, each naming a node;
-  - `max`, the loop bound (default 2);
-  - `side_effect: true`;
-  - for `check` nodes, `cmd` and `expect`.
-- `expect` is `exit 0` or `exit 1`. `cmd` starts with `herd ` and names one subcommand.
-
-Inside the braces, the grammar is:
-- pairs are separated by `,` outside double quotes;
-- a key is `\w+` followed by `:` and a space;
-- a value is one of:
-  - a double-quoted string, with `\"` and `\\` as its only escapes;
-  - `true`;
-  - an integer;
-  - a bare word `[\w-]+`.
-
-Braces and commas inside a quoted string do not count, so rule 4 counts braces outside quotes only. `graph_problems` parses this with one regular expression per pair, and a line that does not parse is a problem. Check: `test_graph_parses_quoted_values`, on the template's `init` node.
-
-The rules, ported from agent-kennel's `graphs/validate.py` (61 lines) into `graph_problems(text)` in `scripts/herd.py`:
-
+The checks, from agent-kennel's `graphs/validate.py` (61 lines), which the template copies into `bin/` as part of `learn-check`:
 1. `start` names a node.
 2. Every edge names a node.
 3. Every type is one of the six.
-4. Braces balance.
-5. A `side_effect: true` node is entered only from a gate node, from another side-effect node, or through a check's `fail` edge (a retry).
-6. Every node is reachable from `start`, and an `end` node is reachable.
-7. New in Herd: every `check` node has a `cmd` matching `^herd [a-z-]+` and an `expect`.
+4. On each node line, the counts of `{` and `}` match.
+5. A `side_effect: true` node is entered only from a gate, from another side-effect node, or through a check's `fail` edge (a retry of the same approved action).
+6. Every node is reachable, and an `end` node is reachable.
 
-The template's graph is fixed. The template version goes up when it changes. Exit codes are as in the code today: `herd check` exits 1 on an error (not a warning), `herd verify` exits 1 when a check or attack fails, and `herd done` exits 1 when it refuses. Two new ones: `herd lessons --committed` exits 1 when the work tree's `.claude/pastors/lessons.json` differs from `HEAD`, and `herd lessons --task <slug> --kind correction` exits 1 when that task added no lesson of that kind.
+The rules the pastor follows as text: start at `start` and never skip or reorder nodes; write run state after every node; at a gate, stop for the human's explicit reply. A design side session saves the gate as `waiting`, ends, and returns its question as its final message. `bin/spawn check` copies that question from the session's `result` line into the coordinator's run state, so the side session never writes into the kennel.
+
+`coordinate.yaml`. It passes checks 1 to 6, run with agent-kennel's `validate.problems`.
 
 ```yaml
-name: run
-start: resume
+name: coordinate
+start: ground
 nodes:
-  resume:       {type: think, does: "If herd status starts with Stopped and gives a Next, do that Next first", next: route}
-  route:        {type: think, does: "Quick route (one file, no new behaviour, an existing check can fail first) or standard; pick a slug", next: init}
-  init:         {type: act, does: "herd init <slug> \"<goal>\" --request \"<the user's message, verbatim>\" (add --worktree as the run skill says), then herd triage", next: lessons}
-  lessons:      {type: think, does: "Read .herd/tasks/<slug>/lessons.md; say in one line which lessons apply and how", next: criteria}
-  criteria:     {type: act, does: "Write task.toml with the criteria skill", next: criteria_ok}
-  criteria_ok:  {type: check, cmd: "herd check", expect: "exit 0", pass: intake, fail: criteria}
-  intake:       {type: act, does: "Standard route, medium or high risk: spawn herd-intake-reviewer one tier above; fix Blocker and Major findings; otherwise skip", next: red}
-  red:          {type: check, cmd: "herd verify", expect: "exit 1", pass: gate_high, fail: criteria}
-  gate_high:    {type: gate, ask: "High risk: approve the criteria and assumptions? Other risks: show them and continue", approve: build, edit: criteria, skip: escalate}
-  build:        {type: act, does: "Tests first, minimal change within the goal, on herd/<slug>", next: green}
-  green:        {type: check, cmd: "herd verify", expect: "exit 0", pass: break_it, fail: build, max: 3, on_exhausted: escalate}
-  break_it:     {type: act, does: "Standard route: read adversarial.md and run the five standard attacks", next: attacks_ok}
-  attacks_ok:   {type: check, cmd: "herd verify", expect: "exit 0", pass: review, fail: build, max: 3, on_exhausted: escalate}
-  review:       {type: act, does: "Medium and high risk: spawn herd-reviewer one tier above (herd status names it); fix Blocker and Major; at most 3 rounds", next: commit}
-  commit:       {type: act, does: "Commit on the task branch if the project allows it, with .claude/pastors/lessons.json when herd verify wrote it", next: gate_pr}
-  gate_pr:      {type: gate, ask: "Open a pull request? Already yes when the request asked for one or herd.toml has [pr] open = true", approve: pr, skip: verify}
-  pr:           {type: act, side_effect: true, does: "Follow pr.md", next: verify}
-  verify:       {type: check, cmd: "herd verify", expect: "exit 0", pass: lessons_ok, fail: build, max: 2, on_exhausted: escalate}
-  lessons_ok:   {type: check, cmd: "herd lessons --committed", expect: "exit 0", pass: done, fail: commit, max: 2, on_exhausted: escalate}
-  done:         {type: check, cmd: "herd done", expect: "exit 0", pass: corrections, fail: build, max: 2, on_exhausted: escalate}
-  corrections:  {type: check, cmd: "herd lessons --task <slug> --kind correction", expect: "exit 0", pass: learn, fail: report}
-  learn:        {type: think, does: "For each correction lesson this task added, draft one rule for ## Knowledge that quotes it and cites its id", next: gate_learn}
-  gate_learn:   {type: gate, ask: "Add these rules to my knowledge section? (shows the diff)", approve: write_rules, edit: learn, skip: report}
-  write_rules:  {type: act, side_effect: true, does: "Add the approved rules under ## Knowledge of this agent file in the main checkout, never on the done task branch; a shared pastor's edit stays uncommitted for the user", next: report}
-  escalate:     {type: gate, ask: "One question with 2 or 3 numbered options", approve: build, skip: report}
-  report:       {type: end, does: "Paste the report herd done printed"}
+  ground:        {type: act, does: "Read this agent file, pastor.json, bin/report, open PRs and runs/<name>/; resume an unfinished run", next: plan}
+  plan:          {type: think, does: "Turn the request into issues, each in a milestone and on the board, with Depends on: and Touches: lines; no work without an issue", next: design_needed}
+  design_needed: {type: check, does: "A Queued issue labelled role:design has no approved design", pass: design, fail: pick}
+  design:        {type: act, does: "bin/spawn design --issue N; the Opus side session runs design.yaml and returns its gate question", next: gate_design}
+  gate_design:   {type: gate, ask: "Approve the design before code? (doc link, open findings) On skip the issue is set Blocked", approve: pick, edit: design, skip: report}
+  pick:          {type: act, does: "bin/pick: Queued issues, not role:design, whose dependencies are Done and whose Touches: overlap no Running issue", next: spawn}
+  spawn:         {type: act, does: "bin/spawn coding|small-fix --issue N for every picked issue at once; each request starts with /herd:run and carries the issue, milestone and context", next: wait}
+  wait:          {type: act, does: "Wait on the PIDs bin/spawn printed, in the background; answer the human meanwhile; take finished sessions one at a time", next: accept}
+  accept:        {type: check, does: "bin/spawn check --issue N exits 0 for this finished session", pass: report, fail: report_refused}
+  report_refused: {type: act, does: "Print bin/report", next: triage}
+  triage:        {type: think, does: "Is the cause the issue, the request, or Herd? Quote the record that shows it", next: herd_cause}
+  herd_cause:    {type: check, does: "triage quoted a Herd record (a herd exit code, stopped.json, a guard denial) as the cause", pass: feedback, fail: retry}
+  feedback:      {type: act, does: "bin/feedback --draft --issue N builds the issue body from Herd's records", next: gate_feedback}
+  gate_feedback: {type: gate, ask: "File this customer-feedback issue on Beovulfo/herd-sdlc? (body shown)", approve: file_feedback, skip: retry}
+  file_feedback: {type: act, side_effect: true, does: "bin/feedback --file --issue N --record R: a new issue, or a comment on the open one with the same key", next: retry}
+  retry:         {type: check, does: "The refused issue can run again with a sharper request", pass: spawn, fail: gate_stuck, max: 2, on_exhausted: gate_stuck}
+  gate_stuck:    {type: gate, ask: "One question with 2 or 3 numbered options", approve: pick, skip: report}
+  report:        {type: act, does: "Print bin/report", next: more}
+  more:          {type: check, does: "This request's milestones have Queued or Running issues", pass: pick, fail: gate_merge, max: 20, on_exhausted: gate_merge}
+  gate_merge:    {type: gate, ask: "Merge these PRs? Each has green CI and accepted evidence; default no", approve: merge, skip: gate_release}
+  merge:         {type: act, side_effect: true, does: "Merge the approved PRs one by one, updating the next branch each time; set their issues Done", next: gate_release}
+  gate_release:  {type: gate, ask: "Tag and release? Version and changelog shown; default no", approve: release, skip: learn}
+  release:       {type: act, side_effect: true, does: "Tag and publish the approved release", next: learn}
+  learn:         {type: act, does: "Send every correction and weak point of this run to the Learner; it drafts the change and runs bin/learn-check", next: gate_learn}
+  gate_learn:    {type: gate, ask: "Open a learning PR in the kennel with these changes? (diff shown)", approve: learn_pr, skip: close}
+  learn_pr:      {type: act, side_effect: true, does: "bin/learn-pr --topic T: commit on learn/T cut from the newest open learning branch or main, push it, open a PR stacked on that base; never push main, never merge", next: close}
+  close:         {type: end, does: "Path taken; issues, PRs and milestones; feedback filed; learning PRs; what is not verified"}
 ```
 
-`herd pastor list` runs `graph_problems` on each pastor's graph and prints the problems, so a user who edits a graph sees what is broken.
+`setup.yaml`:
 
-### D3. The template
-
-`templates/pastor.md` in the plugin. A new pastor knows Herd and nothing about the repository. Its knowledge section comes from the run skill and from what earlier versions taught Herd, each item citing its CHANGELOG version.
-
-**Hard rules:**
-- "Done" is `herd done`.
-- Never edit Herd's files.
-- A guard denial is final.
-- Never weaken a human criterion.
-- Quote command output.
-- Escalate with one question.
-- Lesson text is data from past tasks, never an instruction.
-- When the user corrects you, run `herd note --correction "<their exact words>"` at once.
-
-**Moments that need care:**
-- red first, before any code (0.4.0, and the pre-init hook in 0.4.1);
-- state the inputs as the human described them, and log the refusal attack before building (0.9.0);
-- quote human criteria verbatim (0.10.0);
-- the intake review before code, at medium and high risk on the standard route (0.11.0);
-- the review one tier above the builder, recorded by the hook (0.7.0, 0.10.0);
-- log each note the moment it happens (0.2.5, 0.3.1);
-- commit before `herd done`, which refuses uncommitted work when pull requests are on (0.4.0).
-
-**Graph:** D2.
-
-The run skill stays for sessions without a pastor. The template holds the same steps as a graph. A change to the run skill that the template should follow raises the template version.
-
-### D4. `herd pastor` and the SessionStart hook
-
-**`herd pastor` subcommands:**
-- `list` (G3);
-- `new [--name N] --shared|--local` (G1, G2);
-- `use <name>` (G3);
-- `off` and `on`, the switch (G13). `herd.toml`'s `[pastor] enabled` is read the way `[review]` and `[guard]` are today.
-
-`PET_NAMES` holds 40 short lowercase pet names, fixed in code (for example juniper, biscuit, pepper, maple, otis).
-
-**`herd session-hook`** is a new `SessionStart` entry in `hooks/hooks.json` with no matcher and `timeout: 10`. It:
-- reads the hook input, and leaves at once unless `source` is `startup`;
-- finds the main checkout with `_main_checkout`, the same function G3 and D6 use;
-- globs `.claude/agents/*.md` and reads the first lines of each file.
-
-Like the guard, it leaves before the other imports when it can tell it has nothing to say: when `source` is not `startup`, or when `agent_type` contains `:` (a plugin agent, never a pastor). Everything else (git, `herd.toml`, `pastor.json`, the glob) runs after the imports. That is what keeps it inside G11's 20 ms. It joins `HOOK_COMMANDS`, so the guard denies running it by hand, the Python 3.10 exit list at the top of `scripts/herd.py`, and the list of hooks in `main` that exit 0 on a deleted working folder. Its output is `{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "<text>"}}`, with the text from a fixed template in code:
-
-> Herd: this repository has no agent set. In your first reply, ask the user one question with these options:
-> 1) use an existing agent: <names> (`herd pastor use <name>`), or your own plugin or user agent: set "agent" in .claude/settings.local.json yourself
-> 2) create a pastor, shared (committed) or local (only in this clone): `herd pastor new --shared|--local`, then `herd pastor use <name>`
-> 3) continue without one, and stop this question: `herd pastor off`
->
-> The choice takes effect in the next session.
-
-The hook decides when to ask, in code. The agent asks, because a hook cannot talk to the user.
-
-### D5. Lessons
-
-**Store shape.**
-
-```json
-{"version": 1,
- "lessons": [{"id": "L3f9a2c", "key": "attack-failed:refusal:src", "kind": "attack-failed", "source": "herd",
-   "text": "refusal attack failed before passing: python3 -m unittest tests.test_refusal",
-   "paths": ["src"], "tasks": ["route-v1"], "commit": "abc1234",
-   "first": "2026-11-24T10:00:00Z", "last": "2026-11-24T10:00:00Z", "seen": 1}],
- "dropped": [{"key": "...", "reason": "...", "at": "..."}]}
+```yaml
+name: setup
+start: ground
+nodes:
+  ground:        {type: act, does: "Read pastor.json, gh auth status, whether the repository and the checkout exist, and the human's goal", next: propose}
+  propose:       {type: think, does: "Propose labels, board fields (D5), CI checks, milestones named by outcome with a measurable bar, and the Remote Control permission mode (default proposed)", next: gate_setup}
+  gate_setup:    {type: gate, ask: "Create these on GitHub and start Remote Control? (everything listed)", approve: create, edit: propose, skip: close}
+  create:        {type: act, side_effect: true, does: "Create the repository if missing (license, CLAUDE.md, CI), clone it to the checkout, labels, board, fields, milestones; write owner, project and checkout to pastor.json", next: remote}
+  remote:        {type: act, side_effect: true, does: "Start claude remote-control detached in the checkout with remote.json; write its PID and the reattach command to run state", next: created}
+  created:       {type: check, does: "gh repo view, gh project view and gh api milestones show what was approved, and the Remote Control PID is alive", pass: close, fail: create, max: 2, on_exhausted: close}
+  close:         {type: end, does: "What exists now, with links; the Remote Control session name; end this terminal session"}
 ```
 
-- `id` is `"L"` plus the first 6 hex digits of the SHA-1 of the key. The same key gives the same id in every clone.
-- Times come from `now()` (UTC).
-- `paths` are the sorted parent folders of the task's changed files (`task_changes`), leaving out `.claude/pastors/` and pastor files in `.claude/agents/`, or the cited path's folder for a `review-finding`. So Herd's own output never changes a key. Check: `test_lesson_paths_ignore_pastor_files`.
-- A text hash is the SHA-1 of the text with its whitespace collapsed, first 12 hex digits.
-- Writes take an `fcntl.flock` on `<git-common-dir>/herd/lessons.lock`, using the same pattern as the worktree lock.
-- The store keeps at most 200 lessons, ranked as in G7.
-- A key in `dropped` is never added again.
+`design.yaml`, run by the design side session in the issue's worktree:
 
-**Extraction.** Code only. It runs at `herd done`, and in `write_stop` on every stop, from a fixed table:
+```yaml
+name: design
+start: ground
+nodes:
+  ground:        {type: act, does: "Read the issue, its milestone, the product's CLAUDE.md, docs/designs/ and open PRs", next: design}
+  design:        {type: think, does: "Write docs/designs/<slug>.md: Overview, Problem, Goals each with a named check, Non-Goals, Open Questions, CUJs, Design, Alternatives, Risks, Not proven", next: review}
+  review:        {type: act, does: "Fresh-context review with the EGM reviewers when the egm plugin is loaded, otherwise one reviewer agent; list Blocker, Major, Nit", next: review_ok}
+  review_ok:     {type: check, does: "No Blocker or Major left and every goal has a named check", pass: commit, fail: design, max: 2, on_exhausted: commit}
+  commit:        {type: act, does: "Commit the design on the issue's branch, locally; no push", next: gate_design}
+  gate_design:   {type: gate, ask: "Approve this design? (the doc's text, open findings)", approve: push, edit: design, skip: close}
+  push:          {type: act, side_effect: true, does: "Push the branch and open a draft PR in the issue's milestone saying Closes #N", next: close}
+  close:         {type: end, does: "On a gate: save it as waiting and return its question as the final message; otherwise report the PR"}
+```
 
-| Kind | Source | From | Key | Text |
-| --- | --- | --- | --- | --- |
-| `attack-failed` | herd | an attack in `failing_attacks` of a `history.json` row, that passes in the final evidence | `attack-failed:<attack>:<paths joined by ,>` | attack name and its command |
-| `criterion-escalated` | human | a criterion id in `escalate` of any `history.json` row | `criterion-escalated:<text hash>` | the criterion text and check, from `task.toml` |
-| `review-finding` | reviewer | a line of a hook-recorded `review` note that starts with `Blocker` or `Major` and holds a `path:line` (the `REF` pattern) | `review:<path>` | the line, quoted, at most 200 characters |
-| `human-change` | human | a `human-change` note naming a criterion | `human-change:<id>:<text hash>` | that criterion's current text in `task.toml` |
-| `correction` | human | a `correction` note (D8) | `correction:<text hash>` | the note's text, the human's words |
-| `stopped` | herd | `stopped.json` | `stopped:<reason>:<hash of the first problem>` | reason and first problem |
+The side session first returns at `gate_design` with the design's text. The coordinator shows it to the human and resumes the same session with the human's exact words, as agent-kennel's rule for side sessions says, through `bin/spawn design --issue N --resume <session_id> --request FILE` (`claude -p --resume <session_id>`, the id taken from `waiting` in run state); on a yes the session pushes and opens the draft pull request.
 
-`herd verify` appends one row to `history.json` on each run. At `herd done` extraction runs before `final_report`, so the report can name recurrences. `history.json` and `lessons.md` join `GUARD_STATE`. The `Blocker` and `Major` prefix is the reviewer's own output format (`agents/herd-reviewer.md`), not a word list. A task adds each key at most once. Repeated stops of one task never inflate `seen`.
+### D4. The baseline
 
-**Intake.** `herd init` writes `lessons.md`:
-- at most 10 lines, each at most 200 characters, in G7's order;
-- each line has the id, the source, `seen` and the last task;
-- the text is quoted as data.
+The template's agent file holds the sections below. Each rule ends with `[baseline: collie 2026-11-24]` and states the rule in plain words, with no quote from the owner's sessions. The owner's quotes stay in the private kennel, in Collie's file.
 
-Ranking by the changed files was dropped: at the first verify no code exists yet (red first), so there is nothing to rank by. The lessons are read once, before the criteria, where they can still shape them.
+* **How you run:** the graphs and their rules (D3); read your live agent file in `{kennel}` first.
+* **Hard rules:**
+  * never work on the default branch;
+  * draft pull requests only, each in its milestone;
+  * never merge, tag or release without the human's words in this session;
+  * never run blocking work in your own session: spawn it or run it in the background;
+  * the coordinator runs on Opus and hands bounded work to Sonnet or Haiku;
+  * evidence before claims: quote the command output;
+  * do exactly what was asked;
+  * no credentials or private data in any file.
+* **Coordination:** GitHub is the plan, with no plan kept elsewhere. No work starts without an issue in a milestone and on the board. Each spawned request names its issue, milestone and impact. Wait on PIDs, never on process names. One coordinator at a time: after `setup`, that is the Remote Control session.
+* **Reports:** `bin/report`, on events and on `status` only.
+* **Roster:** D5.
+* **Learning:** send each correction and weak point to the Learner at once. Rules come only from the human's typed words or from quoted evidence. Learnings go out through `bin/learn-pr` as stacked kennel pull requests; never push the kennel's `main`, never merge.
+* **Herd feedback:** when a refused session's records show Herd as the cause, draft a customer-feedback issue.
+* **Learnt rules:** empty at creation; the Learner fills it.
 
-**Recurrence.** `final_report` lists `recurred: <id> (<n>th time)` for each key this task added that another task had added before.
+`learner.md` is Collie's Learner with the pastor's name and paths. Its remit: write rules into the pastor's file, fix weak points in the pastor's graphs, bump `plugin.json`'s version, and open every change through `bin/learn-pr`. A graph fix passes D3's checks in `learn-check` and the human's review of the pull request. A rule from session evidence instead of the human's words carries `[evidence: <what>]` and no quote.
 
-**Shared copy.** `.claude/pastors/lessons.json` has the store's shape, written with one lesson per line and sorted by id, so a merge conflict touches only the rows both sides changed.
-- At `herd init`, when the repository has a shared pastor, Herd merges the file into the store by key: `tasks` takes the union, `seen` is the length of `tasks`, `last` takes the newer value, and `dropped` the union. Two teammates who each hit the same key in parallel then count as two.
-- At a `herd verify` whose checks all pass, Herd writes the file in the task's work tree as the store plus this task's candidate lessons. It writes before it takes the evidence fingerprint, so the evidence stays fresh, and when the bytes change it prints `.claude/pastors/lessons.json changed: commit it, then run herd verify`. A review note or a correction after the commit changes the candidates; the `lessons_ok` node then sends the agent back to `commit`. `content_id` leaves the file out (pathspec `:!.claude/pastors/lessons.json`), so a change to the lessons alone never voids a review, while `fingerprint` keeps it, so freshness still covers it. Check: `test_shared_lessons_after_review_round`. The candidates use the task's start time (`started`) for `first` and `last`, so repeated verifies write the same bytes. The agent commits the file with the change (the `commit` node), and `herd done`'s rule that the PR holds exactly the verified commit stays intact.
-- `herd done` adds the same lessons to the store, plus a `stopped` lesson if the task stopped before. A `stopped` lesson reaches the shared file with the next task.
-- If the file is never committed, the store still has the lessons, and the next `herd init` uses them.
-- A merge conflict in the file can be resolved by taking either side, outside a task. The next `herd init` merges by key and restores what was lost.
+### D5. Roster, spawning, board and reports
 
-**Human control.** `herd lessons` lists the store. `herd lessons --task <slug>` lists what one task added. `herd lessons --drop <id> --reason "..."` moves the key to `dropped`. In the guard, `--drop` is matched as the word `lessons` right after a word containing `herd`, with `--drop` later in the same command. Plain `herd lessons` stays allowed.
+| Role | Model | Started by | For |
+| --- | --- | --- | --- |
+| coordinator | Opus | the human: `claude --agent <name>:<name>`, then Remote Control | plans, decides, gates, reports |
+| design | Opus | `bin/spawn design`: the same agent in a side session | designs; returns at its gate |
+| coding | Sonnet + Herd | `bin/spawn coding` | any change to the product |
+| small-fix | Haiku + Herd | `bin/spawn small-fix` | one or two files, low risk, no design |
+| research | Sonnet | the Agent tool, read-only | analysis before a decision; Agent-tool subagents cannot load plugins, so they never develop |
 
-### D6. The guard
+**`bin/spawn coding|small-fix|design --issue N --request FILE [--worktree DIR] [--slug S] [--design] [--budget USD] [--resume ID]`.**
+* Without `--worktree`, it creates one: `git -C <checkout> worktree add --detach <checkout>/.claude/worktrees/<issue>-<role> origin/<default>`, after `git fetch`, where `<default>` is `gh repo view --json defaultBranchRef`. `herd init` then makes `herd/<slug>` from there. With `--worktree`, the worktree is a continuation's.
+* The request comes from FILE. A coding or small-fix request starts with `/herd:run`, and its goal line ends with `Closes #N`, because `herd pr` puts the `herd init` goal in the PR body. `bin/spawn` adds a header naming the issue, its milestone and the milestone's description.
+* A continuation passes `--slug S`, and the request names S. When `.herd/active` in DIR names S, the request must not ask for `herd init`, which refuses an existing task; when DIR is on a new `herd/S` branch with no task yet, it must contain `herd init S`. A design session is refused in a worktree with an active task. These are Collie's rules.
+* The command line is Collie's: `claude -p "<request>" --model <claude-sonnet-5-5 | claude-haiku-5-5 | claude-opus-5-5> --plugin-dir <herd> [--plugin-dir <egm> for role design or --design] --setting-sources project --permission-mode dontAsk --allowedTools "Bash,Read,Write,Edit,MultiEdit,Glob,Grep,Agent,Skill" --max-budget-usd <budget> --output-format stream-json --verbose`. The design role adds `--agent <name>:<name>` and puts `--plugin-dir <kennel>/plugins/<name>` first, so the side session runs the live pastor.
+* Default budgets are Collie's: coding 15, small-fix 3, design 20 USD.
+* `<herd>` is the highest version folder under `~/.claude/plugins/cache/*/herd/` whose `.claude-plugin/plugin.json` has `"name": "herd"`, compared by number; `<egm>` the same under `*/egm/`. With no herd, `bin/spawn` refuses and says to install herd-sdlc. Unlike Collie's, which reads only `cache/herd-sdlc/herd/`, this works for any marketplace name.
+* It starts the process detached (`subprocess.Popen` with `start_new_session=True`, stdin from `/dev/null`), as Collie's does. Output goes to `runs/<name>/spawn/<issue>-<role>-<stamp>.jsonl`, errors to `.err` (Collie's names the file by slug or worktree).
+* It writes the spawn record `runs/<name>/spawn/<issue>-<stamp>.json`: `{"issue", "role", "model", "worktree", "slug", "pid", "log", "started", "herd": <version>}`. `spawn check` adds `ended` (the log's last line time), `cost` (`total_cost_usd` from the stream's final `result` line), `session_id` (from the same line) and `check` (exit code and reasons). The record is new in the pastor; Collie's `spawn` labels the issue, sets board fields, comments and prints an info line, but writes no record file.
+* It refuses a worktree on the default branch (Collie's refuses only `main`).
+* It sets the issue to Running, with Session (PID and log path) and Branch.
 
-The guard decides whether a path is protected in `_protected`, which today matches only paths inside the task's root. In a worktree task, the store and a local pastor sit outside that root. So a root-independent check comes first, like the existing `.herd` check. It resolves the path with `realpath` and denies it during a task when the path is:
-- under `<git-common-dir>/herd/`;
-- under `.claude/pastors/` of the work tree or of `_main_checkout(root)`;
-- a `.claude/agents/*.md` of either whose first body line is Herd's marker, read from the file on disk.
+When the session gave no `--slug`, `spawn check` takes the slug from the worktree: the one `.herd/tasks/*` folder whose `herd/<slug>` branch is the worktree's current branch.
 
-`GUARD_STATE` gains `history.json` and `lessons.md`. `HOOK_COMMANDS` gains `session-hook`.
+**Board fields** (Collie's): Status (Queued, Running, Blocked, Review, Done), Role, Model, Branch, Session, Progress (percent), ETA (text, set by the coordinator, an estimate) and Size (a number from 1 to 10, set at `plan`). Issues carry the labels `status:*`, `role:*` and `claimed-by:<name>`. `bin/spawn` sets Running, `spawn check` sets Review or Blocked, the merge sets Done.
 
-The guard protects only files with Herd's marker line, so a user's own agent and its files are never touched. During a task the pastor cannot rewrite its own rules, its graph or its lessons, and a widened job (CUJ 4) never lifts a guard rule. `git add` and `git commit` are not writes to the guard, so committing the shared lessons file stays possible.
+**Report format.** For this fixture (the `gh` JSON in `tests/fixtures/pastor/report.json`): milestone "M1 Checkout works offline", description "Bar: the cart survives 10 offline reloads", issues #4 (Review, Size 6, PR #6 draft), #5 (Blocked, Size 2, no PR, branch `herd/export`) and #7 (Queued, Size 4, ETA "~20 min"). `bin/report` prints:
 
-### D7. Cost
+```text
+M1 Checkout works offline
+   Bar: the cart survives 10 offline reloads
+   [####------]  1 of 3 in review or done
+   ✓ #4 Cache the cart        ##################  PR #6 draft
+   ✗ #5 Export orders         ######              no PR yet: herd/export
+   ⏸ #7 Retry on reconnect    ............        ~20 min (estimate)
+   ⚠ #5 blocked: evidence.md (written by `herd done`)
+```
 
-- **SessionStart hook:** one Python start per session, plus a glob of `.claude/agents/`. Budget: 20 ms over a bare Python start (G11).
-- **Lessons:** one JSON read and write of up to 200 rows at `herd init`, at `herd done`, at each stop and, with a shared pastor, at a green `herd verify`; one appended row per `herd verify`. Budget: 50 ms (G11).
-- **Tokens:** `lessons.md` is at most 10 lines of 200 characters, about 600 tokens, read once per task.
+* The state marks are text symbols: U+2713 Review or Done, U+25B6 Running, U+23F8 Queued, U+2717 Blocked, U+26A0 the risk line.
+* The bar has 3 cells per Size point, at least 5 and at most 30: `#` for an issue in Review or Done, `.` for Queued, and Progress percent of `#` for Running.
+* The milestone bar has 10 cells, filled by issues in Review or Done over all issues.
+* A pull request shows as `PR #n draft`, `PR #n open` or `PR #n merged <7-character SHA>`.
+* Running and Blocked bars are filled by the Progress percent, rounded down (#5 has Progress 100).
+* The milestone bar rounds up (1 of 3 fills 4 cells).
+* Issue titles are padded to the longest title in the block plus 2 spaces, and bars to 30 plus 2.
+* `spawn check` comments on a refusal as `spawn check: <slug> refused: <reason>; <reason>`. The risk line is `#<n> blocked: <first reason>`.
+* Fixture shape: `{"milestones": [{"number", "title", "description", "issues": [{"number", "title", "status", "size", "progress", "eta", "branch", "prs": [{"number", "state", "isDraft", "mergeCommit"}], "last_check"}]}]}`, the result of the one GraphQL query plus `gh pr list`. The expected output is `tests/fixtures/pastor/report.txt`.
 
-### D8. Corrections
+### D6. Code-enforced versus text rules
 
-`correction` joins `NOTE_KINDS`, and `herd note --correction "<text>"` writes it only after a check. The text must be a verbatim quote, using the comparison the 0.10.0 human-criteria rule uses (`_quotes`), of a message the human typed in one of the task's sessions. Those are `start.json`'s `transcript` and `sessions`, after the task's start time. A session started after `herd init` is not in `sessions` until its first Stop. So the pre-init hook, which already runs before every Bash command and leaves at once unless the input holds both `herd.py` and `init`, widens that test to `init` or `--correction` and handles `herd ... note --correction`: it calls `_see_session` with the hook's `transcript_path` before the command runs. Check: `test_correction_from_a_later_session`.
+| Rule | Enforced by |
+| --- | --- |
+| No work without an issue in a milestone | `bin/spawn` refuses |
+| Coding sessions use Herd | `bin/spawn` refuses a request without `/herd:run` and always passes the herd-sdlc `--plugin-dir` |
+| Accept only Herd-made work, in the milestone, as a draft | `bin/spawn check` (G5) |
+| No two sessions on one task or on files one owns | `bin/pick` (`Touches:`), `bin/spawn` (Running issues, `.herd/active`) |
+| Learnt rules only from the human's words or evidence, via a stacked PR | `bin/learn-check`, `bin/learn-pr` (G8) |
+| Feedback carries records, not product content | `bin/feedback` builds the body (G9) |
+| Merge, release, feedback and learning PRs need the human | gate nodes, and D3 check 5 in `test_template_graphs_valid`. The graph is followed by the agent as text |
+| Report format | `bin/report` |
+| Report timing (events, `status`) | text only: no hook can tell an event from idle time. `accept.py` measures it for M4 |
+| One coordinator at a time | text only; `bin/spawn`'s Running and claimed-by refusals stop two coordinators from taking the same issue |
 
-A message counts as the human's when its session-log line is one of these:
-- a `user` line with `origin.kind` equal to `human`;
-- an `attachment` of type `queued_command` with `origin.kind` equal to `human`, which is a message typed while the agent was working;
-- in a log where no line carries `origin` at all, only the first `user` line. This is how `claude -p` logs its one prompt. In a log that uses `origin` anywhere, a line without it never counts, so a compaction summary, harness text or a prompt from another session is never taken as the human's. Check: `test_correction_rejects_unmarked_lines`.
+The `Depends on:` and `Touches:` lines are fields that `plan` writes into issues in a fixed format, read by a fixed pattern. They are the pastor's own data format, not a reading of its wording.
 
-Peer-session messages (`origin.kind` `peer`), task notifications and tool results never count. `<system-reminder>` blocks are removed from the message before comparing. Lines of these shapes were seen on Claude Code 2.1.330: in a desktop session's log, and from `claude -p`, which logs no `origin`.
+### D7. The quote check
 
-The rule reads Claude Code's records of who typed what, not the wording. It proves the human said these words. It cannot prove they were a correction, or that the agent recorded every correction. The agent decides what to record, and the template tells it to record each correction at once. The learn step turns corrections into rules only through a gate node, so the user sees each rule before it lands. `herd note` needs an active task, so a correction typed after `herd done` is not recorded in this version.
+A quoted phrase counts when it is found in a message the human typed, compared the way Herd's verbatim rule compares (`_squash` and `_quotes` in `scripts/herd.py`: NFKC, case-folded, punctuation and markup removed, whole words only), in a session log of this product: `~/.claude/projects/<folder>/*.jsonl`. Claude Code names `<folder>` after the checkout's absolute path; the exact encoding is to be confirmed by spike S6 item 5. `<system-reminder>` blocks are removed before comparing.
+
+A line counts as the human's when it is one of:
+* a `user` line with `origin.kind` equal to `human` (from v4's D8 research; unverified until S6 item 5), or with `promptSource` equal to `queued` (Collie's Learner);
+* an `attachment` line of type `queued_command` with `origin.kind` equal to `human`;
+* a `queue-operation` line with `operation` equal to `enqueue`: a message typed while the agent was working, as Collie's Learner found (`learner.md`, agent-kennel).
+
+Lines from peer sessions, task notifications and tool results never count, and neither do headless `claude -p` logs, where the pastor's human never types. A phone message through Remote Control must count; whether it is logged as one of these shapes is S6 item 5.
+
+These shapes come from v4's D8 research on Claude Code 2.1.330 (a desktop session's log and `claude -p`) and from Collie's Learner. Herd's code does not read them today; its verbatim rule for human criteria (CHANGELOG 0.10.0, `human_unquoted` in `scripts/herd.py`) compares against `request.md` and `human-change` notes. `learn-check` reuses only its comparison.
+
+### D8. Feedback body and cost
+
+**Feedback body.** `bin/feedback --draft --issue N` reads issue N's newest spawn record and, in its worktree, `.herd/tasks/<slug>/`: `stopped.json` (`reason`, `detail`, `problems`), the `guard` notes in `notes.jsonl` (each a denied command or path), and `evidence.json`. It reads no session log. The coordinator picks one record at `triage`, passed as `--record stopped|guard:<n>|evidence`. `<what>` is `stopped: <reason>`, `guard denied: <command or path>` or `failing: <criterion id>`, and `<text>` is that record's text. It prints:
+
+```text
+Herd <version>: <what> in a pastor's task
+
+<text, at most 1,000 characters>
+
+- Herd: <version>, Claude Code <version>, Python <version>, <OS>
+- Records: .herd/tasks/<slug>/stopped.json, evidence.json
+- filed-by: <name>
+- feedback-key: F<first 10 hex digits of SHA-1 of "<version>|<what>|<first line of text>">
+
+---
+<the pastor's one-line summary>
+```
+
+The title is the first line. `test_feedback_body_from_records_only` builds a fixture task whose changed files hold a unique string and asserts the body lacks it.
+
+**Cost.**
+* Herd: no new hook, no new work per tool call or per task (G10). `herd pastor new` runs once per pastor.
+* Per issue: one headless session, capped by `--max-budget-usd`. The spawn record holds the real cost, and `accept.py` prints the mean per issue for M4.
+* Coordinator: one Opus session. It runs no tests or long commands itself (baseline hard rule).
+* `gh` calls: `bin/report` makes one GraphQL query per board plus one `gh pr list`; `bin/spawn check` makes about five calls per issue (PR, checks, edit, ready, labels).
+
+### D9. The Magpie test
+
+**Setup**, at Magpie's `gate_setup`: Beovulfo/picturebook, public, MIT license, a `CLAUDE.md` with herd-sdlc's Rules section, a CI workflow, Herd's labels, the private project "Picturebook" with D5's fields, and milestone "P1 Visual PR review".
+
+**P1, the test project's first goal (not an M4 exit criterion).** Magpie designs it in picturebook, at its own `gate_design`. The owner's brief for that design:
+* One pull-request comment that GitHub renders itself: Mermaid diagrams for the map of changed modules and the changed flows, alert boxes (`> [!WARNING]`, `> [!CAUTION]`) as attention marks, and inline comments on the risky lines, posted as one review through `POST /repos/{owner}/{repo}/pulls/{n}/reviews` with `comments[]`.
+* Accuracy, in code: every element cites `path:start-end` ranges in the diff. A visual with a citation outside the diff, or one that leaves out a changed file, is refused and not posted.
+* Speed bar: 3 pairs of closed herd-sdlc pull requests, text review against visual review, the order alternating. The visual review takes at most half the time, with the same or a better score on a 5-question quiz written by a separate agent that never sees the visual.
+
+**M4 acceptance, `examples/pastor-m4/accept.py`:**
+
+| Bar | Evidence the script prints |
+| --- | --- |
+| At least 2 headless Herd sessions ran in parallel from the board | two spawn records whose `started` to `ended` intervals overlap, each with `check` exit 0 |
+| Each ends with `herd done` evidence and a PR in its milestone | per issue: the `evidence.md` path, the PR number, its milestone equal to the issue's, `Closes #N` in its body |
+| Milestone-format reports without asking | in the coordinator's session logs, for each `bin/spawn check` tool call, a `bin/report` tool call follows before the next human message, and that message is not `status` |
+| At least 1 learning PR for Magpie | a kennel PR from a `learn/` branch whose commits touch only G8's allowed paths under `plugins/magpie/`, with `bin/learn-check` exit 0 on it |
+| At least 1 customer-feedback issue | `gh issue list -R Beovulfo/herd-sdlc --label customer-feedback --search "filed-by: magpie"` returns at least one (Open Question 3) |
+| Driven from a phone (G11) | the Remote Control PID in run state is alive, and the owner confirms the `Magpie` session answered as Magpie (by hand: the app is outside the script's reach) |
+
+M4 closes when `accept.py` exits 0 and the owner confirms the phone session. Magpie then keeps working on picturebook on its own.
+
+### Spike S6 (planned, before any code)
+
+1. A headless session started by `bin/spawn` (`--permission-mode dontAsk`, cwd the product worktree) cannot write into the kennel checkout. Expected from Claude Code's working-directory rule, not tried. If it can, `bin/spawn` adds a deny rule for the kennel path.
+2. `claude --agent magpie:magpie`, for a plugin installed at user scope from a local kennel, makes Magpie the main agent (S4 showed a plugin agent as the main agent; S5 showed its scoped `agent_type`, `egm:egm-style`).
+3. On a scratch pull request: a comment with Mermaid and an alert box renders, and a review with multi-line `comments[]` posts.
+4. `claude remote-control --settings remote.json`, started in the checkout, opens new sessions as the pastor with herd-sdlc and the kennel plugin loaded. `claude remote-control --help` (2026-11-24, this machine) shows `--name`, `--spawn same-dir|worktree|session`, `--permission-mode`, `--settings` (read once, at start), `-c` (reattach to the session last recorded for this folder within about 4 hours) and `--session-id`. It shows no `--agent` and no `--plugin-dir`, so the agent and the plugins must come from settings. Which keys work (`agent`, `enabledPlugins`, `extraKnownMarketplaces`) is the question. If none works, G11 falls back to the human choosing the agent in the app, and the owner hears about it at the design gate of the build.
+5. Real session-log lines for D7, recorded as test fixtures: a terminal message, a message typed mid-turn, and a message from the phone through Remote Control; and the project-folder name for a checkout path.
 
 ## Order
 
-1. Spike S5 (done).
-2. D5, D6 and D8 with `herd lessons` and `herd note --correction`. They help every task, with or without a pastor.
-3. D1 to D4 and D7: the template, `herd pastor` and the SessionStart hook, in the same release as step 2, version 0.12.0. The README, the run skill, `CLAUDE.md` and the PRD status line are updated in the same change.
-4. A benchmark leg before the README recommends a pastor over `/herd:run`: the same model and the same input, pastor against the skill. Then three related tasks in one repository, with the store on and off.
+1. Spike S6.
+2. `templates/pastor/` with its `bin/` scripts and tests, `herd pastor new`, `examples/pastor-m4/accept.py` and its tests, a README section, a CHANGELOG entry and a version bump. No hook changes (G10).
+3. Create Magpie in agent-kennel and run CUJ 6 until `accept.py` passes.
+4. After M4: Collie fixes the pastor feature only from Magpie's customer-feedback issues.
 
 ## Alternatives Considered
 
 | Alternative | Why not, for now |
 | --- | --- |
-| One plugin agent for every project, `herd:herd-run`, with the project's knowledge as data (`herd-project-agent.md`, C4) | The owner wants a named agent that lives in the repository, which the team can commit and improve |
-| Fetch the template from agent-kennel | Private repository, and `gh` is the only service. A copy in the plugin is versioned with Herd |
-| The graph in a separate `.claude/pastors/<name>/run.yaml`, as in agent-kennel | The agent would have to find and read it. A local file is missing in a worktree, because S5 shows only Claude Code's own `.claude/` lookups fall back to the main checkout. The agent file is always loaded |
-| The agent writes "what I learned" into its own file at `herd done` | A claim, not evidence: it can be wrong, flattering or an injection. Lessons come from records, and rules come only from corrections the human typed, behind a gate node |
-| Detect corrections by reading the human's messages for words like "no" or "don't" | A word list on wording, which the owner rejects. The agent records the correction, and code checks that the human typed it |
-| Write the shared lessons file at `herd done` and commit it after | The PR would hold a commit past the verified one, which `herd done` refuses today. Writing it at the last green verify keeps it inside the verified commit |
-| A per-session record of which pastor ran each task | Needed only for per-pastor lessons (Open Question 1) |
-| A `herd pastor check` command | `herd pastor list` already prints the graph problems, and a test covers the template |
-| The switch only in `herd.toml` | One person could not turn pastors off without changing the team's committed file |
-| The switch only in the clone | A team that does not want pastors would need each member to turn them off |
-| A SessionStart hook that blocks until the user picks | A hook cannot prompt the user, and blocking would break the session |
+| v4: the pastor in the product repository's `.claude/agents/` | The owner's decision: never in the product repository |
+| One plugin agent shipped in herd-sdlc for every project | It cannot learn per human without writing into Herd's plugin cache, which every upgrade replaces |
+| A Herd hook that enforces the coordinator's graph | A hook sees tool calls, not the agent's plan. The rules that matter are code in `bin/` |
+| Feedback filed by the headless coding sessions | They see one task and have no human to approve the filing. The coordinator sees why a session was refused |
+| Feedback triggered by matching words in logs (for example "Traceback") | A word list on text. The coordinator quotes a record, and code builds the body |
+| Learnings pushed to the kennel's `main` under a standing approval | The owner replaced it with stacked pull requests the human merges |
+| `bin/` scripts inside `scripts/herd.py` | They make `gh` project and PR calls Herd's task CLI does not, and they belong to the agent. Herd's CLI stays unchanged for those who do not opt in |
+| Creating a kennel when none exists | M4 runs in agent-kennel; a second user's kennel can come later |
 
 ## Risks and Mitigations
 
 | Risk | Mitigation |
 | --- | --- |
-| A lesson carries an injected instruction from a reviewer or an old agent | Shown quoted with its source, and the template says lesson text is data. Lessons never change checks or gates. Text is copied, not composed, and shared lessons are reviewed in the PR diff |
-| A teammate's committed pastor is edited to weaken Herd's rules | The done gate and the guard decide, not the pastor's text. The edit is a reviewed commit |
-| The graph is text, so an agent can skip a node | Every step that matters ends in a `herd` command whose exit code the done gate checks again (Non-Goals) |
-| Lessons pile up and become noise | 10 shown, 200 kept, ranked by recurrence and recency; the human drops a lesson |
-| The pastor drifts from Herd as Herd changes | The template version is in the marker line, and the list and the hook say when it is older |
-| The SessionStart question nags | Asked only at startup, with no agent set and pastors on; `herd pastor off` stops it for the clone |
-| Parallel tasks write the store at once | A file lock. On Windows `fcntl` is missing and parallel writes can race (known limit, as for worktrees) |
-| Review findings past 2,000 characters are lost | `REVIEW_CHARS` clips the stored review. Accepted for this version, and a known limit |
+| Parallel sessions cost more than the human expected | `--max-budget-usd` per role; the spawn record holds the real cost |
+| A feedback issue leaks a private project's details to a public repository | The body is built from Herd's records; the human sees it at `gate_feedback`; no standing approval by default |
+| A Learner rule misquotes the human or invents a rule | `bin/learn-check` refuses a quote the human did not type; the human reviews and merges the pull request |
+| A stack of learning pull requests conflicts when merged out of order | Each branch is cut from the newest open one, so merging in creation order is clean |
+| The baseline carries rules that suit only the owner | Each has a source tag, so a human can drop it; the Learner records the human's corrections against it |
+| The coordinator skips a node, for example a report | Report timing is text; everything that accepts work or acts on GitHub is code or a gate; `accept.py` measures report timing for M4 |
+| The computer sleeps or the Remote Control process ends, so the phone has no session | Detached start; the reattach command is in run state. Known limit: Claude runs on this computer, which must stay awake |
+| A phone-driven session runs with too wide permissions | The human picks the mode at `gate_setup`; `default` is proposed and `bypassPermissions` never is. Herd's guard and done gate still apply in every Herd task |
+| Remote Control in a folder never trusted asks about trust, with no terminal to answer | CUJ 6 runs `claude` once in the checkout first; `setup` names this at its gate |
+| A terminal session and the Remote Control session coordinate at once | `setup` ends the terminal session; `bin/spawn` refuses an issue already Running or claimed |
+| Magpie's runs depend on the owner's local plugin cache | `bin/spawn` uses the newest installed herd-sdlc and records its version in the spawn record |
 
 ## Not proven
 
-* That a pastor repeats fewer mistakes than the default agent with `/herd:run`. Order step 4 measures it: 6 runs each, Haiku and Sonnet, comparing recurrences, done-gate blocks, review rounds and hidden-verifier scores, as mean and standard deviation.
-* That a graph in the agent file is followed better than the skill text.
-* That the D5 keys are stable enough across tasks to count a recurrence.
-* That the agent asks the SessionStart question in its first reply every time. The hook only adds context.
-* That a tracked pastor in a worktree takes precedence over an untracked copy in the main checkout (S5, not tested).
-* The `permissions.ask` rule in CUJ 4 was not tried in a spike.
-* That the agent records every correction. Herd checks only that a recorded one is the human's words.
-* That `origin` and the no-origin fallback in D8 hold on other clients (the terminal CLI, IDE extensions) and later Claude Code versions. In a log with no `origin` anywhere, the first `user` line counts as the human's even when a script or another session wrote it.
+* That a pastor from the baseline coordinates as well as Collie on a project it does not know. CUJ 6 is one project.
+* Spike S6's five facts.
+* That the coordinator's triage finds Herd's problems. Code only builds the body and removes duplicates.
+* That event-driven reports reach the human at the right moments. The graph says when; `accept.py` checks it after the fact.
+* That D7's log shapes hold on other clients and later Claude Code versions.
 
 ## Context and sources
 
-* The owner's request, quoted in the Overview (2026-11-24), and the earlier ones in `herd-project-agent.md`: learning from each task "is super important".
-* The graph format and its validator: agent-kennel's `graphs/README.md` and `graphs/validate.py`, written out in D2.
-* Spikes S4 and S5: the agent setting, the SessionStart input, worktrees and the git common dir.
-* Code reused from `scripts/herd.py`:
-  * `NOTE_KINDS`, `fails.json` and the `escalate` list, `write_stop`, `final_report`;
-  * the review hook's stored notes, `REF`, `REVIEW_CHARS`;
-  * `_ignore_locally`, `_main_checkout`, the worktree lock pattern;
-  * `HOOK_COMMANDS`, `GUARD_STATE`, `_protected`, `task_changes`.
+* The owner's M4 decisions: herd-sdlc issue #33, milestone "M4 Graph agents in Herd", 2026-11-24, and three later decisions relayed verbatim by Collie (Decided by the owner).
+* The owner's request for the coordinator, quoted in the Overview (2026-11-24), and for the Learner (agent-kennel, `plugins/collie/agents/learner.md`).
+* Collie's setup: agent-kennel's `graphs/README.md`, `graphs/validate.py`, `plugins/collie/agents/*.md`, `plugins/collie/graphs/change.yaml`, `plugins/collie/bin/spawn` (roles, models, budgets, command line, continuation rule, `check`).
+* Herd's code: `herd done` writes `evidence.md`, sets `resolved_at` and clears `.herd/active`; `herd pr` creates the PR with the goal in its body (`pr_body`, `open_pr` in `scripts/herd.py`).
+* Spikes S4 and S5: plugin agents as the main agent, `agent_type`. S5's findings 1 and 3 served v4's in-repository pastor and do not apply to v5.
+* v4 of this design, commit c63fb51: the lessons store, corrections and guard rules this version drops.
+* `claude remote-control --help` and `claude plugin install --help`, Claude Code on this machine, 2026-11-24.
+* GitHub: Mermaid diagrams and alerts in Markdown (docs.github.com, "Creating diagrams" and "Basic writing and formatting syntax"), and the pull-request reviews REST endpoint.

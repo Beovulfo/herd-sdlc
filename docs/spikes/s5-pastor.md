@@ -30,3 +30,7 @@ Each run asked for the agent's token and the hook's word. Then `git worktree add
 
 - Whether a tracked `.claude/agents/<name>.md` in the worktree takes precedence over the main checkout's copy when both exist.
 - Claude Code versions other than 2.1.330, and other harnesses.
+
+## Note for design v5 (2026-11-24)
+
+Design v5 moved the pastor out of the product repository into a kennel plugin. Findings 1 and 3 served v4's in-repository pastor and no longer apply. Finding 2 (`agent_type` carries a plugin agent's scoped name, such as `egm:egm-style`) still supports starting a kennel pastor with `--agent <name>:<name>`. The open questions for v5 are in spike S6, listed in the design.

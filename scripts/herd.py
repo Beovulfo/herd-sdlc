@@ -216,6 +216,8 @@ def cancel_task(root, slug, reason=""):
     if not (d / "task.toml").exists():
         raise ValueError(f"no task {slug}")
     (d / "cancelled").write_text(json.dumps({"at": now(), "reason": reason.strip()}) + "\n")
+    if active_slug(root) == slug:  # a task already done or cancelled did not stop now: keep its record
+        _stop(root, slug, "cancelled", reason.strip())
     (d / "gate_blocks").unlink(missing_ok=True)
     if active_slug(root) == slug:
         (Path(root) / ".herd" / "active").unlink()
@@ -862,6 +864,11 @@ def add_review(root, slug, by=None, text="", skipped=False):
     add_note(root, slug, "review", text, extra=extra)
 
 
+def review_needed(ev):
+    """The standard route at medium and high risk needs a fresh-context review."""
+    return ev.get("route") != "quick" and (ev.get("risk") or {}).get("effective") in ("medium", "high")
+
+
 def review_state(root, slug, ev, notes):
     """(counts, why not): the latest review counts only after all checks first passed, at the current risk or
     above, and at high risk only for the content it saw (a commit alone does not change that)."""
@@ -898,6 +905,8 @@ def final_report(root, slug, ev, notes):
         gaps.append("unreviewed")
     caveats = [f"{n['kind']}" + (f" at {fmt_duration(n['elapsed_s'])}" if n.get("elapsed_s") is not None else "")
                + f": {n['text']}" for n in notes if n["kind"] in ("found", "fixed")]
+    stop = load_stop(root, slug)
+    caveats = ([stop_line(stop)] if stop else []) + caveats
     decisions = [n["text"] for n in notes if n["kind"] == "decision"]
     return [f"Done: {done}.",
             f"Proven: {len(proven)} of {len(results)} criteria; evidence in {where}.",
@@ -1117,6 +1126,9 @@ def pr_body(root, slug):
     lines = head + [f"**Result:** {len(proven)} of {len(results)} criteria proven by a passing check "
                     f"({s['failing']} failing, {s['unchecked']} unchecked"
                     + (f", {zero} passed without running any test" if zero else "") + ").", "", fresh, ""]
+    stop = load_stop(root, slug)
+    if stop:
+        lines += [stop_line(stop) + ".", ""]
     lines += [f"## What was proven at commit `{ev['head'][:12]}`, before later changes (stale: re-run `herd verify`)"
               if stale else "## What is proven", ""]
     passing = proven
@@ -1282,6 +1294,123 @@ def suggest_lint(root):
     return "\n".join(lines)
 
 
+# ---- stop record ----------------------------------------------------------
+
+STOP_REASONS = ("released", "done_refused", "cancelled", "escalated")
+STATE_ERRORS = (OSError, ValueError, KeyError, TypeError, AttributeError, IndexError)  # unreadable or wrong shape
+# the next action for the first problem, by the problem's wording in problems(); {0} is the first group
+NEXT_STEPS = ((re.compile(r"^(.+?) is failing: "), "fix {0}, then run `herd verify`"),  # first: an id may be any text
+              (re.compile(r"^(?:no evidence yet|evidence is stale|attack commands were logged)"), "run `herd verify`"),
+              (re.compile(r"^no passing criterion"), "give at least one criterion a runnable check, then run `herd verify`"),
+              (re.compile(r"^red first not proven"), "say why the code came before the first verify with "
+                                                     "`herd note --late-red \"<why>\"`, then run `herd verify`"),
+              (re.compile(r"^(?:the check of )?human criterion (\S+)"),
+               "restore human criterion {0} as the human wrote it, or record the human's change with "
+               "`herd note --human-change`, then run `herd verify`"),
+              (re.compile(r"^review missing"), "get a fresh-context review of the finished change, record it with "
+                                               "`herd review`, then run `herd verify`"),
+              (re.compile(r"^adversarial pass incomplete"), "log each missing standard attack with `herd note --tried "
+                                                            "--attack <name> --check \"<command>\"`, then run `herd verify`"))
+
+
+def _escalations(root, slug):
+    """Why the agent must ask the human now: criteria that failed ESCALATE_AFTER verifies in a row."""
+    try:
+        return [f"{cid} failed {ESCALATE_AFTER} times in a row" for cid in (load_evidence(root, slug) or {}).get("escalate") or []]
+    except STATE_ERRORS:
+        return []
+
+
+def next_step(probs):
+    """The action for the first problem, from NEXT_STEPS; a problem it does not know gets a generic step."""
+    if not probs:
+        return "run `herd done`"
+    for pattern, step in NEXT_STEPS:
+        m = pattern.match(probs[0])
+        if m:
+            return step.format(*m.groups())
+    return f"fix this, then run `herd verify`: {_clip(probs[0], 200)}"
+
+
+def write_stop(root, slug, reason, detail=""):
+    """Write stopped.json: why the task stopped without `herd done`, what was left, and whether and how it can go on.
+    `resumable` and `next` come from problems() and the state files, never from the agent."""
+    if reason not in STOP_REASONS:
+        raise ValueError(f"stop reason must be one of {STOP_REASONS}")
+    d = _dir(root, slug)
+    ev, notes, probs, lost = None, [], [], False
+    try:
+        ev = load_evidence(root, slug)
+        if ev is not None and not isinstance(ev, dict):
+            raise ValueError("not a JSON object")
+    except STATE_ERRORS as e:
+        ev, probs, lost = None, [f"evidence.json is unreadable: {e}"], True
+    try:
+        notes = load_notes(root, slug)
+    except STATE_ERRORS as e:
+        probs.append(f"notes.jsonl is unreadable: {e}")
+        lost = True
+    review = evidence = None
+    if not probs:
+        try:
+            probs = problems(root, slug)
+            if ev:
+                ok, why = review_state(root, slug, ev, notes)
+                latest = _review(notes)
+                review = {"needed": review_needed(ev),
+                          "latest": None if latest is None else _clip(latest, 200) + ("" if ok else f" (does not count: {why})")}
+        except STATE_ERRORS as e:  # valid JSON of the wrong shape, a deleted task.toml
+            probs, lost = [f"a state file is unreadable or has the wrong shape: {e!r}"], True
+    try:  # kept when only notes.jsonl is bad
+        evidence = {"verified_at": ev["at"], "sha": ev["head"], "stale": _stale(root, slug, ev)} if ev else None
+    except STATE_ERRORS:
+        evidence = None
+    lost = lost or bool(ev and ev.get("red_unreadable"))
+    causes = _escalations(root, slug)
+    if reason == "cancelled":
+        resumable, step = False, "start a new task"
+    elif lost:
+        resumable, step = False, "a human restores the state files, or cancels"
+    elif reason == "escalated" or causes:
+        resumable, step = False, "the human answers one question about: " + "; ".join(causes or [detail])
+    else:
+        resumable, step = True, next_step(probs)
+        if not probs and _git(root, "status", "--porcelain", "--", *OWN_FILES).strip():
+            step = "commit the work, run `herd verify`, then run `herd done`"
+    if causes and not detail:  # released while an escalation is open: the reason alone would hide it
+        detail = "; ".join(causes)
+    try:
+        elapsed = _secs((d / "started").read_text().strip(), now())
+    except (OSError, ValueError):  # missing or hand-edited: the rest of the record still counts
+        elapsed = None
+    rec = {"at": now(), "reason": reason, "detail": detail, "problems": probs,
+           "evidence": evidence, "review": review,
+           # blocked stop attempts: on problems, or reminders to run `herd done` (done_refused)
+           "elapsed_s": elapsed, "gate_blocks": max(_count(d / "gate_blocks"), _count(d / "done_blocks")),
+           "resumable": resumable, "next": step}
+    (d / "stopped.json").write_text(json.dumps(rec, indent=2) + "\n")
+    return rec
+
+
+def _stop(root, slug, reason, detail=""):
+    """write_stop for the gate and cancel: a failure is one stderr line, never a broken hook or a lost cancel."""
+    try:
+        write_stop(root, slug, reason, detail)
+    except Exception as e:  # noqa: BLE001
+        print(f"herd: could not write stopped.json: {e}", file=sys.stderr)
+
+
+def load_stop(root, slug):
+    """The stop record, or None when there is none or it is unreadable."""
+    return _state(_dir(root, slug) / "stopped.json", None)
+
+
+def stop_line(rec):
+    """`Stopped before: <reason> at <at>`, with when `herd done` resolved it."""
+    return (f"Stopped before: {rec.get('reason')} at {rec.get('at')}"
+            + (f", resolved at {rec['resolved_at']}" if rec.get("resolved_at") else ""))
+
+
 # ---- gate -----------------------------------------------------------------
 
 def problems(root, slug):
@@ -1317,7 +1446,7 @@ def problems(root, slug):
             for cid in ev.get("human_checks_changed") or []]
     risk = (ev.get("risk") or {}).get("effective")
     ok, why = review_state(root, slug, ev, notes)
-    if ev.get("route") != "quick" and risk in ("medium", "high") and not ok:
+    if review_needed(ev) and not ok:
         out.append(f"review missing ({why}): risk is {risk}. Get a fresh-context review of the finished change, "
                    "then record it with `herd review --by \"<reviewer>\" \"<what they found>\"`, "
                    "or `herd review --skipped \"<why>\"`")
@@ -1339,18 +1468,31 @@ def problems(root, slug):
     return out
 
 
+def _count(path):
+    """A block counter; missing or hand-edited counts as 0."""
+    try:
+        text = path.read_text().strip()
+    except OSError:  # missing, or not a file
+        return 0
+    return int(text) if text.isdigit() else 0
+
+
 def gate(root, hook):
     """Stop hook. None allows the stop; a dict blocks it with a reason for the agent."""
     slug = active_slug(root)
     if not slug or not _dir(root, slug).exists() or cancelled(root, slug):
         return None
     counter = _dir(root, slug) / "gate_blocks"
-    probs = problems(root, slug)
+    try:
+        probs = problems(root, slug)
+    except STATE_ERRORS as e:  # a corrupt or hand-edited state file: block and say so, never crash the hook
+        probs = [f"a state file of task {slug} is unreadable ({e}): a human restores it, or cancels the task"]
     if not probs:  # everything passes, but only `herd done` checks the commit and prints the final report
         counter.unlink(missing_ok=True)
         done_counter = _dir(root, slug) / "done_blocks"
-        n = int(done_counter.read_text()) if done_counter.exists() and done_counter.read_text().isdigit() else 0
+        n = _count(done_counter)
         if n >= MAX_BLOCKS:  # `herd done` keeps refusing (say, it may not commit): let the agent stop and ask
+            _stop(root, slug, "done_refused")
             return None
         done_counter.write_text(str(n + 1))
         commit = (" Commit first: pull requests are on, so `herd done` refuses uncommitted work; if you may not"
@@ -1359,13 +1501,16 @@ def gate(root, hook):
         return {"decision": "block", "reason": f"Herd task `{slug}`: the evidence passes ({n + 1}/{MAX_BLOCKS})."
                 f"{commit} Run `python3 {SELF} done` to close the task and print the final report, then paste it."}
     (_dir(root, slug) / "done_blocks").unlink(missing_ok=True)  # passing again later reminds about `herd done` again
-    n = int(counter.read_text()) if counter.exists() else 0
+    n = _count(counter)
     if n >= MAX_BLOCKS:
+        _stop(root, slug, "released")
         return None
     counter.write_text(str(n + 1))
     cmd = f"python3 {SELF} verify"
-    esc = [f"{cid} failed {ESCALATE_AFTER} times in a row: ask the human one question"
-           for cid in (load_evidence(root, slug) or {}).get("escalate") or []]
+    causes = _escalations(root, slug)
+    if causes:
+        _stop(root, slug, "escalated", "; ".join(causes))
+    esc = [f"{c}: ask the human one question" for c in causes]
     reason = (f"Herd task `{slug}` is not done ({n + 1}/{MAX_BLOCKS} stop attempts blocked). "
               + "; ".join(probs + esc) + f". Run `{cmd}` after fixing. If you are stuck, ask the human one question and stop."
               + f" If the human abandoned the task, run `python3 {SELF} cancel --reason \"...\"`.")
@@ -1403,7 +1548,7 @@ USAGE = {
     "detect": "herd detect",
     "lint": "herd lint [--suggest]   (without --suggest: the PostToolUse hook, reads hook JSON on stdin)",
     "verify": "herd verify [slug] [--verbose]",
-    "status": "herd status [slug]",
+    "status": "herd status [slug] [--json]   (--json: the stop record, or null)",
     "done": "herd done [slug] [--verbose]",
     "cancel": 'herd cancel [slug] [--reason "text"]',
     "pr": "herd pr [slug] [--yes]   (push the herd/* branch, open or update its PR with the evidence)",
@@ -1528,8 +1673,19 @@ def main(argv):
                 print(f"  {cid} failed {ESCALATE_AFTER} times in a row: ask the human one question (see the run skill)")
             return 1 if s["failing"] or any(st == "failing" for st, _ in states.values()) else 0
         elif cmd == "status":
-            slug = _slug_arg(root, args)
+            as_json = "--json" in args
+            slug = _slug_arg(root, [a for a in args if a != "--json"])
+            stop = load_stop(root, slug)
+            if as_json:
+                print(json.dumps(stop, indent=2))
+                return 0
             ev = load_evidence(root, slug)
+            if stop:
+                went_on = isinstance(ev, dict) and str(ev.get("at", "")) > str(stop.get("at", ""))
+                print(f"Stopped {stop.get('at')}: {stop.get('reason')}. "
+                      + (f"Resolved at {stop['resolved_at']} by herd done." if stop.get("resolved_at")
+                         else "The task went on after it (newer evidence): see below." if went_on
+                         else f"Next: {stop.get('next')}"))
             print(report(ev, load_notes(root, slug)) if ev else f"task {slug}: no evidence yet")
             c = cancelled(root, slug)
             if c:
@@ -1561,6 +1717,10 @@ def main(argv):
                       "commit on the task branch if the project allows it", file=sys.stderr)
             ev = load_evidence(root, slug)
             notes = load_notes(root, slug)
+            stop = load_stop(root, slug)
+            if stop and not stop.get("resolved_at"):  # the record stays; it says the task went on and finished
+                stop["resolved_at"] = now()
+                (_dir(root, slug) / "stopped.json").write_text(json.dumps(stop, indent=2) + "\n")
             text = report(ev, notes)
             (_dir(root, slug) / "evidence.md").write_text(text)
             (root / ".herd" / "active").unlink(missing_ok=True)

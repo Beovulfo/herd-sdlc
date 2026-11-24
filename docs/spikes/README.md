@@ -5,6 +5,7 @@ Short experiments that answered a question before Herd was built on the answer.
 | Spike | Question | Result |
 | --- | --- | --- |
 | [S1](s1-egm-unattended.md) | Can EGM's brainstorm, draft, review and resolve steps run with no human turn? | Yes, with a driver that answers each gate from the PRD. Reviewers ran unattended in every run (10 to 11 reviewer runs per review, none failed). Human input was needed only for scope decisions the reviewers escalated: 2, 1 and 0 answers over three runs. Seven gaps are listed in the spike. |
+| [S3](s3-hook-inputs.md) | Do the hook inputs the guardrails design relies on exist? | Yes, tested live on Claude Code 2.1.330. Three changes to the design: the reviewer's `agent_type` is `herd:herd-reviewer`, its final text can be in a `SubagentHandback` call, and the start time comes from `started`. |
 | [S2](s2-baseline.md) | What does EGM cost a human today? | Protocol only, not run yet. It will give the baseline for the PRD's touchpoint and human-minute targets. |
 
 ## S1 run logs

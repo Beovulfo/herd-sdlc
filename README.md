@@ -52,7 +52,7 @@ You review evidence (command output, commit SHA, timestamps), not process.
 
 ## Quickstart
 
-You need Claude Code, Python 3.11 or newer as `python3`, and a git repository. With an older `python3` the hooks stay silent and do nothing, and the CLI says which version it needs.
+You need Claude Code, Python 3.11 or newer as `python3`, and a git repository. CI tests Python 3.13 only, so 3.11 and 3.12 are not tested in CI. With an older `python3` the hooks stay silent and do nothing, and the CLI says which version it needs.
 
 ```text
 /plugin marketplace add Beovulfo/herd-sdlc
@@ -384,7 +384,7 @@ While a Herd task is active, each `Edit` or `Write` runs the command on that fil
 
 ## Status
 
-Version 0.12.1 (see the [changelog](CHANGELOG.md)). Working and covered by 463 unit tests on Python 3.11 to 3.13: the evidence harness (`scripts/herd.py`), the Stop gate, the run rules (red first, risk and review, frozen and verbatim human criteria, required fields at medium and high risk, the final report, commit before done), the quick route, project-type detection, the lint hook, the caveat log, zero-test flagging, the stop record, the guard hook, the review hook (one tier above the builder unless `[review] step` says otherwise, counted only when the reviewer saw the change), the refusal attack, the `inputs` list, the opt-in `herd pr` step, the opt-in worktree start for parallel tasks, short output by default, and the risk-floor module. Releases 0.2.7 to 0.3.0 were each built with Herd itself; 0.2.8 to 0.3.0 were opened as pull requests by `herd pr`. Benchmarked on one task (above): Sonnet and Haiku with 0.3.1, and Haiku with 0.12.0 and 0.12.1. Not yet done: many live runs through the installed plugin across different project types, and issue-to-pull-request automation on GitHub (labelled issue to reviewed spec), which is still design work. `herd pr` covers only the last step: a finished local task opens a pull request with its evidence.
+Version 0.12.1 (see the [changelog](CHANGELOG.md)). Working and covered by 463 unit tests on Python 3.13: the evidence harness (`scripts/herd.py`), the Stop gate, the run rules (red first, risk and review, frozen and verbatim human criteria, required fields at medium and high risk, the final report, commit before done), the quick route, project-type detection, the lint hook, the caveat log, zero-test flagging, the stop record, the guard hook, the review hook (one tier above the builder unless `[review] step` says otherwise, counted only when the reviewer saw the change), the refusal attack, the `inputs` list, the opt-in `herd pr` step, the opt-in worktree start for parallel tasks, short output by default, and the risk-floor module. Releases 0.2.7 to 0.3.0 were each built with Herd itself; 0.2.8 to 0.3.0 were opened as pull requests by `herd pr`. Benchmarked on one task (above): Sonnet and Haiku with 0.3.1, and Haiku with 0.12.0 and 0.12.1. Not yet done: many live runs through the installed plugin across different project types, and issue-to-pull-request automation on GitHub (labelled issue to reviewed spec), which is still design work. `herd pr` covers only the last step: a finished local task opens a pull request with its evidence.
 
 ## The design behind it
 

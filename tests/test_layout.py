@@ -2,6 +2,7 @@
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -17,6 +18,7 @@ class TestLayout(unittest.TestCase):
         self.assertEqual([p["source"] for p in m["plugins"]], ["./plugin"])
         self.assertTrue((PLUGIN / ".claude-plugin" / "plugin.json").is_file())
 
+    @unittest.skipUnless(shutil.which("claude"), "the claude CLI is not installed (CI runners lack it)")
     def test_install_has_no_examples(self):
         with tempfile.TemporaryDirectory() as tmp:
             env = {**os.environ, "CLAUDE_CONFIG_DIR": tmp}
@@ -46,7 +48,7 @@ class TestLayout(unittest.TestCase):
         v = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text())["version"]
         self.assertEqual(v, "0.12.2")
         self.assertIn("## 0.12.2", (ROOT / "CHANGELOG.md").read_text())
-        self.assertEqual(sorted(p.name for p in PLUGIN.iterdir()),
+        self.assertEqual(sorted(p.name for p in PLUGIN.iterdir() if p.name != ".DS_Store"),
                          [".claude-plugin", "LICENSE", "NOTICE", "agents", "assets", "hooks", "scripts", "skills"])
 
 

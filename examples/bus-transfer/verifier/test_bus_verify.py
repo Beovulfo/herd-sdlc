@@ -495,6 +495,18 @@ class TestOtherReading(unittest.TestCase):
         with self.assertRaises(AssertionError):
             bv.validate_answer(c, c["queries"][0], hops, 560)
 
+    def test_a_made_up_intermediate_hop_is_rejected_before_hops_are_merged(self):
+        c = bv.hand_cases()[2]
+        q = c["queries"][0]
+        good = rides_as_hops(c, br.solve(c, q))
+        for index, key, value in ((0, "to", "NOPE"), (0, "arr", 1), (1, "dep", 2), (1, "from", "NOPE"), (0, "arr", 549)):
+            bad = json.loads(json.dumps(good))
+            bad["legs"][index][key] = value
+            if key == "to":
+                bad["legs"][1]["from"] = value
+            self.assertIsInstance(bv.check_case(c, {"answers": [bad]}), str, (index, key, value))
+        self.assertIsNone(bv.check_case(c, {"answers": [good]}))
+
     def test_change_time_readings_staying_on_the_bus_and_exactly_the_minimum(self):
         stay, tight, two = bv.hand_cases()[2], bv.hand_cases()[1], bv.hand_cases()[7]
         for c in (stay, two):

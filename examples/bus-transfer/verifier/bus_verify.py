@@ -286,13 +286,14 @@ def validate_answer(canon, query, answer, expected):
         return
     assert expected is not None, "gave a journey where none is possible"
     trips = {t["id"]: t for t in canon["trips"]}
-    legs = merge_legs(answer.get("legs") or [])
+    given = answer.get("legs") or []
+    for leg in given:  # each leg as reported, before merging could hide a made-up intermediate stop or time
+        _check_leg(trips, leg)
+    legs = merge_legs(given)
     if not legs:
         assert query["from"] == query["to"], "journey has no legs"
         arrival = query["depart"]
     else:
-        for leg in legs:
-            _check_leg(trips, leg)
         _check_chain(canon, query, legs)
         arrival = legs[-1]["arr"]
     assert answer.get("arrival") == arrival, f"reported arrival {answer.get('arrival')} but the legs arrive at {arrival}"

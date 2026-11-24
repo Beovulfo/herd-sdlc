@@ -158,7 +158,7 @@ The table is fixed in code. Text is copied from the record, never rewritten. Lin
 
 1. Spike S4 (done).
 2. Part B first, built by Collie through its `change.yaml` graph as its first autonomous job (the owner's choice, 2026-11-24). B1 to B5 in one release.
-3. Part A, advisory warnings only, after Part B and the 0.11.0 intake reviewer.
+3. Part A, advisory warnings only, after Part B.
 4. Part C after A and B, with a benchmark leg: the run graph agent against the run skill, same model, same input.
 
 ## Alternatives Considered

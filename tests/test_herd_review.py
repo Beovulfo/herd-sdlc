@@ -9,7 +9,7 @@ import unittest.mock
 from pathlib import Path
 
 from scripts import herd
-from tests.test_harness_rules import OK, Base
+from tests.test_harness_rules import OK, REQUEST, Base
 from tests.test_herd_cli import hook_review, transcript
 
 ROOT = Path(herd.__file__).resolve().parent.parent
@@ -71,7 +71,7 @@ class TestHookOnly(ReviewBase):
                          ("hook", "sonnet", "haiku", "PASS", "claude-sonnet-5-5"))
         p = self.cli("done")
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertIn("Review: claude-sonnet-5-5 (sonnet, builder on haiku; PASS; ran git diff or git show, read 0 of 1 changed code file)", p.stdout)
+        self.assertIn("Review: claude-sonnet-5-5 (sonnet, builder on haiku; PASS; ran git diff or git show, read 1 of 1 changed code file)", p.stdout)
 
     def test_quick_route_needs_no_review(self):
         herd.init_task(self.root, "q1", "Fix a typo", quick_check="python3 -c 1")
@@ -212,7 +212,7 @@ class TestWiringAndStatus(ReviewBase):
             self.assertIn(word, body)
         hooks = json.loads((ROOT / "hooks/hooks.json").read_text())["hooks"]["SubagentStop"]
         self.assertEqual([(e["matcher"], h["command"].rsplit(" ", 1)[-1]) for e in hooks for h in e["hooks"]],
-                         [("^herd:herd-reviewer$", "review-hook"), ("^herd:herd-intake-reviewer$", "review-hook")])
+                         [("^herd:herd-reviewer$", "review-hook")])
         self.assertIn('["review-hook"]', Path(herd.__file__).read_text().split("import hashlib", 1)[0])
 
     def test_status_and_stop_record_name_the_tier(self):
@@ -273,7 +273,7 @@ class TestReviewAttacks(ReviewBase):
     def test_review_one_bad_part(self):
         self.ready()
         main = transcript(self.root, ["haiku", "haiku"])
-        rev = transcript(self.root, "sonnet", text="Fine.\nHERD-REVIEW: PASS",
+        rev = transcript(self.root, "sonnet", text="Fine.\nHERD-REVIEW: PASS", reads=[self.root / "app.py"],
                          path=main.parent / main.stem / "subagents" / "agent-x.jsonl")
         rev.write_text("{broken\n" + rev.read_text() + "[1, 2]\n")  # bad lines around good ones
         main.write_text(main.read_text() + '{"type": "assistant", "message": {"model": "<synthetic>"}}\n{oops\n')
@@ -354,8 +354,7 @@ class TestReviewFindings(ReviewBase):
         self.assertEqual(len(lines), 7)
         review = lines[-1]
         self.assertEqual(review, "Review: claude-sonnet-5-5 (sonnet, builder on haiku; PASS, after 2 rounds "
-                                 "without PASS; ran git diff or git show, read 0 of 1 changed code file): No Blocker or Major; "
-                                 "intake review: a fresh subagent (opus, builder on opus; PASS): no Blocker or Major.")
+                                 "without PASS; ran git diff or git show, read 1 of 1 changed code file): No Blocker or Major.")
         body = herd.pr_body(self.root, "t1")
         self.assertIn("2 review rounds found Blocker or Major issues before the PASS", body)
         self.assertNotIn("\nHERD-REVIEW: PASS", body)
@@ -423,6 +422,112 @@ class TestReviewRound2(ReviewBase):
         self.review(builder="opus", reviewer="opus")
         self.assertIn("same tier", herd._review(herd.load_notes(self.root, "t1")))
 
+
+
+class TestIntakeRemoved(ReviewBase):
+    """0.12.0 removed the 0.11.0 intake reviewer: a task started on 0.11.x still finishes, and its stop is ignored."""
+
+    def test_a_0_11_task_with_intake_records_finishes_and_new_intake_stops_record_nothing(self):
+        self.ready()
+        start = self.root / ".herd/tasks/t1/start.json"
+        start.write_text(json.dumps(dict(json.loads(start.read_text()), intake=True)))
+        with open(self.root / ".herd/tasks/t1/notes.jsonl", "a") as f:
+            f.write(json.dumps({"at": herd.now(), "kind": "intake", "text": "HERD-INTAKE: FAIL", "verdict": "FAIL",
+                                "source": "hook"}) + "\n")
+        self.review(builder="haiku", reviewer="sonnet")
+        herd.verify(self.root, "t1")
+        self.assertEqual(herd.problems(self.root, "t1"), [])
+        self.assertNotIn("ntake review", herd.report(herd.verify(self.root, "t1"), herd.load_notes(self.root, "t1")))
+        before = len(herd.load_notes(self.root, "t1"))
+        self.review(agent_type="herd:herd-intake-reviewer", text="Fine.\nHERD-INTAKE: PASS")
+        self.assertEqual(len(herd.load_notes(self.root, "t1")), before)
+        self.assertFalse((ROOT / "agents/herd-intake-reviewer.md").exists())
+        self.assertNotIn("intake", herd.NOTE_KINDS)
+
+
+
+class TestReviewBrief(ReviewBase):
+    """0.12.1: the reviewer's brief comes from Herd's records, so it names the files the review hook checks."""
+
+    def test_the_brief_holds_everything_the_reviewer_needs(self):
+        self.ready()
+        (self.root / "util.py").write_text("X = 1\n")  # a second changed code file, uncommitted
+        task = herd.load_task(self.root, "t1")
+        head = json.loads((self.root / ".herd/tasks/t1/start.json").read_text())["head"]
+        brief = herd.review_brief(self.root, "t1")
+        self.assertIn(f"Goal: {task['goal']}", brief)
+        for c in task["criteria"]:
+            self.assertIn(f"- {c['id']} ({c['source']}): {c['text']} Check: `{c['check']}`", brief)
+        self.assertIn(f"Test budget: {task['test_budget']}", brief)
+        self.assertIn(f"Known limits: {task['known_limits']}", brief)
+        self.assertIn("The human's request, word for word:\n" + REQUEST, brief)
+        files, _ = herd.review_files(self.root, "t1")
+        self.assertEqual(files, ["app.py", "util.py"])
+        self.assertIn("Read every one of these 2 changed code files with Read before you judge, or print the whole "
+                      "diff:\n- app.py\n- util.py\n", brief)
+        self.assertIn(f"Diff, committed and not: `git diff {head}`", brief)
+        p = self.cli("review-brief")
+        self.assertEqual((p.returncode, p.stdout), (0, brief))
+        herd.verify(self.root, "t1")
+        self.assertIn("giving it only what `herd review-brief` prints", " ".join(herd.problems(self.root, "t1")))
+
+    def test_reading_the_listed_files_is_what_the_hook_counts(self):
+        self.ready()
+        (self.root / "util.py").write_text("X = 1\n")
+        files, _ = herd.review_files(self.root, "t1")
+        calls = [{"type": "tool_use", "name": "Read", "input": {"file_path": str(self.root / f)}} for f in files]
+        lines = [json.dumps({"type": "assistant", "message": {"model": "claude-sonnet-5-5", "content": calls}}),
+                 json.dumps({"type": "assistant", "message": {"model": "claude-sonnet-5-5", "content": [
+                     {"type": "text", "text": "Fine.\nHERD-REVIEW: PASS"}]}})]
+        self.review(builder="haiku", reviewer_lines=lines)
+        self.assertEqual((self.last()["saw"], self.last()["code_unread"]), (True, []))
+        self.review(builder="haiku", reviewer_lines=[lines[0].replace("util.py", "other.py"), lines[1]])
+        self.assertIn("the reviewer did not read: util.py", self.state()[1])  # the gate names the missed file
+
+    def test_the_brief_for_no_code_change_and_unknown_changes(self):
+        self.ready()
+        (self.root / "app.py").unlink()
+        self.assertIn("Read every one of these 1 changed files (no code file changed)",
+                      herd.review_brief(self.root, "t1"))
+        start = self.root / ".herd/tasks/t1/start.json"
+        start.write_text(json.dumps(dict(json.loads(start.read_text()), head=None)))
+        self.assertIn("Changed files: unknown (no commit at `herd init`)", herd.review_brief(self.root, "t1"))
+
+
+class TestPassHint(ReviewBase):
+    """0.12.1: once a review that counts is recorded, `herd verify` and `herd status` say to stop and finish."""
+
+    def test_the_hint_appears_only_for_a_counting_pass_and_states_the_rule(self):
+        self.ready()
+        self.assertIsNone(herd.pass_hint(self.root, "t1", herd.verify(self.root, "t1"), herd.load_notes(self.root, "t1")))
+        self.assertNotIn("Review passed", self.cli("verify").stdout)
+        self.review(builder="haiku", reviewer="sonnet", text="Major: x.\nHERD-REVIEW: FAIL")
+        self.assertNotIn("Review passed", self.cli("verify").stdout)
+        self.review(builder="haiku", reviewer="sonnet")
+        hint = ("Review passed and counts: fix only Blocker and Major findings, start no new work, commit and run "
+                "`herd done`; at medium risk it keeps counting after edits unless the risk rises to high, but no "
+                "reviewer sees them")
+        self.assertIn("  " + hint, self.cli("verify").stdout)
+        self.assertIn(hint, self.cli("status").stdout)
+        self.assertNotIn("Review: needs", self.cli("status").stdout)
+        (self.root / "app.py").write_text("def f():\n    return 1  # edited after the PASS\n")
+        self.assertNotIn("Review passed", self.cli("status").stdout)  # stale evidence: no hint until `herd verify`
+        self.assertIn(hint, self.cli("verify").stdout)  # still counts at medium risk
+        (self.root / "app.py").write_text("def f():\n    return 2\n")
+        self.assertNotIn("Review passed", self.cli("verify").stdout)  # a failing check: not done, no hint
+        (self.root / "app.py").write_text("def f():\n    return 1  # edited after the PASS\n")
+        start = self.root / ".herd/tasks/t1/start.json"
+        start.write_text(json.dumps(dict(json.loads(start.read_text()), risk="high")))
+        ev = herd.verify(self.root, "t1")
+        self.assertIsNone(herd.pass_hint(self.root, "t1", ev, herd.load_notes(self.root, "t1")))  # risk rose: void
+        self.review(builder="haiku", reviewer="sonnet")
+        ev = herd.verify(self.root, "t1")
+        self.assertIn("at high risk any file you change after it needs another review (a commit alone does not)",
+                      herd.pass_hint(self.root, "t1", ev, herd.load_notes(self.root, "t1")))
+        (self.root / "app.py").write_text("def f():\n    return 1  # edited again\n")
+        ev = herd.verify(self.root, "t1")
+        self.assertIsNone(herd.pass_hint(self.root, "t1", ev, herd.load_notes(self.root, "t1")))
+        self.assertIn("the code changed after the review, and the risk is high", " ".join(herd.problems(self.root, "t1")))
 
 if __name__ == "__main__":
     unittest.main()

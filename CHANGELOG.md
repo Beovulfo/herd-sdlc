@@ -2,6 +2,45 @@
 
 All notable changes to Herd. Versions follow `.claude-plugin/plugin.json`.
 
+## 0.12.1
+
+Cuts review rounds without lowering the bar. The 0.12.0 Haiku run cost $1.07, of which $0.39 was four Sonnet review rounds. Round 2 passed but did not count, because its brief, written by the builder, did not name two changed code files (`__init__.py`, `generator.py`) and the reviewer did not read them. That cost a whole extra round. After the passing round the builder kept polishing Nits and rebuilt its heuristic, which led to more rounds.
+
+- **Added:** `herd review-brief` prints the brief the builder passes to `herd-reviewer` as it is, assembled by code: the goal, each criterion with its check command, `test_budget`, `known_limits`, the request word for word, the `inputs` entries, the changed files the reviewer must read, and the diff command. The file list is the same one the review hook counts against (`review_files()`, shared). The diff command is `git diff <the commit herd init recorded>`, which covers committed and uncommitted work. The gate's refusal for a missing review says to give the reviewer only that output.
+- **Added:** once a review that counts is recorded for the current, fresh evidence with no failing check, `herd verify` and `herd status` print one line: `Review passed and counts: fix only Blocker and Major findings, start no new work, commit and run herd done`. The line also says exactly what the rule does with later edits. At medium risk the review keeps counting unless the risk rises to high, though no reviewer sees those edits. At high risk any changed file needs another review, while a commit alone does not.
+- **Changed:** the run skill's review step says to pass what `herd review-brief` prints, and to commit and run `herd done` after a PASS that counts (838 words, down from 841; budget unchanged at 845). The `herd-reviewer` agent is told it gets Herd's brief and must read every listed file and run its diff command before judging.
+- **Fixed:** a new file git does not track yet is in no `git diff`, so a review that printed the diff but did not Read such a file no longer counts. The reason names the files, and the brief lists them as `New files, in no git diff: read each one with Read`. Before this, a reviewer who ran `git diff` with uncommitted new files counted without seeing them.
+- **Unchanged:** the gate already names the changed files a failed review did not read (`the reviewer did not read: a.py, b.py, ...`, up to 20), so a review that missed files is fixed in one round. No new model calls.
+- **Known limits:** the hint only advises; nothing stops the builder working after a PASS. At medium risk, edits after it are not reviewed. The cost effect has not been measured in a new run yet.
+
+## 0.12.0
+
+Removes the intake reviewer added in 0.11.0 ([`herd-intake-review.md`](docs/designs/herd-intake-review.md), now marked removed). A live Haiku run on 0.11.0 showed it did not catch the flaw it was built for. The Sonnet intake reviewer passed an `inputs` entry whose `program` form took a pre-chosen walkable pick cell for each product. Its only catch, non-verbatim human criteria, the 0.10.0 verbatim block already refuses in code. It also added review rounds and cost.
+
+- **Removed:**
+  - the `herd-intake-reviewer` agent and its SubagentStop entry;
+  - its path in `herd review-hook`, the `intake` note kind and `criteria_sha`;
+  - the `problems()` rule that needed an intake PASS, its `next` steps, and the escalation after 3 failed intake rounds;
+  - the `Intake review` lines in the report, the final report and the PR;
+  - the `intake` key `herd init` wrote to `start.json`, and the run skill's intake sentence (run skill budget back from 875 to 845 words).
+- **Kept:** the final `herd-reviewer` one tier above the builder, its evidence checks (what it read, its `path:line` references), and its brief with the request and the `inputs` list. Also kept: the `inputs` enforcement, the verbatim block, the required fields, and the 0.11.1 corrections rule.
+- **Compatibility:** a task started on 0.11.x keeps its `intake` notes and its `intake` key in `start.json`; nothing reads them now, so it no longer needs an intake review to finish.
+
+## 0.11.1
+
+Fixes a deadlock a live Haiku run hit on 0.11.0. Its human criteria at the first verify were cut quotes, and C4 was its own sentence. The intake reviewer failed them twice, so the agent re-split the request into verbatim quotes under the same ids: new C2 and C3 were other sentences of the request, and C4 joined the old C2 and C3. The intake review then passed, but the frozen-criteria rule from 0.4.0 refused every change until the human's words were recorded with `herd note --human-change`. The agent rightly would not claim the human changed them, and the task stopped.
+
+- **Fixed:** after the first verify, a change that only moves the human criteria toward the recorded request needs no note. That holds when every human criterion now quotes the request, and every frozen human text that quoted it, or that the human reworded with a note, is still inside one of them, so none of the human's words was narrowed or dropped. A frozen text that did not quote the request and was not the human's rewording was never the human's words. Criteria whose text changed in words are re-frozen with their checks. A text changed only in case, spacing or punctuation now counts as unchanged and keeps its frozen check. The report and the PR show `C2, C3, C4 corrected after the first verify to verbatim quotes of the request, keeping every earlier human quote: confirm the split`, noting that their checks may not have been seen failing. This replaces the narrower 0.10.0 rule, which accepted only a non-quote restored to a quote under the same id, and not its check.
+- **Unchanged:** these still need the human's note:
+  - a quote cut shorter or dropped;
+  - a text that is still not a quote;
+  - a human rewording replaced;
+  - a check changed on a human criterion whose words did not change;
+  - a human criterion removed or turned agent-proposed.
+
+  A new id is still shown as "added after the first verify". With no recorded request, today's rules apply.
+- **Known limit:** the rule compares quotes, not meaning. A re-split or an id swap that keeps every quote passes, even if it moves a quote to a criterion with a weaker check. The report and the PR list the corrected ids for the human to confirm, and the `corrected` mark stays for the rest of the task.
+
 ## 0.11.0
 
 An intake review: a reviewer that reads the criteria as the human would, before any code ([`herd-intake-review.md`](docs/designs/herd-intake-review.md)). No reviewer ever compared the human's words with the program's input form. A Haiku build took a pre-chosen pick cell per product where the human said products are located in the map, and no review or attack noticed, because the final reviewer sees only the diff.

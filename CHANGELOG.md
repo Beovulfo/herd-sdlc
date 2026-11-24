@@ -2,6 +2,16 @@
 
 All notable changes to Herd. Versions follow `.claude-plugin/plugin.json`.
 
+## 0.12.4
+
+Hard cap on review rounds (issue #45). A session ran 8 review rounds on one task ($7.42). Herd capped Stop-gate blocks (`MAX_BLOCKS`) and failing verifies of one criterion (`ESCALATE_AFTER`), but the only limit on reviews was 3 rounds that counted, so reviews by a low tier or without reading the diff never reached it.
+
+- **Why:** the owner asked for the simplest workflow: a lean tool must stop a review loop in code, not in advice.
+- **Added:** `MAX_REVIEW_ROUNDS = 2`, no setting. Every reviewer run the hook recorded since the last PASS that counts is one, whether or not it counted as a round. At 2, `herd verify` and `herd review-brief` print `review limit reached` with the open Blocker and Major lines of the last review and say to stop and ask the human (`review-brief` prints no brief and exits 1). The hook still records a further review but marks it `over_cap`, so it cannot pass the task or reset the count. The Stop gate releases with the existing `escalated` stop reason.
+- **Added:** a human lifts the limit with `herd note --decision "Review limit: <what the human said>"`. A decision note that starts with `Review limit` resets the count; other decision notes do not.
+- **Changed:** this replaces the old escalation after 3 counting rounds. The run skill says to stop and ask at 2 reviews without a PASS.
+- **Known limits:** the agent can write the reset note itself; Herd does not check who wrote it. The count reads `notes.jsonl`, which a hand edit can change. Only reviews the hook recorded count. A review that fails to record (an error in the hook) is not counted.
+
 ## 0.12.3
 
 A full `herd verify` now runs at fixed points, and `herd verify --only <id>` runs one check for the builder in between (issue #39, design `docs/designs/herd-verify-once.md`). In the #32 session a whole-suite criterion ran in 9 of 11 verifies at 4 to 5 minutes each.

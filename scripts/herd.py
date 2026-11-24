@@ -863,6 +863,15 @@ def content_id(root, base=None, snap=False):
     return h.hexdigest()
 
 
+def task_content(root, slug, snap=False):
+    """The content id of this task's work, taken against the task's start commit as `herd verify` takes it."""
+    try:
+        start = json.loads((_dir(root, slug) / "start.json").read_text())
+    except (OSError, ValueError):
+        start = {}
+    return content_id(root, start.get("head") if isinstance(start, dict) else None, snap)
+
+
 def _task_sha(root, slug):
     return hashlib.sha1((_dir(root, slug) / "task.toml").read_bytes()).hexdigest()
 
@@ -1125,7 +1134,7 @@ def verify(root, slug):  # noqa: C901
           "legacy": bool(start.get("legacy") or not start), "human_changed": human_changed, "human_corrected": corrected, "checks_changed": checks_changed, "human_checks_changed": human_checks,
           "added_after_red": added,
           "warnings": warnings, "escalate": [cid for cid, n in fails.items() if n >= ESCALATE_AFTER],
-          "fingerprint": fingerprint(root, snap), "content": content_id(root, start.get("head"), snap), "task_sha": _task_sha(root, slug),
+          "fingerprint": fingerprint(root, snap), "content": task_content(root, slug, snap), "task_sha": _task_sha(root, slug),
           "results": results, "summary": summary, "attacks": attacks}
     (_dir(root, slug) / "evidence.json").write_text(json.dumps(ev, indent=2))
     return ev
@@ -1817,7 +1826,25 @@ def _clip(text, limit=60):
 
 
 def _stale(root, slug, ev):
-    return ev["task_sha"] != _task_sha(root, slug) or ev["fingerprint"] != fingerprint(root)
+    """The task or the work changed since the last verify. A commit alone changes neither: the content id decides;
+    the HEAD fingerprint is the fallback outside git and for evidence without a content id."""
+    if ev["task_sha"] != _task_sha(root, slug):
+        return True
+    if ev.get("content"):
+        now_id = task_content(root, slug)
+        if now_id is not None:
+            return ev["content"] != now_id
+    return ev["fingerprint"] != fingerprint(root)
+
+
+def refresh_head(root, slug, ev):
+    """Evidence that is still fresh after a commit names the final commit: keep the verified one as verified_head."""
+    snap = git_state(root)
+    head, dirty = (snap or {}).get("oid") or "none", bool(snap and snap["entries"])
+    if head != ev["head"] or dirty != bool(ev.get("dirty")):
+        ev = dict(ev, verified_head=ev.get("verified_head", ev["head"]), head=head, dirty=dirty)
+        (_dir(root, slug) / "evidence.json").write_text(json.dumps(ev, indent=2))
+    return ev
 
 
 def pr_body(root, slug):  # noqa: C901
@@ -1952,10 +1979,13 @@ def open_pr(root, slug, yes=False):
     if branch != f"herd/{slug}":
         raise ValueError(f"herd pr pushes only the task's branch herd/{slug}; this is `{branch or 'no branch'}`")
     if _git(root, "status", "--porcelain", "--", *OWN_FILES).strip():
-        raise ValueError("herd pr needs a clean working tree: commit the work, run `herd verify`, then `herd pr`, "
+        raise ValueError("herd pr needs a clean working tree: commit the work, then run `herd pr`, "
                          "so the pull request contains exactly the code the evidence is about")
     if not shutil.which("gh"):
         raise ValueError("herd pr needs the GitHub CLI `gh` on PATH")
+    ev = load_evidence(root, slug)
+    if ev is not None and not _stale(root, slug, ev):
+        refresh_head(root, slug, ev)
     body = pr_body(root, slug)
     p = subprocess.run(["git", "push", "-u", "origin", branch], cwd=root, capture_output=True, text=True)
     if p.returncode:
@@ -2110,7 +2140,7 @@ def write_stop(root, slug, reason, detail=""):  # noqa: C901
     else:
         resumable, step = True, next_step(probs)
         if not probs and _git(root, "status", "--porcelain", "--", *OWN_FILES).strip():
-            step = "commit the work, run `herd verify`, then run `herd done`"
+            step = "commit the work, then run `herd done`"
     if causes and not detail:  # released while an escalation is open: the reason alone would hide it
         detail = "; ".join(causes)
     try:
@@ -2494,7 +2524,7 @@ def problems(root, slug):  # noqa: C901
     ev = load_evidence(root, slug)
     if ev is None:
         return ["no evidence yet: run `herd verify`"]
-    if ev["task_sha"] != _task_sha(root, slug) or ev["fingerprint"] != fingerprint(root):
+    if _stale(root, slug, ev):
         return ["evidence is stale (the workspace or task.toml changed after the last verify): run `herd verify`"]
     out = [f"{r['id']} is failing: {r['text']}" for r in ev["results"] if r["status"] == "failing"]
     if not ev["summary"]["passing"] and not out:
@@ -2851,18 +2881,19 @@ def main(argv):  # noqa: C901
         elif cmd == "done":
             verbose = "--verbose" in args
             slug = _slug_arg(root, [a for a in args if a != "--verbose"])
-            probs = problems(root, slug)
+            with git_state_once():  # the freshness check and the head refresh share one git read
+                probs = problems(root, slug)
+                ev = None if probs else refresh_head(root, slug, load_evidence(root, slug))
             if probs:
                 print("not done: " + "; ".join(probs), file=sys.stderr)
                 return 1
             if _git(root, "status", "--porcelain", "--", *OWN_FILES).strip():  # work outside a commit
                 if pr_wanted(root) or (_dir(root, slug) / "pr").exists():
                     print("not done: commit the work first: pull requests are on, and the pull request must hold "
-                          "exactly the verified code (commit, `herd verify`, then `herd done`)", file=sys.stderr)
+                          "exactly the verified code (commit, then `herd done`)", file=sys.stderr)
                     return 1
                 print("warning: uncommitted work: the evidence names the commit plus uncommitted changes; "
                       "commit on the task branch if the project allows it", file=sys.stderr)
-            ev = load_evidence(root, slug)
             notes = load_notes(root, slug)
             stop = load_stop(root, slug)
             if stop and not stop.get("resolved_at"):  # the record stays; it says the task went on and finished

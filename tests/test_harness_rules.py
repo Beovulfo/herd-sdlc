@@ -868,7 +868,7 @@ class TestStopRecord(Base):
         self.assertEqual(rec["reason"], "done_refused")
         self.assertEqual(rec["problems"], [])
         self.assertTrue(rec["resumable"])
-        self.assertEqual(rec["next"], "commit the work, run `herd verify`, then run `herd done`")  # app.py is uncommitted
+        self.assertEqual(rec["next"], "commit the work, then run `herd done`")  # app.py is uncommitted
         self.assertTrue(self.cli("status").stdout.startswith(f"Stopped {rec['at']}: done_refused. Next: "))
 
     def test_stop_record_on_cancel(self):

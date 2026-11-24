@@ -1,4 +1,5 @@
 """The sixth standard attack, other-reading (0.12.9): each input read in every way a person could read it."""
+import json
 import unittest
 
 from scripts import herd
@@ -19,7 +20,11 @@ class TestOtherReading(Base):
         for a in herd.ATTACKS:
             if a != NAME:
                 herd.add_note(self.root, "t1", "tried", f"{a} attack", attack=a, check=others)
-        herd.add_note(self.root, "t1", "tried", text, attack=NAME, check=check)
+        if check is None and not text.startswith("n/a:"):  # an old note, or one written straight into the log
+            with open(self.root / ".herd/tasks/t1/notes.jsonl", "a") as f:
+                f.write(json.dumps({"at": herd.now(), "kind": "tried", "text": text, "attack": NAME}) + "\n")
+        else:
+            herd.add_note(self.root, "t1", "tried", text, attack=NAME, check=check)
 
     def refused(self, why, **kw):
         self.built()

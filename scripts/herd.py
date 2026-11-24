@@ -72,6 +72,7 @@ import shlex
 import shutil
 import subprocess
 import tempfile
+import time
 import tomllib
 import unicodedata
 from datetime import datetime, timezone
@@ -852,6 +853,34 @@ def run_check(root, check, timeout, full=False):
         return None, f"timeout after {timeout}s"
 
 
+def verify_only(root, slug, only):
+    """Run one criterion or attack check and report it: (passing, lines). Writes nothing under .herd/, so it
+    never changes what the gate reads. Needs the red run, so red first still holds."""
+    task = load_task(root, slug)
+    errs = validate_task(task)
+    if errs:
+        raise ValueError("; ".join(errs))
+    if not (_dir(root, slug) / "red.json").exists():
+        return False, [f"no red run yet: run `herd verify` once first, then `herd verify --only {only}`"]
+    crit = {c["id"]: c for c in task["criteria"]}
+    tried = {n["attack"]: n for n in load_notes(root, slug) if n["kind"] == "tried" and n.get("attack") and n.get("check")}
+    if only in crit:
+        check, timeout = crit[only]["check"], crit[only].get("timeout_s", DEFAULT_TIMEOUT)
+    elif only in tried:  # the latest note of that attack: a later one replaces an earlier one
+        check, timeout = tried[only]["check"], tried[only].get("timeout_s", DEFAULT_TIMEOUT)
+    else:
+        return False, [f"no criterion or attack `{only}`: criteria {', '.join(crit) or 'none'}; "
+                       f"attacks with a command {', '.join(tried) or 'none'}"]
+    if not check.strip():
+        return False, [f"{only} unchecked: it has no command"]
+    began = time.monotonic()
+    code, out = run_check(root, check, timeout, full=True)
+    secs = f"{time.monotonic() - began:.0f} s"
+    if code == 0:
+        return True, [f"{only} passing ({secs})" + (" (ran zero tests)" if ran_zero_tests(out) else "")]
+    return False, [f"{only} failing ({secs})", out[-TAIL_CHARS:].rstrip()]
+
+
 def verify(root, slug):
     task = load_task(root, slug)
     errs = validate_task(task)
@@ -1048,6 +1077,8 @@ def review_state(root, slug, ev, notes):
     if not rv:
         return False, "no review recorded"
     n, green = rv[-1], _state(_dir(root, slug) / "green.json", {})
+    if n.get("over_cap"):
+        return False, "the review limit was reached before this review, so it cannot pass the task: stop and ask the human"
     if not green or notes.index(n) < green.get("notes", len(notes)):
         return False, "the review was recorded before all checks first passed: review the finished change"
     risk = (ev.get("risk") or {}).get("effective", "medium")
@@ -1384,6 +1415,8 @@ def review_hook(root, hook):
              "saw": code is None or all(f in read for f in code) or (diff and not new)}
     # a round, for escalation and the report: after all checks first passed, by a reviewer whose tier would count
     extra["round"] = (_dir(root, slug) / "green.json").exists() and _tier_rule(root, slug, dict(extra, verdict="PASS"))[0]
+    if len(_reviews_since_pass(load_notes(root, slug))) >= MAX_REVIEW_ROUNDS:  # recorded, but it cannot pass or reset
+        extra.update(over_cap=True, round=False)
     add_review(root, slug, by=model or "an unknown model", text=_clip((text or "").strip() or "(no report)", REVIEW_CHARS),
                extra=extra)
 
@@ -1483,6 +1516,34 @@ def _failed_rounds(notes):
     rv = [n for n in notes if n["kind"] == "review" and n.get("round")]
     rv = rv[:-1] if rv and notes and rv[-1] is [n for n in notes if n["kind"] == "review"][-1] else rv
     return len(rv) - next((i + 1 for i in range(len(rv) - 1, -1, -1) if rv[i].get("verdict") == "PASS"), 0)
+
+
+MAX_REVIEW_ROUNDS = 2  # reviewer runs since the last PASS that counts; the next one is refused (issue #45)
+LIMIT_RESET = "review limit"  # a `herd note --decision` starting with these words, from the human, resets the count
+OPEN_FINDING = re.compile(r"^\W*(Blocker|Major)\b", re.I)
+
+
+def _reviews_since_pass(notes):
+    """Reviews the hook recorded since the last PASS that counts as a round, or the last reset decision note."""
+    start = 0
+    for i, n in enumerate(notes):
+        if (n.get("kind") == "review" and n.get("round") and n.get("verdict") == "PASS") or (
+                n.get("kind") == "decision" and str(n.get("text", "")).lower().startswith(LIMIT_RESET)):
+            start = i + 1
+    return [n for n in notes[start:] if n.get("kind") == "review" and n.get("source") == "hook"]
+
+
+def review_limit(notes):
+    """The message once MAX_REVIEW_ROUNDS reviews ran since the last PASS (every run counts, round or not): stop and
+    ask the human, with the open Blocker and Major lines of the last review. None below the limit."""
+    rv = _reviews_since_pass(notes)
+    if len(rv) < MAX_REVIEW_ROUNDS:
+        return None
+    open_ = [x.strip() for x in str(rv[-1].get("text", "")).splitlines() if OPEN_FINDING.match(x)]
+    return (f"review limit reached: {len(rv)} reviews since the last PASS (limit {MAX_REVIEW_ROUNDS}). Run no more "
+            "reviews: stop and ask the human one question. Open Blocker and Major findings from the last review: "
+            + ("; ".join(open_) if open_ else "none listed")
+            + ". The human lifts the limit with `herd note --decision \"Review limit: <what the human said>\"`.")
 
 
 def _seen(n):
@@ -1873,15 +1934,14 @@ NEXT_STEPS = ((re.compile(r"^(.+?) is failing: "), "fix {0}, then run `herd veri
 
 
 def _escalations(root, slug):
-    """Why the agent must ask the human now: criteria that failed ESCALATE_AFTER verifies in a row, and
-    ESCALATE_AFTER review rounds since all checks first passed without a PASS (design B7)."""
+    """Why the agent must ask the human now: criteria that failed ESCALATE_AFTER verifies in a row, and the
+    review limit (MAX_REVIEW_ROUNDS reviews since the last PASS)."""
     try:
         out = [f"{cid} failed {ESCALATE_AFTER} times in a row" for cid in (load_evidence(root, slug) or {}).get("escalate") or []]
-        notes = load_notes(root, slug)
-        failed = _failed_rounds(notes + [{"kind": "review", "source": "hook", "round": True, "verdict": "?"}])
+        limit = review_limit(load_notes(root, slug))
     except STATE_ERRORS:
         return []
-    return out + ([f"{ESCALATE_AFTER} review rounds since all checks passed gave no PASS"] if failed >= ESCALATE_AFTER else [])
+    return out + ([f"review limit reached (limit {MAX_REVIEW_ROUNDS} reviews since the last PASS)"] if limit else [])
 
 
 def next_step(probs):
@@ -2362,7 +2422,9 @@ def problems(root, slug):
         out += ev.get("inputs_left") or []  # structure only: missing, misplaced inside a criterion, or incomplete
     risk = (ev.get("risk") or {}).get("effective")
     ok, why = review_state(root, slug, ev, notes)
-    if review_needed(ev) and not ok:
+    if review_needed(ev) and not ok and review_limit(notes):
+        out.append(review_limit(notes))  # at the limit: stop and ask, never "spawn another reviewer"
+    elif review_needed(ev) and not ok:
         need, _ = review_need(root, slug)
         model = (re.search(r"Spawn herd-reviewer with model ([\w.-]+)", why or "") or [None, need])[1]
         out.append(f"review missing ({why}): risk is {risk}. Spawn the herd-reviewer subagent "
@@ -2442,6 +2504,8 @@ def gate(root, hook):
     causes = _escalations(root, slug)
     if causes:
         _stop(root, slug, "escalated", "; ".join(causes))
+        if any(c.startswith("review limit") for c in causes):  # the agent must ask, not loop: release the stop
+            return None
     esc = [f"{c}: ask the human one question" for c in causes]
     reason = (f"Herd task `{slug}` is not done ({n + 1}/{MAX_BLOCKS} stop attempts blocked). "
               + "; ".join(probs + esc) + f". Run `{cmd}` after fixing. If you are stuck, ask the human one question and stop."
@@ -2482,7 +2546,7 @@ USAGE = {
                     "inputs, the files it must read, the diff command)",
     "detect": "herd detect",
     "lint": "herd lint [--suggest]   (without --suggest: the PostToolUse hook, reads hook JSON on stdin)",
-    "verify": "herd verify [slug] [--verbose]",
+    "verify": "herd verify [slug] [--verbose] [--only <id>]   (--only: run one criterion or attack, write nothing)",
     "status": "herd status [slug] [--json]   (--json: the stop record, or null)",
     "done": "herd done [slug] [--verbose]",
     "cancel": 'herd cancel [slug] [--reason "text"]',
@@ -2590,6 +2654,11 @@ def main(argv):
                 if out:
                     print(json.dumps(out))
         elif cmd == "verify":
+            only, args = _opt(args, "--only")
+            if only is not None:
+                ok, lines = verify_only(root, _slug_arg(root, [a for a in args if a != "--verbose"]), only)
+                print("\n".join(lines))
+                return 0 if ok else 1
             verbose = "--verbose" in args
             ev = verify(root, _slug_arg(root, [a for a in args if a != "--verbose"]))
             s = ev["summary"]
@@ -2610,6 +2679,9 @@ def main(argv):
                       + (" (and more: `herd check` lists them)" if len(w) > 1 else ""))
             for cid in ev.get("escalate") or []:
                 print(f"  {cid} failed {ESCALATE_AFTER} times in a row: ask the human one question (see the run skill)")
+            limit = review_limit(load_notes(root, ev["task"]))
+            if limit:
+                print(f"  {limit}")
             hint = pass_hint(root, ev["task"], ev, load_notes(root, ev["task"]))
             if hint:
                 print(f"  {hint}")
@@ -2651,7 +2723,12 @@ def main(argv):
             add_review(root, _slug_arg(root, []), by=by, text=args[0])
             print(f"review recorded by {by}: a note; at medium and high risk only a review the hook records counts")
         elif cmd == "review-brief":
-            print(review_brief(root, _slug_arg(root, args)), end="")
+            slug = _slug_arg(root, args)
+            limit = review_limit(load_notes(root, slug))
+            if limit:
+                print(limit)
+                return 1
+            print(review_brief(root, slug), end="")
         elif cmd == "review-hook":  # SubagentStop hook: never blocks the session
             try:
                 raw = sys.stdin.read() if not sys.stdin.isatty() else ""

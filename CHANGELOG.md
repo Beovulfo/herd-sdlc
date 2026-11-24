@@ -13,6 +13,25 @@ Faster tests (issue #32). Tests only: nothing under `scripts/`, `hooks/`, `skill
 - **Why not 30 s:** what is left is process starts, not git setup. A test runs `herd verify`, `herd gate` and `herd done` many times; each runs about 5 git commands and each criterion check starts `python3` (about 40 ms here). `test_herd_quality` and `test_herd_review` start 400 to 500 `python3 -c` checks between them. Going lower means changing how Herd calls git or stubbing its checks, which this task excludes (tests only, Herd's behaviour unchanged).
 - **Known limits:** CI runs `unittest discover` in one process, so it does not get the class-level parallelism of `tests/check_suite_speed.py`. The git cache is keyed by file contents, not timestamps, and never caches commands that write.
 
+## 0.12.4
+
+Hard cap on review rounds (issue #45). A session ran 8 review rounds on one task ($7.42). Herd capped Stop-gate blocks (`MAX_BLOCKS`) and failing verifies of one criterion (`ESCALATE_AFTER`), but the only limit on reviews was 3 rounds that counted, so reviews by a low tier or without reading the diff never reached it.
+
+- **Why:** the owner asked for the simplest workflow: a lean tool must stop a review loop in code, not in advice.
+- **Added:** `MAX_REVIEW_ROUNDS = 2`, no setting. Every reviewer run the hook recorded since the last PASS that counts is one, whether or not it counted as a round. At 2, `herd verify` and `herd review-brief` print `review limit reached` with the open Blocker and Major lines of the last review and say to stop and ask the human (`review-brief` prints no brief and exits 1). The hook still records a further review but marks it `over_cap`, so it cannot pass the task or reset the count. The Stop gate releases with the existing `escalated` stop reason.
+- **Added:** a human lifts the limit with `herd note --decision "Review limit: <what the human said>"`. A decision note that starts with `Review limit` resets the count; other decision notes do not.
+- **Changed:** this replaces the old escalation after 3 counting rounds. The run skill says to stop and ask at 2 reviews without a PASS.
+- **Known limits:** the agent can write the reset note itself; Herd does not check who wrote it. The count reads `notes.jsonl`, which a hand edit can change. Only reviews the hook recorded count. A review that fails to record (an error in the hook) is not counted.
+
+## 0.12.3
+
+A full `herd verify` now runs at fixed points, and `herd verify --only <id>` runs one check for the builder in between (issue #39, design `docs/designs/herd-verify-once.md`). In the #32 session a whole-suite criterion ran in 9 of 11 verifies at 4 to 5 minutes each.
+
+- **Why:** `herd verify` runs every criterion and attack and writes the evidence the gate reads, so it is the wrong tool to call after every edit. The owner asked: "Do we need to run it more than once per run?" and asked to keep the workflow simple.
+- **Added:** `herd verify --only <id>` takes a criterion id or an attack name (its latest note), runs that command with its timeout and prints `C1 passing (221 s)` or the failure; exit 0 or 1. It writes nothing under `.herd/` (no `evidence.json`, `evidence.md`, `green.json`, `fails.json`), so the gate and the Stop hook never see it and stale evidence stays stale. An unknown id lists the ids; before the red run it refuses and asks for a full verify, so red first holds. Tests: `TestVerifyOnly`.
+- **Changed:** run skill step 8 said "Run `herd verify` after every change". It now says to run it once the work is done and after each review fix, and to run only the changed tests or `--only <id>` while working. Steps 3 and 10 are unchanged. The skill stays within its 845-word budget (844 words): two short phrases elsewhere were cut for room ("otherwise work in short steps yourself" in step 5, "Code written earlier is flagged" in step 3; the README still documents the flag).
+- **Known limits:** the saving (5 to 11 minutes on #32) is measured on one session log, and the skill text is advice an agent can ignore: that costs time, never correctness. `--only` does not reuse or defer slow checks (dropped in the design). A whole-suite criterion still runs in every full verify.
+
 ## 0.12.2
 
 Reviews now count in headless `claude -p "/herd:run ..."` sessions (issue #40). Before, every review note had `builder_tier` null and `round` false, with the reason "the main session log is not one Herd saw", so the builder reran reviews and tasks took an hour.

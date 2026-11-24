@@ -36,7 +36,11 @@ class ReviewBase(Base):
         ev = herd.verify(self.root, "t1")
         return herd.review_state(self.root, "t1", ev, herd.load_notes(self.root, "t1"))
 
+    lift = False  # a test that records many reviews in one task lifts the review limit before each, as a human would
+
     def review(self, **kw):
+        if self.lift:
+            herd.add_note(self.root, "t1", "decision", "Review limit: the test lifts it")
         return hook_review(self.root, **kw)
 
     def last(self):
@@ -81,6 +85,7 @@ class TestHookOnly(ReviewBase):
 
 class TestTierRule(ReviewBase):
     def test_review_tier_rule(self):
+        self.lift = True
         tiers = ["haiku", "sonnet", "opus"]
         for step in (1, 2):
             self.fresh(f"[review]\nstep = {step}\n")
@@ -122,6 +127,7 @@ class TestTierRule(ReviewBase):
 
 class TestTranscripts(ReviewBase):
     def test_unreadable_model_does_not_count(self):
+        self.lift = True
         self.ready()
         cases = [({"reviewer_path": "missing"}, "the reviewer's model could not be read"),
                  ({"reviewer_lines": []}, "the reviewer's model could not be read"),
@@ -163,6 +169,7 @@ class TestTranscripts(ReviewBase):
 
 class TestVerdict(ReviewBase):
     def test_review_verdict_parsed(self):
+        self.lift = True
         self.ready()
         for text, verdict in (("Nothing found.\nHERD-REVIEW: PASS", "PASS"), ("Major: x.py:3\nHERD-REVIEW: FAIL", "FAIL"),
                               ("No verdict here.", "none"), ("herd-review: pass", "none"), ("HERD-REVIEW: PASS!", "none"),
@@ -182,22 +189,59 @@ class TestVerdict(ReviewBase):
         self.review(builder="haiku", reviewer="sonnet", text="x" * 5000 + "\nHERD-REVIEW: PASS")
         self.assertLessEqual(len(self.last()["text"]), 2000)
 
-    def test_three_failed_reviews_escalate(self):
+    def test_two_reviews_without_a_pass_stop_the_task(self):
+        self.ready()
+        self.review(builder="haiku", reviewer="sonnet", text="Major: a.py:1 off by one\nHERD-REVIEW: FAIL")
+        self.assertEqual(herd._escalations(self.root, "t1"), [])
+        self.review(builder="haiku", reviewer="haiku", text="HERD-REVIEW: FAIL")  # too low a tier: not a round, still a run
+        herd.verify(self.root, "t1")
+        self.assertIn("review limit", " ".join(herd._escalations(self.root, "t1")))
+        self.review(builder="haiku", reviewer="sonnet", text="Blocker: b.py:2 crash\nHERD-REVIEW: PASS")  # over the cap
+        last = self.last()
+        self.assertEqual((last["over_cap"], last["round"]), (True, False))
+        ok, why = self.state()
+        self.assertFalse(ok)
+        self.assertIn("review limit", why)
+        ev = herd.verify(self.root, "t1")
+        self.assertIsNone(herd.gate(self.root, {}))  # releases: the session ends, it does not loop
+        rec = json.loads((self.root / ".herd/tasks/t1/stopped.json").read_text())
+        self.assertEqual((rec["reason"], rec["resumable"]), ("escalated", False))
+        self.assertIn("review limit", rec["next"])
+        msg = herd.review_limit(herd.load_notes(self.root, "t1"))
+        self.assertIn("stop and ask the human", msg)
+        self.assertIn("Blocker: b.py:2 crash", msg)
+        self.assertNotIn("Nit", msg)
+        for cmd in ("review-brief", "verify"):
+            p = self.cli(cmd)
+            self.assertIn("review limit reached", p.stdout, cmd)
+            self.assertIn("stop and ask the human", p.stdout, cmd)
+            self.assertIn("Blocker: b.py:2 crash", p.stdout, cmd)
+        self.assertNotIn("Goal:", self.cli("review-brief").stdout)
+        self.assertEqual(ev["summary"]["failing"], 0)
+        probs = " ".join(herd.problems(self.root, "t1"))  # `herd done` prints these: never "spawn a reviewer" at the limit
+        self.assertIn("review limit reached", probs)
+        self.assertNotIn("Spawn", probs)
+
+    def test_a_pass_that_counts_resets_the_count_and_a_failed_one_does_not(self):
+        self.ready()
+        self.review(builder="haiku", reviewer="sonnet", text="Major: a.py:1\nHERD-REVIEW: FAIL")
+        self.review(builder="haiku", reviewer="sonnet")  # PASS that counts
+        self.review(builder="haiku", reviewer="sonnet", text="Major: a.py:2\nHERD-REVIEW: FAIL")
+        self.assertIsNone(herd.review_limit(herd.load_notes(self.root, "t1")))
+        self.review(builder="haiku", reviewer="haiku")  # a PASS by too low a tier does not reset
+        self.assertIn("review limit", herd.review_limit(herd.load_notes(self.root, "t1")))
+
+    def test_a_decision_note_for_the_review_limit_resets_it(self):
         self.ready()
         for _ in range(2):
             self.review(builder="haiku", reviewer="sonnet", text="Major: a.py:1\nHERD-REVIEW: FAIL")
-        self.review(builder="haiku", reviewer="haiku", text="HERD-REVIEW: FAIL")  # too low a tier: not a round
-        herd.verify(self.root, "t1")
-        self.assertNotIn("review", " ".join(herd._escalations(self.root, "t1")))
-        self.review(builder="haiku", reviewer="sonnet", text="Blocker: b.py:2\nHERD-REVIEW: FAIL")
-        herd.verify(self.root, "t1")
-        out = herd.gate(self.root, {})
-        self.assertIn("3 review rounds since all checks passed gave no PASS: ask the human one question", out["reason"])
-        rec = json.loads((self.root / ".herd/tasks/t1/stopped.json").read_text())
-        self.assertEqual((rec["reason"], rec["resumable"]), ("escalated", False))
-        self.review(builder="haiku", reviewer="sonnet")  # a PASS ends it
-        herd.verify(self.root, "t1")
+        herd.add_note(self.root, "t1", "decision", "chose a plain fix; no reason about reviews")  # not a reset
+        self.assertIsNotNone(herd.review_limit(herd.load_notes(self.root, "t1")))
+        herd.add_note(self.root, "t1", "decision", "Review limit: the human said one more round")
+        self.assertIsNone(herd.review_limit(herd.load_notes(self.root, "t1")))
         self.assertEqual(herd._escalations(self.root, "t1"), [])
+        self.review(builder="haiku", reviewer="sonnet")
+        self.assertTrue(self.state()[0])
 
 
 class TestWiringAndStatus(ReviewBase):
@@ -578,6 +622,67 @@ class TestHeadlessSession(ReviewBase):
         main = transcript(self.root, "haiku", path=self.root / ".herd" / "logs" / "head.jsonl")  # the real hook input
         self.assertEqual(self.pre_tool(main, tool_input={"command": cmd})["hookSpecificOutput"]["permissionDecision"], "deny")
         self.assertEqual(self.sessions(), [str(main)])  # the path in the command is never taken
+
+
+class TestReviewLimitAttacks(Base):
+    """The break-it pass for the review limit, on notes written straight to the log (no hook run)."""
+
+    def rv(self, text="Major: a.py:1\nHERD-REVIEW: FAIL", **kw):
+        herd.add_note(self.root, "t1", "review", text, extra={"source": "hook", "verdict": "FAIL", "round": True} | kw)
+
+    def limit(self):
+        return herd.review_limit(herd.load_notes(self.root, "t1"))
+
+    def test_bad_input_a_hand_edited_log_never_crashes(self):
+        self.start()
+        self.rv()
+        self.rv()
+        with open(self.root / ".herd/tasks/t1/notes.jsonl", "a") as f:
+            f.write(json.dumps({"kind": "decision"}) + "\n" + json.dumps({"kind": "review", "text": None}) + "\n"
+                    + json.dumps({"text": 5}) + "\n")
+        self.assertIn("review limit reached", self.limit())
+        self.assertIn("review limit reached", herd.review_limit([{}, {"kind": "decision", "text": 3}] + herd.load_notes(self.root, "t1")))
+        self.assertIsNone(herd.review_limit([]))
+
+    def test_collision_identical_reviews_each_count(self):
+        self.start()
+        herd.add_note(self.root, "t1", "review", "same", extra={"source": "hook", "verdict": "FAIL", "round": True,
+                                                                "content": "x", "risk": "medium"})
+        self.assertIsNone(self.limit())
+        herd.add_note(self.root, "t1", "review", "same", extra={"source": "hook", "verdict": "FAIL", "round": True,
+                                                                "content": "x", "risk": "medium"})
+        self.assertIn("2 reviews since the last PASS", self.limit())
+
+    def test_one_bad_part_a_hand_written_review_does_not_count(self):
+        self.start()
+        self.rv()
+        herd.add_review(self.root, "t1", by="me", text="looks fine")  # recorded by hand, no source: not a hook review
+        self.assertIsNone(self.limit())
+        self.rv()
+        self.assertIsNotNone(self.limit())
+
+    def test_recount_the_number_in_the_message_is_the_number_of_hook_reviews(self):
+        self.start()
+        for n in range(1, 6):
+            self.rv()
+            notes = herd.load_notes(self.root, "t1")
+            hook = sum(1 for x in notes if x["kind"] == "review" and x.get("source") == "hook")
+            msg = herd.review_limit(notes)
+            self.assertEqual(msg is not None, hook >= 2)
+            if msg:
+                self.assertIn(f"{hook} reviews since the last PASS", msg)
+
+    def test_refusal_no_review_after_the_limit_can_pass_or_reset(self):
+        self.start()
+        self.rv()
+        self.rv()
+        herd.add_note(self.root, "t1", "review", "No Blocker or Major.\nHERD-REVIEW: PASS",
+                      extra={"source": "hook", "verdict": "PASS", "round": False, "over_cap": True})
+        self.assertIn("review limit reached", self.limit())
+        ev = {"risk": {"effective": "medium"}}
+        notes = herd.load_notes(self.root, "t1")
+        self.assertFalse(herd.review_state(self.root, "t1", ev, notes)[0])
+        self.assertIn("review limit", herd.review_state(self.root, "t1", ev, notes)[1])
 
 
 if __name__ == "__main__":

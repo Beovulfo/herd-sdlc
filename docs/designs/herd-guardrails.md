@@ -170,9 +170,9 @@ As built, after a fresh review: the hook counts only a main session log Herd saw
 
 **B5. CLI.** `herd review --skipped` exits with an error saying a review is required at medium and high risk. `herd review --by` stays for low risk and for notes, but it never counts at medium or high (rule 1 above). Old `skipped` notes in existing tasks are still read and reported as "unreviewed".
 
-**B6. Skill.** `skills/run/SKILL.md` step 7 becomes: "Spawn the `herd-reviewer` subagent with a model one tier above yours (`herd status` prints it; on your own model in 0.8.0 and 0.9.0), giving it only the goal, criteria, `test_budget` and the diff. The hook records the review. Fix Blocker and Major findings and review again, at most 3 rounds. There is no skip: if no reviewer can run, say so and stop; Herd records why." `herd status` prints `Review: needs <tier> or higher (builder on <tier>)`.
+**B6. Skill.** `skills/run/SKILL.md` step 7 becomes: "Spawn the `herd-reviewer` subagent with a model one tier above yours (`herd status` prints it; on your own model in 0.8.0 and 0.9.0), giving it only the goal, criteria, `test_budget` and the diff. The hook records the review. Fix Blocker and Major findings and review again, at most 3 rounds (0.12.3: at most 2 reviews). There is no skip: if no reviewer can run, say so and stop; Herd records why." `herd status` prints `Review: needs <tier> or higher (builder on <tier>)`.
 
-**B7. Escalation.** Three hook-recorded reviews with `FAIL` since green adds the task to the existing escalation list with cause `review`, so the gate says to ask the human one question.
+**B7. Escalation.** Since 0.12.3 (issue #45) the limit is `MAX_REVIEW_ROUNDS = 2` hook-recorded reviews of any kind since the last counting PASS, and the gate releases. Before that: three hook-recorded reviews with `FAIL` since green adds the task to the existing escalation list with cause `review`, so the gate says to ask the human one question.
 
 ### Part C: stop record
 

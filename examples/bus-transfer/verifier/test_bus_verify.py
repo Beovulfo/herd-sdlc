@@ -1,6 +1,9 @@
 """Tests for the bus-transfer verifier: the reference solver, two wrong solvers, the generators, the probe."""
+import contextlib
 import functools
+import io
 import json
+import os
 import random
 import subprocess
 import sys
@@ -20,12 +23,20 @@ import bus_verify as bv  # noqa: E402
 import run_leg  # noqa: E402
 
 M = bv.MIN_CHANGE
+FULL = os.environ.get("BUS_FULL") == "1"  # CI sets it: XL networks are too slow for every local check
+LARGE = ("L", "XL") if FULL else ("L",)
+
+# Each generated network is built once per test process (key: family, size, seed). Tests must not change it.
+build_case = bv.make_case
+bv.make_case = functools.lru_cache(maxsize=None)(build_case)
 
 
 def verify(adapter, *extra, project=None):
-    p = subprocess.run([sys.executable, str(HERE / "bus_verify.py"), adapter, str(project or HERE), *extra],
-                       capture_output=True, text=True)
-    return p.returncode, p.stdout, p.stderr
+    """bus_verify's main in this process, so it reuses the cached networks; adapters still run in their own."""
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        rc = bv.main([adapter, str(project or HERE), *extra])
+    return rc, out.getvalue(), err.getvalue()
 
 
 def rows_of(adapter, *extra):
@@ -70,13 +81,8 @@ def rides_as_hops(canon, answer):
     return {**answer, "legs": out}
 
 
-@functools.lru_cache(maxsize=1)
-def _small():
-    return tuple(bv.make_cases(["S", "M"], bv.FAMILIES, 3))
-
-
 def small_cases():
-    return list(_small())
+    return bv.make_cases(["S", "M"], bv.FAMILIES, 3)
 
 
 class TestLayout(unittest.TestCase):
@@ -150,7 +156,7 @@ class TestGenerators(unittest.TestCase):
             self.assertTrue(c["queries"], label)
             self.assertTrue(c["trips"], label)
         for fam in bv.FAMILIES[1:]:
-            self.assertEqual(bv.make_case(fam, "S", 7000), bv.make_case(fam, "S", 7000))
+            self.assertEqual(build_case(fam, "S", 7000), bv.make_case(fam, "S", 7000))
             self.assertNotEqual(bv.make_case(fam, "M", 7000)["trips"], bv.make_case(fam, "M", 7001)["trips"], fam)
 
     def test_oracle_reference_and_plain_search_agree_on_every_query(self):
@@ -185,6 +191,7 @@ class TestGenerators(unittest.TestCase):
                 self.assertEqual(ans.get("arrival"), want, (n, q))
                 bv.validate_answer(c, q, ans, want)
 
+    @unittest.skipUnless(FULL, "XL runs in CI (BUS_FULL=1)")
     def test_the_largest_size_is_big_and_the_oracle_answers_it(self):
         c = bv.make_case("random", "XL", 7000)
         bv.validate_canon(c)
@@ -194,9 +201,8 @@ class TestGenerators(unittest.TestCase):
         self.assertGreater(hops, 200000)
         self.assertTrue(any(bv.oracle_arrival(c, q) is not None for q in c["queries"]))
 
-
     def test_every_family_stays_big_and_useful_at_the_large_sizes(self):
-        for tier in ("L", "XL"):
+        for tier in LARGE:
             stops = bv.TIERS[tier][0]
             for fam in bv.FAMILIES[1:]:
                 c = bv.make_case(fam, tier, 7000)
@@ -311,6 +317,10 @@ class TestProbe(Probe):
 
 
 class TestBadInput(unittest.TestCase):
+    def test_the_command_line_itself_refuses_in_one_line(self):
+        p = subprocess.run([sys.executable, str(HERE / "bus_verify.py"), "nope", str(HERE)], capture_output=True, text=True)
+        self.assertEqual((p.returncode, len(p.stderr.strip().splitlines())), (2, 1), p.stderr)
+
     def test_a_selection_with_no_cases_is_never_a_pass(self):
         rc, out, err = verify("reference", "--tiers", "M", "--families", "hand")
         self.assertEqual(rc, 2, out)

@@ -20,6 +20,8 @@ jobs:
         working-directory: examples/supermarket-route/verifier
       - run: python -m unittest test_bus_verify
         working-directory: examples/bus-transfer/verifier
+        env:
+          BUS_FULL: "1"
   lint:
     runs-on: ubuntu-latest
     steps:

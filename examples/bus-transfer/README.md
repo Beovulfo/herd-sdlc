@@ -68,6 +68,6 @@ python3 examples/bus-transfer/verifier/bus_probe.py RUN=<run>/work:<adapter.py>
 python3 examples/bus-transfer/verifier/bus_verify.py file:<adapter.py> <run>/work --tiers S,M,L,XL --seeds 2
 ```
 
-Report per leg: valid cases (mean and standard deviation across runs, from `CASES valid N of M`), runs with all cases valid, bad inputs handled of 6, cost per run, active minutes and the Herd version. The bar for Herd is 6 of 6 runs with all cases valid. Add `--json FILE` to keep one row per case. Check the verifier itself with `python3 -m unittest discover -s examples/bus-transfer/verifier -p 'test_bus_verify.py'`.
+Report per leg: valid cases (mean and standard deviation across runs, from `CASES valid N of M`), runs with all cases valid, bad inputs handled of 6, cost per run, active minutes and the Herd version. The bar for Herd is 6 of 6 runs with all cases valid. Add `--json FILE` to keep one row per case. Check the verifier itself with `python3 -m unittest discover -s examples/bus-transfer/verifier -p 'test_bus_verify.py'`. It checks sizes S to L; set `BUS_FULL=1`, as CI does, to add XL.
 
 No leg has run yet: this folder holds the task and its verifier. The legs and their numbers are added to a `BENCHMARK.md` here when they run.

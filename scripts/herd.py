@@ -1498,10 +1498,10 @@ def _reviews_since_pass(notes):
     """Reviews the hook recorded since the last PASS that counts as a round, or the last reset decision note."""
     start = 0
     for i, n in enumerate(notes):
-        if (n["kind"] == "review" and n.get("round") and n.get("verdict") == "PASS") or (
-                n["kind"] == "decision" and n["text"].lower().startswith(LIMIT_RESET)):
+        if (n.get("kind") == "review" and n.get("round") and n.get("verdict") == "PASS") or (
+                n.get("kind") == "decision" and str(n.get("text", "")).lower().startswith(LIMIT_RESET)):
             start = i + 1
-    return [n for n in notes[start:] if n["kind"] == "review" and n.get("source") == "hook"]
+    return [n for n in notes[start:] if n.get("kind") == "review" and n.get("source") == "hook"]
 
 
 def review_limit(notes):

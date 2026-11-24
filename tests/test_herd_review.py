@@ -617,3 +617,64 @@ class TestHeadlessSession(ReviewBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestReviewLimitAttacks(Base):
+    """The break-it pass for the review limit, on notes written straight to the log (no hook run)."""
+
+    def rv(self, text="Major: a.py:1\nHERD-REVIEW: FAIL", **kw):
+        herd.add_note(self.root, "t1", "review", text, extra={"source": "hook", "verdict": "FAIL", "round": True} | kw)
+
+    def limit(self):
+        return herd.review_limit(herd.load_notes(self.root, "t1"))
+
+    def test_bad_input_a_hand_edited_log_never_crashes(self):
+        self.start()
+        self.rv()
+        self.rv()
+        with open(self.root / ".herd/tasks/t1/notes.jsonl", "a") as f:
+            f.write(json.dumps({"kind": "decision"}) + "\n" + json.dumps({"kind": "review", "text": None}) + "\n"
+                    + json.dumps({"text": 5}) + "\n")
+        self.assertIn("review limit reached", self.limit())
+        self.assertIn("review limit reached", herd.review_limit([{}, {"kind": "decision", "text": 3}] + herd.load_notes(self.root, "t1")))
+        self.assertIsNone(herd.review_limit([]))
+
+    def test_collision_identical_reviews_each_count(self):
+        self.start()
+        herd.add_note(self.root, "t1", "review", "same", extra={"source": "hook", "verdict": "FAIL", "round": True,
+                                                                "content": "x", "risk": "medium"})
+        self.assertIsNone(self.limit())
+        herd.add_note(self.root, "t1", "review", "same", extra={"source": "hook", "verdict": "FAIL", "round": True,
+                                                                "content": "x", "risk": "medium"})
+        self.assertIn("2 reviews since the last PASS", self.limit())
+
+    def test_one_bad_part_a_hand_written_review_does_not_count(self):
+        self.start()
+        self.rv()
+        herd.add_review(self.root, "t1", by="me", text="looks fine")  # recorded by hand, no source: not a hook review
+        self.assertIsNone(self.limit())
+        self.rv()
+        self.assertIsNotNone(self.limit())
+
+    def test_recount_the_number_in_the_message_is_the_number_of_hook_reviews(self):
+        self.start()
+        for n in range(1, 6):
+            self.rv()
+            notes = herd.load_notes(self.root, "t1")
+            hook = sum(1 for x in notes if x["kind"] == "review" and x.get("source") == "hook")
+            msg = herd.review_limit(notes)
+            self.assertEqual(msg is not None, hook >= 2)
+            if msg:
+                self.assertIn(f"{hook} reviews since the last PASS", msg)
+
+    def test_refusal_no_review_after_the_limit_can_pass_or_reset(self):
+        self.start()
+        self.rv()
+        self.rv()
+        herd.add_note(self.root, "t1", "review", "No Blocker or Major.\nHERD-REVIEW: PASS",
+                      extra={"source": "hook", "verdict": "PASS", "round": False, "over_cap": True})
+        self.assertIn("review limit reached", self.limit())
+        ev = {"risk": {"effective": "medium"}}
+        notes = herd.load_notes(self.root, "t1")
+        self.assertFalse(herd.review_state(self.root, "t1", ev, notes)[0])
+        self.assertIn("review limit", herd.review_state(self.root, "t1", ev, notes)[1])

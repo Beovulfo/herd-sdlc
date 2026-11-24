@@ -3,6 +3,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -720,7 +721,8 @@ class TestPreInitEdits(Base):
         data = raw if raw is not None else json.dumps({
             "hook_event_name": "PreToolUse", "tool_name": "Bash", "cwd": str(self.root),
             "transcript_path": str(log) if log else "", "tool_input": {"command": command}})
-        return run_herd(self.root, "preinit", input=data)
+        return subprocess.run([sys.executable, str(Path(herd.__file__)), "preinit"], cwd=self.root, input=data,
+                              capture_output=True, text=True)  # a real process: the fast path at import is under test
 
     INIT = f'python3 "{Path(herd.__file__)}" init t1 "Add f() to app.py" --request "{REQUEST}"'
 
@@ -798,7 +800,8 @@ class TestPreInitEdits(Base):
         elsewhere.mkdir()
         hook = json.dumps({"cwd": str(elsewhere), "transcript_path": str(self.session_log(sub / "app.py")),
                            "tool_input": {"command": f'cd {self.root} && python3 "{Path(herd.__file__)}" init t1 "g"'}})
-        p = run_herd(elsewhere, "preinit", input=hook)
+        p = subprocess.run([sys.executable, str(Path(herd.__file__)), "preinit"], cwd=elsewhere, input=hook,
+                           capture_output=True, text=True)
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertTrue(herd._preinit_path(self.root, "t1").exists())
 

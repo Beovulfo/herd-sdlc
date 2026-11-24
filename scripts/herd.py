@@ -816,8 +816,8 @@ def _since(root, base, snap):
     else:
         if base not in snap["diffs"]:
             p = subprocess.run(["git", "diff", "-z", "--name-only", "--relative", "--no-renames", base or EMPTY_TREE],
-                               cwd=root, capture_output=True, text=True)
-            snap["diffs"][base] = None if p.returncode else set(p.stdout.split("\0"))  # -z: names are never quoted
+                               cwd=root, capture_output=True)
+            snap["diffs"][base] = None if p.returncode else set(p.stdout.decode(errors="surrogateescape").split("\0"))  # -z: names are never quoted
         if snap["diffs"][base] is None:
             return None
         names = snap["diffs"][base] | {e[4] for e in snap["entries"] if e[0] == "??"}

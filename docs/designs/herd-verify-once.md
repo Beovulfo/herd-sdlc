@@ -15,7 +15,7 @@
 * Criterion: an entry in `task.toml` with an id (`C1`...) and a check. In #32, C4 was the whole suite.
 * Attack: a `tried` note with an `attack` name (from `ATTACKS`) and a `check` command.
 * Gate: `problems()`, behind `herd done` and the Stop hook.
-* Content: `content_id()`, the tree id of the files without `.herd/`; any edit changes it.
+* Content: `content_id()`, a hash of the files that differ from the start commit, without `.herd/` (a tree id before 0.12.5); any edit changes it.
 * Red run: the first verify that runs a check, recorded in `red.json`.
 * Fix round: edits after a failed review, then a verify.
 

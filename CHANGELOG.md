@@ -2,6 +2,15 @@
 
 All notable changes to Herd. Versions follow `.claude-plugin/plugin.json`.
 
+## 0.12.9
+
+A sixth standard attack, `other-reading`. The owner asked for it ("Hey I want to remove the Review and add the attack as proposed by Fable", "let's implement PR1"; this is PR 1 of 2, the review is unchanged) and then asked to add it earlier, when the criteria are written ("Could we add this new attack earlier when the model creates the criteria ?"). A program that serves only the reading of an input its builder chose passes every check the builder wrote.
+
+- **Added:** `other-reading` in `ATTACKS`: each input, generated in every way a person could read the human's words for it by code that calls no project code, is served without the caller choosing or preparing anything. The five existing checks apply to it unchanged. `n/a:` is refused while the task lists any `[[inputs]]` entry. The first-verify question and the late-log warning now cover both `refusal` and `other-reading` (`FIRST_VERIFY_ATTACKS`).
+- **Added:** each `[[inputs]]` entry takes `readings = ["...", "..."]`. `herd check` warns and, at medium and high risk on the standard route, `herd done` refuses an entry with fewer than 2 readings. Only list items are counted, never their wording. The report shows the readings next to the input. Low risk and the quick route are exempt.
+- **Added:** `skills/run/adversarial.md`, `skills/run/SKILL.md`, `skills/criteria/SKILL.md` and the README say six attacks and describe the new one. The attack section of `problems()` moved into `attack_problems()`.
+- **Known limits:** Herd enforces that the command exists, runs project code and passes, and that 2 readings are listed; not that the readings are honest. An agent can write `inputs = []` and then `n/a:`.
+
 ## 0.12.8
 
 The reviewer is capped at Sonnet. The owner asked for it after a workflow review: on the 0.12.1 Haiku benchmark ten reviews gave one real finding and none about lost stores, for 28% of a run's cost, and an Opus review of a Sonnet builder took 1 to 3 minutes a round.

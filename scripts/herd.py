@@ -152,10 +152,16 @@ ATTACKS = {"bad-input": "bad input at every entry point ends in a clear message,
            "recount": "every reported number recomputed from the output with separate code, on the generated and "
                       "collision inputs too",
            "refusal": "every kind of input the program refuses (cannot be reached, not found, invalid) is confirmed "
-                      "refusable by separate, simpler code on generated inputs, so nothing it could serve is refused"}
+                      "refusable by separate, simpler code on generated inputs, so nothing it could serve is refused",
+           "other-reading": "each input, generated in every way a person could read the human's words for it, by code "
+                            "that calls no project code, is served without the caller choosing or preparing anything"}
 REFUSAL_FIRST = ("no refusal attack yet: before building, list what the program will refuse (cannot be reached, "
                  "not found, invalid) and log `herd note --tried --attack refusal --check \"<command>\"` with "
                  "separate code; it should fail now")
+OTHER_READING_FIRST = ("no other-reading attack yet: before building, name at least two readings of the human's words "
+                       "for each input and log `herd note --tried --attack other-reading --check \"<command>\"` with "
+                       "code that calls no project code; it should fail now (`n/a:` only when the task has no inputs)")
+FIRST_VERIFY_ATTACKS = (("refusal", REFUSAL_FIRST), ("other-reading", OTHER_READING_FIRST))
 # at medium and high risk on the standard route `herd done` refuses while one is empty; what to write, for the message
 REQUIRED = {"test_budget": "<what is tested and what is not, at which level>",
             "known_limits": "<when the claim may fail or has not been shown>"}
@@ -559,10 +565,17 @@ def length_warnings(task):
     return out
 
 
+def _readings(x):
+    """The `readings` of one input: its list items, never read for wording (anything but a list counts as none)."""
+    r = x.get("readings")
+    return [str(i).strip() for i in r] if isinstance(r, list) else []
+
+
 def inputs_line(inputs):
     """`Inputs: <as the human described it> -> <as the program receives it>`, for the human to compare."""
     return "Inputs (as you described them -> as the program receives them): " + "; ".join(
-        f"{str(x.get('human', '?')).strip()} -> {str(x.get('program', '?')).strip()}" for x in inputs if isinstance(x, dict))
+        f"{str(x.get('human', '?')).strip()} -> {str(x.get('program', '?')).strip()}"
+        + (f" (readings: {'; '.join(_readings(x))})" if _readings(x) else "") for x in inputs if isinstance(x, dict))
 
 
 INPUTS_TABLE = ('`[[inputs]]`, `human = "<the input as the human described it>"`, `program = "<the input as the '
@@ -585,17 +598,26 @@ def input_warnings(task):
         return out + [f"`inputs` must be a list of tables: write {INPUTS_TABLE}"]
     bad = [i for i, x in enumerate(ins, 1) if not (isinstance(x, dict) and str(x.get("human", "")).strip()
                                                     and str(x.get("program", "")).strip())]
-    return out + [f"inputs #{i}: give `human` (the input as the human described it) and `program` (as the program "
-                  "receives it)" for i in bad]
+    out += [f"inputs #{i}: give `human` (the input as the human described it) and `program` (as the program "
+            "receives it)" for i in bad]
+    return out + [f"inputs #{i}: `readings` needs at least 2 items, the ways a person could read the human's words "
+                  f"for it, such as `readings = [\"<one reading>\", \"<another>\"]`" for i, x in enumerate(ins, 1)
+                  if i - 1 not in [b - 1 for b in bad] and len(_readings(x)) < 2]
 
 
 def refusal_late(root, slug, red):
-    """The refusal attack first logged after the first verify (by note order, not by time): it did not shape the design."""
-    notes = load_notes(root, slug)
-    i = next((i for i, n in enumerate(notes) if n["kind"] == "tried" and n.get("attack") == "refusal"), None)
-    if i is None or not red or not isinstance(red.get("notes"), int) or i < red["notes"]:
+    """The refusal and other-reading attacks first logged after the first verify (by note order, not by time):
+    they did not shape the design."""
+    if not red or not isinstance(red.get("notes"), int):
         return []
-    return ["refusal attack was logged after the first verify, so it did not shape the design: log it before building"]
+    notes = load_notes(root, slug)
+    out = []
+    for name, _ in FIRST_VERIFY_ATTACKS:
+        i = next((i for i, n in enumerate(notes) if n["kind"] == "tried" and n.get("attack") == name), None)
+        if i is not None and i >= red["notes"]:
+            out.append(f"{name} attack was logged after the first verify, so it did not shape the design: "
+                       "log it before building")
+    return out
 
 
 def coverage_warnings(task):
@@ -1110,7 +1132,8 @@ def verify(root, slug):  # noqa: C901
     inputs_left = input_warnings(task)
     warnings = (check_warnings(task, request_text, load_notes(root, slug)) + coverage_warnings(task) + length_warnings(task)
                 + inputs_left
-                + ([REFUSAL_FIRST] if first and not any(a.get("attack") == "refusal" for a in attacks) else [])
+                + [msg for name, msg in FIRST_VERIFY_ATTACKS
+                   if first and not any(a.get("attack") == name for a in attacks)]
                 + refusal_late(root, slug, red))
     fails_path = d / "fails.json"  # consecutive failing verifies per criterion, for the escalation rule
     fails = _state(fails_path, {})
@@ -2530,6 +2553,29 @@ def guard_line(notes):
 
 # ---- gate -----------------------------------------------------------------
 
+def attack_problems(root, slug, ev):
+    """The standard-route attack rules: each attack passing or n/a, and n/a for other-reading only without inputs."""
+    out = []
+    ran = {(a["at"], a["text"], a.get("check")) for a in ev.get("attacks") or []}
+    if any(n["kind"] == "tried" and n.get("attack") and (n["at"], n["text"], n.get("check")) not in ran
+           for n in load_notes(root, slug)):
+        out.append("attack commands were logged after the last verify and have not run: run `herd verify`")
+    best = _attack_states(ev.get("attacks"))
+    why = {"failing": "its command fails", "zero": "its command ran zero tests", "nocheck": "logged without a command",
+           "vacuous": "its command runs no project code"}
+    missing = [a for a in ATTACKS if best.get(a, ("none",))[0] not in ("passing", "na")]
+    if missing:
+        out.append("adversarial pass incomplete (skills/run/adversarial.md): "
+                   + "; ".join(f"{a} ({why.get(best.get(a, ('none',))[0], 'no passing command')}): {ATTACKS[a]}"
+                               for a in missing)
+                   + ". Log each with `herd note --tried --attack <name> --check \"<command>\" \"what it shows\"`,"
+                   " then run `herd verify`")
+    if best.get("other-reading", ("",))[0] == "na" and ev.get("inputs"):
+        out.append("other-reading marked n/a, but the task lists inputs: name two readings of the human's words "
+                   "for each and log `herd note --tried --attack other-reading --check \"<command>\"`")
+    return out
+
+
 def problems(root, slug):  # noqa: C901
     """Reasons the task is not done, from stored evidence. Empty list means done."""
     ev = load_evidence(root, slug)
@@ -2582,20 +2628,7 @@ def problems(root, slug):  # noqa: C901
                    + (f"with model {model}" if model else "one tier above yours")
                    + ", giving it only what `herd review-brief` prints; the review hook records it")
     if ev.get("route") != "quick":
-        ran = {(a["at"], a["text"], a.get("check")) for a in ev.get("attacks") or []}
-        if any(n["kind"] == "tried" and n.get("attack") and (n["at"], n["text"], n.get("check")) not in ran
-               for n in load_notes(root, slug)):
-            out.append("attack commands were logged after the last verify and have not run: run `herd verify`")
-        best = _attack_states(ev.get("attacks"))
-        why = {"failing": "its command fails", "zero": "its command ran zero tests", "nocheck": "logged without a command",
-               "vacuous": "its command runs no project code"}
-        missing = [a for a in ATTACKS if best.get(a, ("none",))[0] not in ("passing", "na")]
-        if missing:
-            out.append("adversarial pass incomplete (skills/run/adversarial.md): "
-                       + "; ".join(f"{a} ({why.get(best.get(a, ('none',))[0], 'no passing command')}): {ATTACKS[a]}"
-                                   for a in missing)
-                       + ". Log each with `herd note --tried --attack <name> --check \"<command>\" \"what it shows\"`,"
-                       " then run `herd verify`")
+        out += attack_problems(root, slug, ev)
     return out
 
 

@@ -2,6 +2,17 @@
 
 All notable changes to Herd. Versions follow `.claude-plugin/plugin.json`.
 
+## 0.12.1
+
+Cuts review rounds without lowering the bar. The 0.12.0 Haiku run cost $1.07, of which $0.39 was four Sonnet review rounds. Round 2 passed but did not count, because its brief, written by the builder, did not name two changed code files (`__init__.py`, `generator.py`) and the reviewer did not read them. That cost a whole extra round. After the passing round the builder kept polishing Nits and rebuilt its heuristic, which led to more rounds.
+
+- **Added:** `herd review-brief` prints the brief the builder passes to `herd-reviewer` as it is, assembled by code: the goal, each criterion with its check command, `test_budget`, `known_limits`, the request word for word, the `inputs` entries, the changed files the reviewer must read, and the diff command. The file list is the same one the review hook counts against (`review_files()`, shared). The diff command is `git diff <the commit herd init recorded>`, which covers committed and uncommitted work. The gate's refusal for a missing review says to give the reviewer only that output.
+- **Added:** once a review that counts is recorded for the current, fresh evidence with no failing check, `herd verify` and `herd status` print one line: `Review passed and counts: fix only Blocker and Major findings, start no new work, commit and run herd done`. The line also says exactly what the rule does with later edits. At medium risk the review keeps counting unless the risk rises to high, though no reviewer sees those edits. At high risk any changed file needs another review, while a commit alone does not.
+- **Changed:** the run skill's review step says to pass what `herd review-brief` prints, and to commit and run `herd done` after a PASS that counts (838 words, down from 841; budget unchanged at 845). The `herd-reviewer` agent is told it gets Herd's brief and must read every listed file and run its diff command before judging.
+- **Fixed:** a new file git does not track yet is in no `git diff`, so a review that printed the diff but did not Read such a file no longer counts. The reason names the files, and the brief lists them as `New files, in no git diff: read each one with Read`. Before this, a reviewer who ran `git diff` with uncommitted new files counted without seeing them.
+- **Unchanged:** the gate already names the changed files a failed review did not read (`the reviewer did not read: a.py, b.py, ...`, up to 20), so a review that missed files is fixed in one round. No new model calls.
+- **Known limits:** the hint only advises; nothing stops the builder working after a PASS. At medium risk, edits after it are not reviewed. The cost effect has not been measured in a new run yet.
+
 ## 0.12.0
 
 Removes the intake reviewer added in 0.11.0 ([`herd-intake-review.md`](docs/designs/herd-intake-review.md), now marked removed). A live Haiku run on 0.11.0 showed it did not catch the flaw it was built for. The Sonnet intake reviewer passed an `inputs` entry whose `program` form took a pre-chosen walkable pick cell for each product. Its only catch, non-verbatim human criteria, the 0.10.0 verbatim block already refuses in code. It also added review rounds and cost.

@@ -22,7 +22,7 @@ Since 0.12.10 an install ships only `plugin/`, not this folder. But the reposito
 - every other run of the same leg, including its log and error files;
 - the network (`WebFetch`, `WebSearch`, and outbound connections from Bash).
 
-It refuses to start if the root is inside your home folder, if the root exists, or if a copy of the hidden verifier or a probe (`verify_general.py`, `robustness_probe.py`, `probe6.py`) sits under `/tmp`, `/private/tmp` or `$TMPDIR` where a run could read it. Each run gets its own empty git repository, git config and plugin copy. The plugin copy is built with `git archive` of the tag's `plugin/` folder (0.12.2 and later), or, for older tags, of the whole tree without `examples/`, `tests/` and `docs/`.
+It refuses to start if the root is inside your home folder, if the root exists, or if a copy of the hidden verifier or a probe (`verify_general.py`, `robustness_probe.py`, `probe6.py`) sits under `/tmp`, `/private/tmp` or `$TMPDIR` where a run could read it. Each run gets its own empty git repository, git config and plugin copy. The plugin copy is built with `git archive` of the tag's `plugin/` folder when the tag has one (0.12.10 and later), or, for older tags, of the whole tree without `examples/`, `tests/` and `docs/`.
 
 ```
 python3 examples/supermarket-route/verifier/run_leg.py --name haiku-herd-v0.12.1 --runs 6 \
@@ -51,4 +51,4 @@ A leg's siblings are denied as they are when it starts, so start a leg only afte
 
 A finding marked `blocked` is an attempt that the sandbox refused, such as `mktemp -d` in the system temp folder or an access to `__pycache__`. It counts as clean. Only a read of the hidden verifier, of another run or of the network voids a run.
 
-So a run's score counts when the audit prints `leak audit: clean`, or when every finding it lists is `blocked`. The audit still exits 1 for blocked findings, so read its lines. Two findings print as `not blocked` and need a look. A `not isolated` finding is different: it shows no read, but the sandbox is not proven to be on, so do not score the run. A `network tool call` finding can be a refused call: check its tool result before you void the run.
+So a run's score counts when the audit prints `leak audit: clean`, or when every finding it lists is `blocked`, or is a refused network call as below. The audit still exits 1 for blocked findings, so read its lines. Two kinds of finding print as `not blocked` and need a look. A `not isolated` finding is different: it shows no read, but the sandbox is not proven to be on, so do not score the run. A `network tool call` finding can be a refused call: check its tool result. A refused call counts as blocked.

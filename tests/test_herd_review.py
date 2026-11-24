@@ -182,22 +182,57 @@ class TestVerdict(ReviewBase):
         self.review(builder="haiku", reviewer="sonnet", text="x" * 5000 + "\nHERD-REVIEW: PASS")
         self.assertLessEqual(len(self.last()["text"]), 2000)
 
-    def test_three_failed_reviews_escalate(self):
+    def test_two_reviews_without_a_pass_stop_the_task(self):
+        self.ready()
+        self.review(builder="haiku", reviewer="sonnet", text="Major: a.py:1 off by one\nHERD-REVIEW: FAIL")
+        self.assertEqual(herd._escalations(self.root, "t1"), [])
+        self.review(builder="haiku", reviewer="haiku", text="HERD-REVIEW: FAIL")  # too low a tier: not a round, still a run
+        herd.verify(self.root, "t1")
+        self.assertIn("review limit", " ".join(herd._escalations(self.root, "t1")))
+        self.review(builder="haiku", reviewer="sonnet", text="Blocker: b.py:2 crash\nHERD-REVIEW: PASS")  # over the cap
+        last = self.last()
+        self.assertEqual((last["over_cap"], last["round"]), (True, False))
+        ok, why = self.state()
+        self.assertFalse(ok)
+        self.assertIn("review limit", why)
+        ev = herd.verify(self.root, "t1")
+        out = herd.gate(self.root, {})
+        self.assertIn("review limit", out["reason"])
+        rec = json.loads((self.root / ".herd/tasks/t1/stopped.json").read_text())
+        self.assertEqual((rec["reason"], rec["resumable"]), ("escalated", False))
+        self.assertIn("review limit", rec["next"])
+        msg = herd.review_limit(herd.load_notes(self.root, "t1"))
+        self.assertIn("stop and ask the human", msg)
+        self.assertIn("Blocker: b.py:2 crash", msg)
+        self.assertNotIn("Nit", msg)
+        for cmd in ("review-brief", "verify"):
+            p = self.cli(cmd)
+            self.assertIn("review limit reached", p.stdout, cmd)
+            self.assertIn("stop and ask the human", p.stdout, cmd)
+            self.assertIn("Blocker: b.py:2 crash", p.stdout, cmd)
+        self.assertNotIn("Goal:", self.cli("review-brief").stdout)
+        self.assertEqual(ev["summary"]["failing"], 0)
+
+    def test_a_pass_that_counts_resets_the_count_and_a_failed_one_does_not(self):
+        self.ready()
+        self.review(builder="haiku", reviewer="sonnet", text="Major: a.py:1\nHERD-REVIEW: FAIL")
+        self.review(builder="haiku", reviewer="sonnet")  # PASS that counts
+        self.review(builder="haiku", reviewer="sonnet", text="Major: a.py:2\nHERD-REVIEW: FAIL")
+        self.assertIsNone(herd.review_limit(herd.load_notes(self.root, "t1")))
+        self.review(builder="haiku", reviewer="haiku")  # a PASS by too low a tier does not reset
+        self.assertIn("review limit", herd.review_limit(herd.load_notes(self.root, "t1")))
+
+    def test_a_decision_note_for_the_review_limit_resets_it(self):
         self.ready()
         for _ in range(2):
             self.review(builder="haiku", reviewer="sonnet", text="Major: a.py:1\nHERD-REVIEW: FAIL")
-        self.review(builder="haiku", reviewer="haiku", text="HERD-REVIEW: FAIL")  # too low a tier: not a round
-        herd.verify(self.root, "t1")
-        self.assertNotIn("review", " ".join(herd._escalations(self.root, "t1")))
-        self.review(builder="haiku", reviewer="sonnet", text="Blocker: b.py:2\nHERD-REVIEW: FAIL")
-        herd.verify(self.root, "t1")
-        out = herd.gate(self.root, {})
-        self.assertIn("3 review rounds since all checks passed gave no PASS: ask the human one question", out["reason"])
-        rec = json.loads((self.root / ".herd/tasks/t1/stopped.json").read_text())
-        self.assertEqual((rec["reason"], rec["resumable"]), ("escalated", False))
-        self.review(builder="haiku", reviewer="sonnet")  # a PASS ends it
-        herd.verify(self.root, "t1")
+        herd.add_note(self.root, "t1", "decision", "chose a plain fix; no reason about reviews")  # not a reset
+        self.assertIsNotNone(herd.review_limit(herd.load_notes(self.root, "t1")))
+        herd.add_note(self.root, "t1", "decision", "Review limit: the human said one more round")
+        self.assertIsNone(herd.review_limit(herd.load_notes(self.root, "t1")))
         self.assertEqual(herd._escalations(self.root, "t1"), [])
+        self.review(builder="haiku", reviewer="sonnet")
+        self.assertTrue(self.state()[0])
 
 
 class TestWiringAndStatus(ReviewBase):

@@ -1,0 +1,49 @@
+goal = "Build a supermarket route optimizer that plans the delivery guy's basket-preparation route from a store map and a customer shopping list, simulates it step by step, reports time-to-prepare-basket and distance-covered live, and beats the list-order route by more than 30% time."
+
+test_budget = "Tested: Python library + CLI on generated store layouts (grid aisles, islands, random walls, mazes, multi-zone), a fixed benchmark store, a 400x400 scale store, and simulation output. Not tested: real supermarket floor plans, real travel times (time is modeled as walking steps plus a fixed per-pick cost), concurrent multi-customer batching, shelf-height or heavy-item rules."
+
+known_limits = "The 30% saving depends on how far list order is from optimal: it may fail on store layouts where products are already listed in near-optimal order, or on baskets of 1-2 items. Time is a model (steps at unit speed plus pick cost), not measured walking time."
+
+[[inputs]]
+human = "the MAP of the supermarket with all the products localised in the map with the product ID and the short-name"
+program = "a JSON file: {grid: list of strings where '#' is blocked and '.' is walkable, entrance: [row,col], exit: [row,col] (optional), products: [{id, short_name, cell: [row,col]}]}"
+
+[[inputs]]
+human = "the list of products (id:short name) requested by a customer"
+program = "a JSON list of {id, short_name} objects, or a CLI argument 'ID:short_name,ID:short_name'; the optimizer looks up each product by id, and rejects an id not on the map"
+
+[[criteria]]
+id = "C1"
+text = "our optimization algorithm successfully saves more than 30% of time for the basket to be ready"
+source = "human"
+coverage = "Proves time saving > 30% on a fixed benchmark store and a set of 30 generated baskets; does not prove the saving on real store maps or on tiny baskets."
+check = "python3 -m unittest tests.test_benchmark_saving"
+timeout_s = 120
+
+[[criteria]]
+id = "C2"
+text = "works inside any supermarket, even very big ones, whatever its layout"
+source = "human"
+coverage = "Proves valid complete routes (every requested product visited, every step on walkable cells) on 200 randomly generated layouts of varied shape and size, including mazes and islands; 'very big' is covered by C3 (400x400 timed); does not prove real store floor plans."
+check = "python3 -m unittest tests.test_layouts"
+timeout_s = 120
+
+[[criteria]]
+id = "C3"
+text = "Given a 400x400-cell store with 300 products and a 40-item list, when the route is planned, then planning finishes within 10 seconds"
+source = "agent-proposed"
+check = "python3 -m unittest tests.test_scale"
+timeout_s = 60
+
+[[criteria]]
+id = "C4"
+text = "we can simulate step by step the route of the delivery guy, measuring in real time the KPIs"
+source = "human"
+coverage = "Proves each simulation step reports time-to-prepare-basket and distance-covered, both non-decreasing, with final values equal to route totals; does not prove a live UI refresh rate."
+check = "python3 -m unittest tests.test_simulation"
+
+[[criteria]]
+id = "C5"
+text = "Given a customer list containing an id not on the map, when the optimizer runs, then it exits non-zero with an error naming the id; given an empty list, then it exits 0 with zero time and zero distance"
+source = "agent-proposed"
+check = "python3 -m unittest tests.test_edge_cases"

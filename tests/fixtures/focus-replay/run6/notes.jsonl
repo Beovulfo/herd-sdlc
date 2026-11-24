@@ -1,0 +1,12 @@
+{"at": "2026-11-24T12:15:06Z", "kind": "found", "text": "Basket duplicates are silently dropped by unique_ids, so a customer asking for 2 milks is counted once", "elapsed_s": 257}
+{"at": "2026-11-24T12:15:06Z", "kind": "found", "text": "CLI prints a Python traceback for missing, malformed or wrong-type input files", "elapsed_s": 257}
+{"at": "2026-11-24T12:15:06Z", "kind": "found", "text": "One map entry on a blocked cell or with a missing field rejects the whole store", "elapsed_s": 257}
+{"at": "2026-11-24T12:18:25Z", "kind": "fixed", "text": "Duplicate requests are now kept and picked twice; duplicate map ids are refused where requested", "elapsed_s": 456}
+{"at": "2026-11-24T12:18:25Z", "kind": "fixed", "text": "CLI now prints one error line and exits 1 for missing, malformed or wrong-type input", "elapsed_s": 456}
+{"at": "2026-11-24T12:18:26Z", "kind": "fixed", "text": "Bad map entries are recorded as broken with a reason; only requested broken entries are refused", "elapsed_s": 457}
+{"at": "2026-11-24T12:18:26Z", "kind": "tried", "text": "missing, empty, malformed, wrong-type, unknown and unreadable store and order files; CLI must exit non-zero with one error line", "elapsed_s": 457, "attack": "bad-input", "check": "python3 -m unittest tests.test_bad_input"}
+{"at": "2026-11-24T12:18:26Z", "kind": "tried", "text": "two products on one cell, same short name, duplicate request, duplicate map id", "elapsed_s": 457, "attack": "collision", "check": "python3 -m unittest tests.test_collision"}
+{"at": "2026-11-24T12:18:27Z", "kind": "tried", "text": "blocked, malformed and duplicate map entries not requested do not reject the map; requested ones fail with their id", "elapsed_s": 458, "attack": "one-bad-part", "check": "python3 -m unittest tests.test_one_bad_part"}
+{"at": "2026-11-24T12:18:27Z", "kind": "tried", "text": "distance, time, picks, saving % recounted from the --steps trace and a plain BFS on 12 generated stores and a collision store", "elapsed_s": 458, "attack": "recount", "check": "python3 -m unittest tests.test_recount"}
+{"at": "2026-11-24T12:18:27Z", "kind": "tried", "text": "every product on every open cell of 16 generated stores: refused exactly when a plain flood fill says unreachable", "elapsed_s": 458, "attack": "refusal", "check": "python3 -m unittest tests.test_refusal"}
+{"at": "2026-11-24T12:18:28Z", "kind": "open", "text": "Refusal attack was written after the build, not before the first verify, so it never failed first", "elapsed_s": 459}

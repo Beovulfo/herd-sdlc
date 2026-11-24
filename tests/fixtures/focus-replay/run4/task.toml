@@ -1,0 +1,57 @@
+goal = "Build a supermarket picking-route optimizer with step-by-step simulation, KPIs time-to-prepare-basket and distance-covered, compared against list-order route; optimized must save more than 30% time"
+
+test_budget = "Unit and integration tests on generated supermarket maps (open halls, maze-like aisles, islands, long single aisle, random shelves) with seeded baskets. Scale check on one 300x300 map with 40 items. Not tested: real store floor plans, multiple pickers, shelf-restock time, checkout queues, or walking speed of real people."
+
+known_limits = "The 30% saving is measured on the generated benchmark suite (tests/gen.py, seeds 0-199). Baskets already listed in near-optimal order save little, so the saving can fall below 30% for a single basket or a map with a short aisle. The check reports the aggregate saving; per-basket figures are printed, not asserted. Time is modelled (1 cell per second walking, fixed pick time), not measured on people."
+
+[[inputs]]
+human = "the supermarket MAP with every product localised by product ID and short name"
+program = "JSON file: {\"grid\": [rows of chars: '#' wall, '.' aisle, '@' entrance, '$' checkout, any other char is a shelf], \"products\": {\"<id>\": {\"name\": \"<short name>\", \"shelf\": [row, col]}}}; a product is picked from any aisle cell next to its shelf cell"
+
+[[inputs]]
+human = "the list of products (id:short name) requested by a customer"
+program = "JSON file: a list of {\"id\": \"<product id>\", \"name\": \"<short name>\"} in customer order; the name is informational, the id is looked up in the MAP"
+
+[[inputs]]
+human = "an empty basket, or a product ID not on the MAP"
+program = "empty list: route is entrance to checkout; unknown id: the CLI exits with status 2 and an error naming the id"
+
+[[criteria]]
+id = "C1"
+text = "works inside any supermarket, even very big ones, whatever its layout"
+source = "human"
+coverage = "Proves valid routes on 60 generated maps of 6 layout kinds up to 40x40. Scale: largest size tried is one 300x300 map with 40 items, under 60 s. Misses real store maps and random shapes (see C6)."
+check = "python3 -m unittest tests.test_layouts"
+timeout_s = 300
+
+[[criteria]]
+id = "C2"
+text = "saves more than 30% of time for the basket to be ready"
+source = "human"
+coverage = "Proves the aggregate time saving of the optimized route over list-order is above 30% across 200 seeded maps and baskets. Per-basket and per-map figures are printed, not asserted. Does not prove 30% on any specific real store."
+check = "python3 -m unittest tests.test_savings"
+timeout_s = 300
+
+[[criteria]]
+id = "C3"
+text = "Given a basket and a map, when the route is simulated step by step, then time-to-prepare-basket and distance-covered update every step and end equal to the planner's totals"
+source = "agent-proposed"
+check = "python3 -m unittest tests.test_simulator"
+
+[[criteria]]
+id = "C4"
+text = "Given an empty basket, when the route is planned, then it goes entrance to checkout with distance equal to the shortest path; given an unknown product ID, when the CLI runs, then it exits with status 2"
+source = "agent-proposed"
+check = "python3 -m unittest tests.test_edges"
+
+[[criteria]]
+id = "C5"
+text = "Given a MAP and basket, when compare runs, then it prints JSON with list-order and optimized time-to-prepare-basket and distance-covered and the saving percentage"
+source = "agent-proposed"
+check = "python3 -m unittest tests.test_cli"
+
+[[criteria]]
+id = "C6"
+text = "Given purely random maps and baskets with unknown IDs or bad shelf positions, when the route is planned, then it is served with a valid route or refused with ValueError, as a separate BFS oracle says"
+source = "agent-proposed"
+check = "python3 -m unittest tests.test_fuzz"

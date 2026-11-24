@@ -1305,6 +1305,67 @@ def pass_hint(root, slug, ev, notes):
             f"`herd done`; {later}")
 
 
+FOCUS_MAX = 30  # items besides decision notes (design G3)
+LIST_MARK = re.compile(r"\s*(?:[-*]|\d+[.)])\s+")  # a list marker starts a known_limits line
+
+
+def _qhash(text):
+    return hashlib.sha256(str(text).strip().encode("utf-8", "replace")).hexdigest()[:12]
+
+
+def _focus_all(task, notes, files=()):
+    """Every focus item before the cap (design F1). Only fields and structure are read, never what a text says."""
+    where = ("the changed code files: " + ", ".join(files)) if files else "the changed code files"
+    items = []
+
+    def add(id_, quote, attack_with):
+        items.append({"id": id_, "cat": id_[0], "quote": str(quote), "qhash": _qhash(quote), "attack_with": attack_with})
+    for c in task.get("criteria") or []:  # A: the coverage of each human criterion, against its claim
+        if isinstance(c, dict) and c.get("source") == "human" and str(c.get("coverage") or "").strip():
+            check = str(c.get("check") or "").strip()
+            add(f"A:{c.get('id', '?')}", str(c["coverage"]).strip(),
+                (f"its check `{check}`" if check else "no check") + f"; the claim to attack: {c.get('text', '')}")
+    if str(task.get("test_budget") or "").strip():  # B
+        add("B:budget", str(task["test_budget"]).strip(), where)
+    limits = task.get("known_limits")
+    for k, line in enumerate([LIST_MARK.sub("", x, count=1).strip() for x in limits.splitlines()
+                              if x.strip()] if isinstance(limits, str) else [], 1):
+        add(f"B:limit-{k}", line, where)
+    for n, x in enumerate(notes):
+        if x.get("kind") in ("open", "decision"):
+            add(f"B:note-{n}", x.get("text", ""), where)
+    latest = {x["attack"]: x for x in notes if x.get("kind") == "tried" and x.get("attack") in ATTACKS}
+    for a in ATTACKS:  # C: the latest tried note of each attack
+        if a in latest:
+            add(f"C:{a}", latest[a].get("text", ""), f"its check `{latest[a]['check']}`" if latest[a].get("check")
+                else str(latest[a].get("text", "")))
+    for k, x in enumerate(task.get("inputs") or [], 1):  # D: each inputs entry, against the request
+        if isinstance(x, dict):
+            add(f"D:{k}", inputs_line([x]).partition("): ")[2],
+                f"{where}; build the input from the `human` words and the request, not from the `program` form, "
+                "and run the program on it")
+    return items
+
+
+def _is_decision(item, notes):
+    return item["id"].startswith("B:note-") and notes[int(item["id"][7:])].get("kind") == "decision"
+
+
+def focus_items(task, notes, files=()):
+    """The focus list: one item {id, cat, quote, qhash, attack_with} per entry of four categories, with ids that
+    never change when entries are added (design F1). At most FOCUS_MAX items besides decision notes: only `open`
+    notes are cut, oldest first (G3). `files` are the changed code files, named in the items that need them."""
+    items = _focus_all(task, notes, files)
+    over = len([i for i in items if not _is_decision(i, notes)]) - FOCUS_MAX
+    cut = {i["id"] for i in [i for i in items if i["id"].startswith("B:note-") and not _is_decision(i, notes)][:max(over, 0)]}
+    return [i for i in items if i["id"] not in cut]
+
+
+def focus_cut(task, notes):
+    """How many `open` notes the cap left out of the focus list."""
+    return len(_focus_all(task, notes)) - len(focus_items(task, notes))
+
+
 def review_brief(root, slug):
     """The reviewer's brief, assembled from Herd's records, for the builder to pass to herd-reviewer as it is: the
     goal, the criteria with their checks, test_budget, known_limits, the request verbatim, the inputs, the files the

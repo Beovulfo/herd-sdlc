@@ -1,0 +1,56 @@
+goal = "Build a supermarket route optimizer that plans the delivery guy route and reports time-to-prepare-basket and distance-covered KPIs, showing at least 30 percent time saving vs list-order route"
+
+test_budget = "Unit tests on generated supermarket layouts (4 shapes, sizes 5 to 80, one 300x300 scale case), a hand-made spiral store, the example store, and a 60-scenario synthetic benchmark. Not tested: real supermarket maps, real pick times, real walking speeds, carts, aisle congestion, multiple delivery guys."
+
+known_limits = "The 30 percent saving depends on the customer list order and the store layout: a list already in a good order saves little (the benchmark minimum is 12 percent). Optimal only for up to 10 items (Held-Karp); larger lists use a local-search heuristic. Each product has one access cell (first reachable open side). Time model is fixed walk speed plus fixed pick time per item. Benchmark savings come from synthetic stores, not measured stores."
+
+[[inputs]]
+human = "the supermarket MAP with all products localised by product ID and short name"
+program = "JSON map: layout rows ('#' wall, 'F' shelf, '.' aisle, 'S' start, 'C' checkout) plus products with id, short_name, x, y"
+
+[[inputs]]
+human = "the list of products (id:short name) requested by a customer"
+program = "text file, one id:short name per line or comma-separated; unknown ids are an error"
+
+[[criteria]]
+id = "C1"
+text = "works inside any supermarket, even very big ones, whatever its layout"
+source = "human"
+coverage = "Proves valid complete routes on seeded random aisle, island, wall and room layouts (sizes 5 to 80), a spiral store, and a seeded 300x300 store with 60 items under 60 s. Lists up to 30 items use the heuristic. Misses real store plans."
+check = "python3 -m unittest tests.test_layouts"
+timeout_s = 240
+
+[[criteria]]
+id = "C2"
+text = "find the best route for the delivery guy that is preparing the basket and shipping the shopping list to the customer"
+source = "human"
+coverage = "Proves the route equals brute-force optimum for up to 6 items and never exceeds list order for up to 150 items. Misses optimality above 10 items, where the solver is a heuristic."
+check = "python3 -m unittest tests.test_solver tests.test_layout"
+
+[[criteria]]
+id = "C3"
+text = "simulate step by step the route of the delivery guy, measuring in real time the KPIs: time-to-prepare-basket and distance-covered"
+source = "human"
+coverage = "Proves per-step events are adjacent open cells, time and distance are monotone, every product is picked once, and final KPIs match the plan. Real-time pacing is only checked by the --realtime flag, not by a test."
+check = "python3 -m unittest tests.test_simulate"
+
+[[criteria]]
+id = "C4"
+text = "compare it with the list-order route (not optimized)"
+source = "human"
+coverage = "Proves the CLI prints both KPI sets and the saving percentage, and the optimized distance is never above list order on the example store. Misses other stores."
+check = "python3 -m unittest tests.test_cli"
+
+[[criteria]]
+id = "C5"
+text = "so we can demonstrate that our optimization algorithm successfully saves more than 30% of time for the basket to be ready"
+source = "human"
+coverage = "Proves the median time saving over 60 synthetic stores is above 30 percent. Does not prove 30 percent on any real store, and 11 of 60 scenarios are at or below 30 percent."
+check = "python3 -m route_optimizer bench --scenarios 60 --seed 1 --require-median-saving 30"
+timeout_s = 300
+
+[[criteria]]
+id = "A6"
+text = "Given a customer list with an unknown product id, when compare runs, then it exits 2 with a message and prints no KPIs"
+source = "agent-proposed"
+check = "python3 -m unittest tests.test_cli.CompareCliTest.test_unknown_product_exits_2_with_message"

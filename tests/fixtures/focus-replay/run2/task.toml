@@ -1,0 +1,61 @@
+goal = "Supermarket delivery route optimizer: plan a picking route over a store map for a shopping list, simulate it step by step, report time-to-prepare-basket and distance-covered KPIs, and beat the list-order route by more than 30% time"
+
+# Map format (JSON): {"grid": ["#...", ...], "entrance": [r,c], "exit": [r,c],
+#   "products": {"P1": {"name": "milk", "cell": [r,c]}}}
+# '#' = blocked (wall, shelf), '.' = walkable. A product on a blocked cell is picked from an adjacent walkable cell.
+# Shopping list: strings "id:short name". Distances: 4-connected steps, cell_m = 1.0 m.
+# Time model: walking at 1.2 m/s, pick_s = 3 s per product (assumptions, shared by both routes).
+
+test_budget = "Unit tests on hand-made maps and generated layouts (open halls, aisles, islands, mazes, random blocks) at small and big scale; optimality vs brute force for up to 6 products; KPI benchmark on 40 seeded scenarios. Not tested: real store floor plans, real walking speeds, pick times measured on site, multi-floor stores, queues or concurrent pickers."
+
+known_limits = "The 30% saving is measured on seeded synthetic stores and lists under the stated time model; it may fail for real layouts, short lists, or when pick time dominates walking time. The optimized route is exact for up to 12 products and a 2-opt heuristic above that, so it is not guaranteed optimal for large lists."
+
+[[inputs]]
+human = "the MAP of the supermarket with all the products localised with product ID and short name, and the list of products (id:short name) requested by a customer"
+program = "JSON map file (grid, entrance, exit, products with id, name, cell) plus a list of 'id:short name' strings"
+
+[[inputs]]
+human = "a product ID that is not on the map"
+program = "a list entry whose id is missing from the map's products"
+
+[[inputs]]
+human = "an empty shopping list"
+program = "an empty list of entries"
+
+[[criteria]]
+id = "C1"
+text = "build a route optimizer that works inside any supermarket, even very big ones, whatever its layout"
+source = "human"
+coverage = "Proves planning succeeds and returns walkable routes on many generated layouts (several shapes, seeds). Scale: largest size tried is a 500x500 store, time limit 120 s. Misses real floor plans and stores above 500x500."
+check = "python3 -m unittest tests.test_layouts tests.test_scale"
+timeout_s = 300
+
+[[criteria]]
+id = "C2"
+text = "find the best route for the delivery guy that is preparing the basket and shipping the shopping list to the customer"
+source = "agent-proposed"
+check = "python3 -m unittest tests.test_optimality"
+timeout_s = 120
+
+[[criteria]]
+id = "C3"
+text = "we can simulate step by step the route of the delivery guy, measuring in real time the KPIs: time-to-prepare-basket and distance-covered"
+source = "human"
+coverage = "Proves step events are ordered, KPIs grow monotonically, and the final KPIs equal the planned route totals; also runs the CLI simulate command. Does not prove wall-clock pacing accuracy."
+check = "python3 -m unittest tests.test_simulator"
+timeout_s = 120
+
+[[criteria]]
+id = "C4"
+text = "compare it with the list-order route (not optimized) so we can demonstrate that our optimization algorithm successfully saves more than 30% of time for the basket to be ready"
+source = "human"
+coverage = "Proves that on 40 seeded synthetic stores and lists the mean time-to-prepare saving is above 30% and the optimized route is never longer than list order. Does not prove the saving on real stores."
+check = "python3 -m route_optimizer.benchmark --min-saving 0.30"
+timeout_s = 300
+
+[[criteria]]
+id = "C5"
+text = "Given an unknown product ID or an empty list, when planning, then an unknown ID exits non-zero naming the ID, and an empty list gives no picks and only the walk from entrance to exit"
+source = "agent-proposed"
+check = "python3 -m unittest tests.test_edges"
+timeout_s = 120

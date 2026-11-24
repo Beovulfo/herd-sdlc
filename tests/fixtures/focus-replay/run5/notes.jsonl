@@ -1,0 +1,15 @@
+{"at": "2026-11-24T12:16:58Z", "kind": "found", "text": "padded-grid index bug: Routing._cell_of used the store width without the wall border; simulate raised AttributeError", "elapsed_s": 369}
+{"at": "2026-11-24T12:16:59Z", "kind": "found", "text": "random generator put the exit in a region the entrance cannot reach; planner refused valid generated stores", "elapsed_s": 370}
+{"at": "2026-11-24T12:16:59Z", "kind": "found", "text": "refusal mismatch: a shelf with two walkable sides was refused when only the first side was checked; a servable product was refused", "elapsed_s": 370}
+{"at": "2026-11-24T12:16:59Z", "kind": "fixed", "text": "planner now picks the first access cell the entrance can reach; exit and entrance checks precede planning", "elapsed_s": 370}
+{"at": "2026-11-24T12:16:59Z", "kind": "fixed", "text": "test fixtures: one-bad-part sealed shelf and exit reachability; layouts degenerate off-grid cell", "elapsed_s": 370}
+{"at": "2026-11-24T12:17:00Z", "kind": "open", "text": "time is a model: unit steps plus PICK_STEPS=2 per item, not measured walking time", "elapsed_s": 371}
+{"at": "2026-11-24T12:17:00Z", "kind": "open", "text": "no real supermarket floor plans tested; layouts are generated", "elapsed_s": 371}
+{"at": "2026-11-24T12:17:00Z", "kind": "decision", "text": "optimizer is nearest-neighbour then 2-opt on an open path; list order is kept if it is faster; why: exact TSP is too slow at 40 items; override: swap plan_routes in routeopt/planner.py", "elapsed_s": 371}
+{"at": "2026-11-24T12:17:00Z", "kind": "decision", "text": "time-to-prepare-basket runs until the exit; the exit defaults to the entrance; why: the request asks for time for the basket to be ready, i.e. shipping; override: set exit in the store map", "elapsed_s": 371}
+{"at": "2026-11-24T12:17:14Z", "kind": "open", "text": "per-basket saving on the benchmark ranges 23.7% to 63.3%; the 30% claim is tested as aggregate over 30 baskets (44.6%), not per basket", "elapsed_s": 385}
+{"at": "2026-11-24T12:17:14Z", "kind": "tried", "text": "every store, basket-text and basket-file entry point refuses with exit 2 and one message", "elapsed_s": 385, "attack": "bad-input", "check": "python3 -m unittest tests.test_bad_input"}
+{"at": "2026-11-24T12:17:15Z", "kind": "tried", "text": "duplicate basket items, shared cells, same short names, duplicate map ids", "elapsed_s": 386, "attack": "collision", "check": "python3 -m unittest tests.test_collision"}
+{"at": "2026-11-24T12:17:15Z", "kind": "tried", "text": "unrequested broken map entries ignored; requested broken entries fail naming the id", "elapsed_s": 386, "attack": "one-bad-part", "check": "python3 -m unittest tests.test_one_bad_part"}
+{"at": "2026-11-24T12:17:15Z", "kind": "tried", "text": "distance, time and picks recomputed from the trace on generated and collision inputs", "elapsed_s": 386, "attack": "recount", "check": "python3 -m unittest tests.test_recount"}
+{"at": "2026-11-24T12:17:15Z", "kind": "tried", "text": "planner refusals equal a plain flood-fill oracle on 40 layouts with injected bad ids", "elapsed_s": 386, "attack": "refusal", "check": "python3 -m unittest tests.test_refusal"}

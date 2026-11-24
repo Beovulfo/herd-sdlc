@@ -1,0 +1,20 @@
+{"at": "2026-11-24T12:16:55Z", "kind": "tried", "text": "bad map files (missing, empty, malformed, wrong types, ragged, no S, bad product fields), bad list file, bad flags: clean error, exit non-zero", "elapsed_s": 366, "attack": "bad-input", "check": "python3 -m unittest tests.test_attacks.BadInput"}
+{"at": "2026-11-24T12:16:55Z", "kind": "tried", "text": "same product twice, two items on one cell, duplicate list items: each still counted", "elapsed_s": 366, "attack": "collision", "check": "python3 -m unittest tests.test_attacks.Collision"}
+{"at": "2026-11-24T12:16:55Z", "kind": "tried", "text": "sealed-pocket product not requested does not block; requested one fails with its id in the message", "elapsed_s": 366, "attack": "one-bad-part", "check": "python3 -m unittest tests.test_attacks.OnePartBad"}
+{"at": "2026-11-24T12:16:56Z", "kind": "tried", "text": "distance and time rebuilt from the step trace with separate code, on example, generated and duplicate-item inputs", "elapsed_s": 367, "attack": "recount", "check": "python3 -m unittest tests.test_attacks.Recount"}
+{"at": "2026-11-24T12:16:56Z", "kind": "tried", "text": "products refused exactly when a separate flood fill says unreachable, on 40 random cut-off stores", "elapsed_s": 367, "attack": "refusal", "check": "python3 -m unittest tests.test_attacks.Refusal"}
+{"at": "2026-11-24T12:16:56Z", "kind": "found", "text": "bad input raised tracebacks: non-object map, missing fields, missing file, zero walk speed", "elapsed_s": 367}
+{"at": "2026-11-24T12:16:56Z", "kind": "fixed", "text": "loader validates types and fields; CLI catches OSError; Timing rejects non-positive speed", "elapsed_s": 367}
+{"at": "2026-11-24T12:16:56Z", "kind": "found", "text": "a shelf with no open side rejected the whole map, even when the customer did not ask for it", "elapsed_s": 367}
+{"at": "2026-11-24T12:16:57Z", "kind": "fixed", "text": "product kept with no access cell; plan_route refuses it only when requested", "elapsed_s": 368}
+{"at": "2026-11-24T12:16:57Z", "kind": "found", "text": "shelf between two aisles picked an unreachable access cell, so random stores failed to plan", "elapsed_s": 368}
+{"at": "2026-11-24T12:16:57Z", "kind": "fixed", "text": "access cell is the first open neighbour the start can reach", "elapsed_s": 368}
+{"at": "2026-11-24T12:16:57Z", "kind": "found", "text": "process: route_optimizer code and tests were written before criteria and herd verify, so the red step was skipped and checks passed on first run", "elapsed_s": 368}
+{"at": "2026-11-24T12:16:58Z", "kind": "open", "text": "C5: 13 of 60 synthetic scenarios are at or below 30 percent saving; minimum is 0 percent (a list already in near-optimal order)", "elapsed_s": 369}
+{"at": "2026-11-24T12:16:58Z", "kind": "open", "text": "C2: optimal only up to 10 items; larger lists use nearest-neighbour plus 2-opt and or-opt, not proven optimal", "elapsed_s": 369}
+{"at": "2026-11-24T12:16:58Z", "kind": "open", "text": "C1: no real supermarket map tested; the 30 percent claim is shown on synthetic stores only", "elapsed_s": 369}
+{"at": "2026-11-24T12:16:58Z", "kind": "open", "text": "Pick time and walk speed are fixed assumptions (8 s per item, 1.2 m/s, 1 cell = 1 m); the saving depends on them", "elapsed_s": 369}
+{"at": "2026-11-24T12:18:29Z", "kind": "open", "text": "C5 re-run after generator fixes: median 42.88 percent, minimum 11.96 percent, 49 of 60 above 30 percent", "elapsed_s": 460}
+{"at": "2026-11-24T12:18:29Z", "kind": "found", "text": "benchmark generator: rooms layouts had no doorways and some stores had no products, giving 0 percent scenarios", "elapsed_s": 460}
+{"at": "2026-11-24T12:18:29Z", "kind": "fixed", "text": "rooms get doorways; scenarios redrawn until 10 products", "elapsed_s": 460}
+{"at": "2026-11-24T12:18:52Z", "kind": "late-red", "text": "Code and tests were written in one pass before criteria and herd verify; the first verify then passed. Criteria and checks were fixed to the request, and the adversarial attacks found and fixed real bugs after that.", "elapsed_s": 483}

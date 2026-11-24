@@ -1,0 +1,50 @@
+# The request said: "build a route optimizer that works inside any supermarket, even very big ones, whatever its layout ... compare it with the list-order route (not optimized) ... saves more than 30% of time for the basket to be ready"
+goal = "Build a supermarket route optimizer that minimizes time-to-prepare-basket and distance-covered, simulated step by step with live KPIs, beating the list-order route by more than 30% time saving"
+
+test_budget = "Unit tests on generated grid supermarkets (several layout families, 10x10 to 300x300), one 300x300 scale test with a time limit, a seeded benchmark of 200 supermarket-and-basket scenarios. Not tested: real store maps, non-grid floor plans, multi-floor stores, real walking speeds, real pick times."
+known_limits = "Timing model: 1 cell = 1 step, fixed seconds per pick. Other pick times or cart constraints change the times. Non-grid maps must be rasterised to a grid first."
+
+[[inputs]]
+human = "the MAP of the supermarket with all the products localised in the map with the product ID and the short-name"
+program = "JSON file: {\"grid\": [rows of '.' walkable and '#' impassable], \"entrance\": [x,y], \"checkout\": [x,y], \"products\": [{\"id\": str, \"short_name\": str, \"x\": int, \"y\": int}]}. A product is reached from its own cell if walkable or from any walkable 4-neighbour."
+
+[[inputs]]
+human = "the list of products (id:short name) requested by a customer"
+program = "JSON list [{\"id\": str, \"short_name\": str}] or CLI --basket id1,id2. Unknown ids must fail."
+
+[[criteria]]
+id = "C1"
+text = "works inside any supermarket, even very big ones, whatever its layout"
+source = "human"
+coverage = "Proves valid complete routes on seeded random layouts (random seeds 0-2 per family and size) of several families up to 300x300, plus one 300x300 timed case; does not prove real store maps or non-grid plans."
+check = "python3 -m unittest tests.test_any_layout tests.test_scale"
+timeout_s = 300
+
+[[criteria]]
+id = "C2"
+text = "simulate step by step the route of the delivery guy, measuring in real time the KPIs: time-to-prepare-basket and distance-covered"
+source = "human"
+coverage = "Proves each simulated step emits monotonic distance and time KPIs that end equal to the planned route totals; does not prove a real-time UI or wall-clock pacing."
+check = "python3 -m unittest tests.test_simulator"
+
+[[criteria]]
+id = "C3"
+text = "compare it with the list-order route (not optimized)"
+source = "human"
+coverage = "Proves the comparison reports both KPIs for the optimized and list-order routes and the optimized one is never longer; does not prove any particular store."
+check = "python3 -m unittest tests.test_compare"
+
+[[criteria]]
+id = "C4"
+text = "successfully saves more than 30% of time for the basket to be ready"
+source = "human"
+coverage = "Proves the aggregate time saving over 200 seeded generated scenarios is above 30%, and prints the per-scenario share above 30%; does not prove the saving on real supermarkets."
+check = "python3 -m supermarket_router benchmark --scenarios 200 --min-saving 0.30"
+timeout_s = 300
+
+[[criteria]]
+id = "C5"
+text = "Given an unknown product id in the basket, when the planner runs, then it exits non-zero with a message naming the id, and an empty basket gives zero KPIs and exit 0"
+source = "agent-proposed"
+coverage = "Proves the two edge cases above; does not cover malformed JSON or unreachable products."
+check = "python3 -m unittest tests.test_errors"

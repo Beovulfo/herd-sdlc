@@ -1827,7 +1827,7 @@ def _clip(text, limit=60):
 
 def _stale(root, slug, ev):
     """The task or the work changed since the last verify. A commit alone changes neither: the content id decides;
-    the HEAD fingerprint is the fallback outside git and for evidence from before 0.12.6."""
+    the HEAD fingerprint is the fallback outside git and for evidence without a content id."""
     if ev["task_sha"] != _task_sha(root, slug):
         return True
     if ev.get("content"):

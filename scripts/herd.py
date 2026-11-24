@@ -978,7 +978,12 @@ def verify(root, slug):
         timing = {"started_at": started, "elapsed_s": _secs(started, now())}
         if red:
             timing["first_verify_s"] = _secs(started, red["at"])
-    ev = {"task": slug, "goal": task["goal"], "at": now(), "head": head, "dirty": dirty,
+    live = {i.get("id") for i in (focus_rounds(root, slug) or [{}])[-1].get("items", []) if isinstance(i, dict)}
+    focus = []  # the commands of confirmed breaks, run again (design F6): an open one still exiting 3 blocks `herd done`
+    for i, b in focus_breaks(load_notes(root, slug), live).items():
+        code, tail = run_check(root, b["command"], FOCUS_CMD_S)
+        focus.append({"id": i, "command": b["command"], "open": b["open"], "exit": code, "tail": tail[-300:]})
+    ev = {"task": slug, "goal": task["goal"], "at": now(), "head": head, "dirty": dirty, "focus_breaks": focus,
           "route": task.get("route", "standard"), "test_budget": task.get("test_budget"),
           "known_limits": task.get("known_limits"), "notes": load_notes(root, slug),
           "inputs": task.get("inputs"), "inputs_left": inputs_left, "red": {"failed": red.get("failed", 0), "total": red.get("total", 0), "code_before": red.get("code_before"),
@@ -1071,6 +1076,9 @@ def _tier_rule(root, slug, n):
     if t is None or b is None:
         which = "reviewer's" if t is None else "builder's"
         return False, f"the {which} model could not be read: {n.get('unread') or 'its tier is unknown'}"
+    f = n.get("focus") if isinstance(n.get("focus"), dict) else {}
+    if n.get("verdict") == "none" and f.get("why"):
+        return False, f"the review did not count: {f['why']}"
     if n.get("saw") is None:
         return False, "the review was recorded before Herd 0.10.0 checked what the reviewer read: spawn herd-reviewer again"
     if not n["saw"] and n.get("diff_seen") and n.get("new_unread"):  # 0.12.1: new files are in no git diff
@@ -1081,8 +1089,11 @@ def _tier_rule(root, slug, n):
         more = (n.get("code_total") or 0) - (n.get("code_read") or 0) - len(missed)
         return False, (f"the reviewer did not read: {', '.join(missed)}{f' and {more} more' if more > 0 else ''}, and "
                        "ran no `git diff` or `git show`: spawn herd-reviewer again and have it read the diff")
+    if n.get("verdict") == "FAIL" and f.get("why"):
+        return False, (f"the review found a focus item that breaks ({f['why']}): fix it, run `herd verify`, then run "
+                       "`herd review-brief` and review again")
     if n.get("verdict") != "PASS":
-        return False, "the review found Blocker or Major issues, or gave no verdict: fix them and review again"
+        return False, "the review gave no PASS: run `herd review-brief`, have herd-reviewer answer every id, and review again"
     need = min(b + step, len(tiers) - 1)
     if t < need:
         return False, (f"review by {tiers[t]} does not count: the builder ran on {tiers[b]}, the reviewer must be "
@@ -1390,6 +1401,25 @@ def _save_focus(root, slug, rounds):
     (_dir(root, slug) / "focus.json").write_text(json.dumps(rounds) + "\n")
 
 
+def focus_breaks(notes, live):
+    """{id: {command, open}} for each focus item in `live` (ids of the latest brief) that a review broke with a confirmed
+    command. A break is open until a later review that counts answers that id `holds` (design F6); a later break
+    opens it again, and a review that does not count closes nothing."""
+    broken = {}
+    for n in notes:
+        if n.get("kind") != "review":
+            continue
+        f = n.get("focus") if isinstance(n.get("focus"), dict) else {}
+        for b in f.get("breaks") or []:
+            if isinstance(b, dict) and b.get("confirmed"):
+                broken[b["id"]] = {"command": b.get("command", ""), "open": True}
+        if n.get("round") and n.get("verdict") in ("PASS", "FAIL"):
+            for i in f.get("holds") or []:
+                if i in broken:
+                    broken[i]["open"] = False
+    return {i: b for i, b in broken.items() if i in live}
+
+
 def add_focus_round(root, slug, items):
     """Append a round to focus.json (design F2) and return its brief id: a hash of the items and the time."""
     rounds, at = focus_rounds(root, slug), now()
@@ -1511,7 +1541,7 @@ def focus_judge(root, slug, text):
     _save_focus(root, slug, rounds)
     rec["unconfirmed"] = [i for i, r in runs.items() if not r["confirmed"] and not i.startswith("x")]
     rec["holds"] = [i for i in ids if ans[i]["verdict"] == "holds"][:FOCUS_MAX]
-    rec["breaks"] = [{"id": i, "command": _clip(r["command"], 300), "exit": r["exit"], "tail": _clip(r["tail"], 300),
+    rec["breaks"] = [{"id": i, "command": _clip(r["command"], 2000), "exit": r["exit"], "tail": _clip(r["tail"], 300),
                       "confirmed": r["confirmed"], "why": r["why"]} for i, r in runs.items() if r["verdict"] == "breaks"]
     rec["extra"] = [{"id": f"x{idx}.{n}", "text": _clip(x["text"], 300), "command": _clip(x["command"] or "", 300),
                      "exit": runs[f"x{idx}.{n}"]["exit"] if x["command"] else None,
@@ -1792,6 +1822,9 @@ def _rule_lines(ev, notes):
         out.append("Red first not proven: a git stash was made on this branch before the first verify")
     out += [f"Human criterion changed with the human's words, for you to confirm: {n['text']}"
             for n in notes if n["kind"] == "human-change"]
+    out += [f"Focus item {b['id']} was closed by a later review with its command still exiting 3 (`{b['command']}`): the "
+            "reviewer judged the old command wrong, confirm" for b in ev.get("focus_breaks") or []
+            if not b.get("open") and b.get("exit") == 3]
     rv = [n for n in notes if n["kind"] == "review" and not n.get("skipped")]
     if rv and rv[-1].get("content") and rv[-1]["content"] != ev.get("content"):
         out.append("The code changed after the review")
@@ -2108,6 +2141,9 @@ NEXT_STEPS = ((re.compile(r"^(.+?) is failing: "), "fix {0}, then run `herd veri
                "add top-level `[[inputs]]` tables with `human` and `program` to task.toml, then run `herd verify`"),
               (re.compile(r"^coverage of human criterion (\S+) is empty"),
                "add `coverage` to human criterion {0}, then run `herd verify`"),
+              (re.compile(r"^focus item (\S+) still breaks"),
+               "fix focus item {0} (its command is in the problem), run `herd verify`, then `herd review-brief` and "
+               "spawn herd-reviewer again"),
               (re.compile(r"^review missing.*?Spawn the herd-reviewer subagent with model ([\w.-]+)"),
                "spawn herd-reviewer with model {0}, then run `herd verify`"),
               (re.compile(r"^review missing"), "spawn herd-reviewer one tier above the builder, then run `herd verify`"),
@@ -2124,7 +2160,13 @@ def _escalations(root, slug):
         failed = _failed_rounds(notes + [{"kind": "review", "source": "hook", "round": True, "verdict": "?"}])
     except STATE_ERRORS:
         return []
-    return out + ([f"{ESCALATE_AFTER} review rounds since all checks passed gave no PASS"] if failed >= ESCALATE_AFTER else [])
+    out += [f"{ESCALATE_AFTER} review rounds since all checks passed gave no PASS"] if failed >= ESCALATE_AFTER else []
+    run = 0  # trailing reviews that did not count (verdict none), whatever the cause, with no other review between
+    for n in reversed([n for n in notes if n.get("kind") == "review" and n.get("source") == "hook"]):
+        if n.get("verdict") != "none":
+            break
+        run += 1
+    return out + ([f"{NONE_ESCALATE} reviews in a row did not count"] if run >= NONE_ESCALATE else [])
 
 
 def next_step(probs):
@@ -2601,6 +2643,8 @@ def problems(root, slug):
         out += [f"coverage of human criterion {r['id']} is empty: add `coverage = \"<what its check proves and what "
                 "it does not>\"` to it" for r in ev["results"] if r["source"] == "human" and not str(r.get("coverage") or "").strip()]
         out += ev.get("inputs_left") or []  # structure only: missing, misplaced inside a criterion, or incomplete
+    out += [f"focus item {b['id']} still breaks: `{b['command']}`" for b in ev.get("focus_breaks") or []
+            if b.get("open") and b.get("exit") == 3]
     risk = (ev.get("risk") or {}).get("effective")
     ok, why = review_state(root, slug, ev, notes)
     if review_needed(ev) and not ok:

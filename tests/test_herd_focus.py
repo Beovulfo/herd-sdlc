@@ -392,6 +392,113 @@ class FocusHookTests(FocusBase):
         self.assertEqual(n["focus"]["unanswered"], self.ids())
 
 
+DEFECT = "python3 -c \"import os, sys; sys.exit(3 if os.path.exists('defect.txt') else 0)\""  # exits 3 while the defect is there
+
+
+class FocusBreakTests(FocusBase):
+    def broken(self):
+        """A confirmed break of C:recount whose command exits 3 until defect.txt is removed."""
+        (self.root / "defect.txt").write_text("x")
+        b = self.focused()
+        n = self.answer(b, C_recount=f"FOCUS C:recount: breaks: {DEFECT}")
+        self.assertEqual((n["verdict"], n["round"]), ("FAIL", True))
+        return b
+
+    def test_open_break_blocks_done(self):
+        self.broken()
+        ev = herd.verify(self.root, "t1")
+        [fb] = ev["focus_breaks"]
+        self.assertEqual((fb["id"], fb["exit"], fb["open"], fb["command"]), ("C:recount", 3, True, DEFECT))
+        probs = herd.problems(self.root, "t1")
+        self.assertEqual(probs[0], f"focus item C:recount still breaks: `{DEFECT}`")
+        self.assertIn("herd review-brief", herd.next_step(probs))
+        self.assertEqual(self.cli("done").returncode, 1)
+        self.assertEqual(herd.gate(self.root, {})["decision"], "block")
+        (self.root / "defect.txt").unlink()  # the fix: the command passes now
+        ev = herd.verify(self.root, "t1")
+        self.assertEqual(ev["focus_breaks"][0]["exit"], 0)
+        self.assertFalse([p for p in herd.problems(self.root, "t1") if "still breaks" in p])  # shown, not blocking
+        self.assertTrue([p for p in herd.problems(self.root, "t1") if "review missing" in p])  # but a review must count
+        self.answer(self.brief())  # a full review, every item holds
+        herd.verify(self.root, "t1")
+        self.assertEqual(herd.problems(self.root, "t1"), [])
+        self.assertFalse(herd.verify(self.root, "t1")["focus_breaks"][0]["open"])
+        self.assertEqual(self.cli("done").returncode, 0)
+
+    def test_next_review_is_full_list(self):
+        self.broken()
+        (self.root / "defect.txt").unlink()
+        herd.verify(self.root, "t1")
+        text = herd.review_brief(self.root, "t1")
+        last = herd.focus_rounds(self.root, "t1")[-1]
+        task, notes = herd.load_task(self.root, "t1"), herd.load_notes(self.root, "t1")
+        every = [i["id"] for i in herd.focus_items(task, notes, herd.review_files(self.root, "t1")[0] or ())]
+        self.assertEqual([i["id"] for i in last["items"]], every)  # not only the broken item
+        self.assertEqual(len(every), len(self.items))
+        self.assertTrue(all(f"- {i}: " in text for i in every))
+        self.assertNotIn("delta", text.lower())
+
+    def test_holds_closes_open_break(self):
+        self.broken()
+        herd.verify(self.root, "t1")
+        self.assertTrue(herd.focus_breaks(herd.load_notes(self.root, "t1"), {"C:recount"})["C:recount"]["open"])
+        n = self.answer(self.brief())  # the defect file is still there: the old command still exits 3
+        self.assertEqual((n["verdict"], n["round"]), ("PASS", True))
+        ev = herd.verify(self.root, "t1")
+        self.assertEqual((ev["focus_breaks"][0]["exit"], ev["focus_breaks"][0]["open"]), (3, False))
+        self.assertEqual(herd.problems(self.root, "t1"), [])  # the reviewer closed it, the builder could not
+        notes = herd.load_notes(self.root, "t1")
+        self.assertIn("C:recount was closed by a later review with its command still exiting 3", " ".join(herd._rule_lines(ev, notes)))
+        self.review(text="\n".join(self.lines(self.brief())), builder="haiku", reviewer="haiku")  # too low a tier: no round
+        herd.verify(self.root, "t1")
+        self.assertFalse([p for p in herd.problems(self.root, "t1") if "still breaks" in p])  # closed by the counting one
+        n = self.answer(self.brief(), C_recount=f"FOCUS C:recount: breaks: {DEFECT}")  # it breaks again: open again
+        herd.verify(self.root, "t1")
+        self.assertTrue([p for p in herd.problems(self.root, "t1") if "still breaks" in p])
+
+    def test_none_review_does_not_close_a_break(self):
+        self.broken()
+        self.review(text="BRIEF nothing", builder="haiku", reviewer="sonnet")
+        herd.verify(self.root, "t1")
+        self.assertTrue([p for p in herd.problems(self.root, "t1") if "still breaks" in p])
+
+
+class FocusReasonTests(FocusBase):
+    def test_unanswered_reviews_escalate(self):
+        b = self.focused()
+        for k in range(2):
+            self.review(text="Fine.\nHERD-REVIEW: PASS", builder="haiku", reviewer="sonnet")
+            herd.verify(self.root, "t1")
+            self.assertEqual(herd._escalations(self.root, "t1"), [], k)
+        self.review(text=f"BRIEF {b}", builder="haiku", reviewer="sonnet")  # another cause, still none
+        herd.verify(self.root, "t1")
+        self.assertEqual(herd._escalations(self.root, "t1"), ["3 reviews in a row did not count"])
+        out = herd.gate(self.root, {})
+        self.assertIn("3 reviews in a row did not count: ask the human one question", out["reason"])
+        self.answer(b)  # a review that counts ends the run
+        herd.verify(self.root, "t1")
+        self.assertEqual(herd._escalations(self.root, "t1"), [])
+        self.review(text="x", builder="haiku", reviewer="sonnet")
+        self.review(text="x", builder="haiku", reviewer="sonnet")
+        self.answer(b, C_recount=f"FOCUS C:recount: breaks: {BREAK_CMD}")  # a FAIL between two none runs interrupts them
+        self.review(text="x", builder="haiku", reviewer="sonnet")
+        self.assertEqual(herd._escalations(self.root, "t1"), [])
+
+    def test_reasons_name_the_ids_not_severity(self):
+        b = self.focused()
+        self.review(text="\n".join(self.lines(b)[:-1]), builder="haiku", reviewer="sonnet")
+        ok, why = self.state()
+        self.assertFalse(ok)
+        self.assertIn(f"not answered: {self.ids()[-1]}", why)
+        self.assertNotIn("Blocker", why)
+        self.answer(b, C_recount=f"FOCUS C:recount: breaks: {BREAK_CMD}")
+        ok, why = self.state()
+        self.assertFalse(ok)
+        self.assertIn("C:recount", why)
+        self.assertIn("herd review-brief", why)
+        self.assertNotIn("Blocker", why)
+
+
 class FocusBriefTests(FocusBase):
     def test_review_brief_prints_focus(self):
         self.ready()

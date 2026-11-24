@@ -220,6 +220,15 @@ class TestBusRead(Base):
         f = self.audit(use("Read", None, "t1"), use("Read", {"file_path": BUS_FILE}, "t2"))
         self.assertEqual(len(f), 1)
 
+    def test_Bus_other_readings_of_the_path_all_count(self):
+        for path in ("test_bus_verify.py", "./verifier/test_bus_verify.py", BUS_FILE, "~/x/test_bus_verify.py"):
+            f = self.audit(use("Read", {"file_path": path}), result("t1", "x"))
+            self.assertEqual(len(f), 1, path)
+        (self.work / "copy").mkdir()
+        (self.work / "copy" / "test_bus_verify.py").write_text("x")
+        f = self.audit(use("Read", {"file_path": BUS_FILE}), result("t1", "x"))
+        self.assertEqual(sorted(x.tool for x in f), ["Read", "work"])
+
     def test_Bus_cli_exits_one_and_names_the_read(self):
         r = self.cli(use("Read", {"file_path": BUS_FILE}), result("t1", "x"))
         self.assertEqual(r.returncode, 1, r.stderr)

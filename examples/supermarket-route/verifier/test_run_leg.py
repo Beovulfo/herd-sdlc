@@ -275,6 +275,17 @@ class TestHiddenBus(Base):
             self.assertIn(str(planted), out)
         self.assertFalse((self.tmpdir / "herd-bench").exists())
 
+    def test_Hidden_refusal_of_every_bus_name_matches_a_plain_find(self):
+        names = sorted(rl.HIDDEN["bus-transfer"])
+        for name in names:
+            (self.tmpdir / "copies" / name.replace(".py", "")).mkdir(parents=True)
+            (self.tmpdir / "copies" / name.replace(".py", "") / name).write_text("x")
+        (self.tmpdir / "copies" / "other.py").write_text("x")
+        want = subprocess.run(["find", str(self.tmpdir), "-type", "f", "(", *sum(([ "-name", n, "-o"] for n in names), [])[:-1], ")"],
+                              capture_output=True, text=True, check=True).stdout.split()
+        self.assertEqual(rl.preflight([str(self.tmpdir)], []), sorted(want))
+        self.assertEqual(len(want), len(names))
+
 
 if __name__ == "__main__":
     unittest.main()

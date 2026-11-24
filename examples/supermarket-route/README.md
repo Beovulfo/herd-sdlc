@@ -49,6 +49,6 @@ A leg's siblings are denied as they are when it starts, so start a leg only afte
 
 ### Which runs count
 
-A finding marked `blocked` is an attempt that the sandbox refused, such as `mktemp -d` in the system temp folder or an access to `__pycache__`. It counts as clean. A run is void only if it read the hidden verifier, another run or the network.
+A finding marked `blocked` is an attempt that the sandbox refused, such as `mktemp -d` in the system temp folder or an access to `__pycache__`. It counts as clean. Only a read of the hidden verifier, of another run or of the network voids a run.
 
-So a run's score counts when the audit prints `leak audit: clean`, or when every finding it lists is `blocked`. The audit still exits 1 for blocked findings, so read its lines. Two findings print as `not blocked` and need a look. A `not isolated` finding means the settings do not show the sandbox was on, so do not score the run. A `network tool call` finding can be a refused call: check its tool result before you void the run.
+So a run's score counts when the audit prints `leak audit: clean`, or when every finding it lists is `blocked`. The audit still exits 1 for blocked findings, so read its lines. Two findings print as `not blocked` and need a look. A `not isolated` finding is different: it shows no read, but the sandbox is not proven to be on, so do not score the run. A `network tool call` finding can be a refused call: check its tool result before you void the run.

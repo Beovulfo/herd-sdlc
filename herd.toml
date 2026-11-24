@@ -34,6 +34,14 @@ raise_by_pct = 50
 # [worktree]
 # required = true
 
+# Optional: the review rule at medium and high risk. The herd-reviewer subagent must run on a model at least
+# `step` tiers above the builder's highest tier, capped at the top one. A model's tier is the first name its
+# id contains; a model that matches none does not count. A task keeps the values it saw at `herd init`.
+# These are the defaults.
+# [review]
+# tiers = ["haiku", "sonnet", "opus"]
+# step = 1
+
 # Optional: extra paths and commands for the guard hook, which runs while a task is active. The built-in
 # lists (secrets such as .env and keys, .git, Herd's own state files; git push, git reset --hard, gh pr merge
 # and other irreversible commands) always apply: these entries only add to them.

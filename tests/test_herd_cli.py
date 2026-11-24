@@ -40,12 +40,79 @@ def late_review(root, slug="t1"):
     """A review that counts whatever comes next: for tests that are not about when the review happens.
 
     A real review counts only after all checks first passed and at the risk it saw (see TestReviewFindings);
-    this one is placed as if the checks had passed before it, at the highest risk."""
+    this one is placed as if the checks had passed before it, at the highest risk, as the review hook records
+    it (0.7.0): a top-tier reviewer for a top-tier builder."""
     d = herd._dir(root, slug)
     (d / "green.json").write_text(json.dumps({"at": herd.now(), "notes": 0}))
     with (d / "notes.jsonl").open("a") as f:
         f.write(json.dumps({"at": herd.now(), "kind": "review", "text": "no Blocker or Major",
-                            "by": "a fresh subagent", "risk": "high"}) + "\n")
+                            "by": "a fresh subagent", "risk": "high", "source": "hook", "tier": "opus",
+                            "builder_tier": "opus", "top": True, "verdict": "PASS"}) + "\n")
+
+
+_LOGS = [0]
+
+
+def transcript(root, models, name="main", text="done", model="claude-{}-5-5", before_start=False,
+               synthetic_last=False, handback=False, path=None):
+    """A Claude Code session log like the ones in spike S3: one assistant line per tier name in models, the last
+    one carrying text (or, with handback, a SubagentHandback report; with text None, no text at all). It lives
+    under .herd/, which the evidence fingerprint ignores."""
+    models = [models] if isinstance(models, str) else models
+    _LOGS[0] += 1
+    path = Path(path) if path else Path(root) / ".herd" / "logs" / f"{name}-{_LOGS[0]}.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    from datetime import datetime, timezone
+    ts = "2000-01-01T00:00:00.000Z" if before_start else datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+    rows = [{"type": "user", "timestamp": ts, "message": {"role": "user", "content": "go"}},
+            {"type": "assistant", "timestamp": ts, "message": {"model": model.format(models[0]) if models else "x",
+                                                                 "content": [{"type": "text", "text": "HERD-REVIEW: PASS"}]}},
+            {"type": "user", "timestamp": ts, "message": {"role": "user", "content": "next turn"}}][:1 if not models else 3]
+    for i, tier in enumerate(models):
+        last = i == len(models) - 1
+        content = [{"type": "text", "text": "working"}]
+        if last and text is None:
+            content = [{"type": "tool_use", "name": "Bash", "input": {"command": "git diff"}}]
+        elif last and handback:
+            content = [{"type": "tool_use", "name": "SubagentHandback", "input": {"message": text}}]
+        elif last:
+            content = [{"type": "text", "text": text}]
+        rows.append({"type": "assistant", "timestamp": ts, "message": {"model": model.format(tier), "content": content}})
+    if synthetic_last:
+        rows.append({"type": "assistant", "timestamp": ts, "message": {"model": "<synthetic>", "content": []}})
+    path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    return path
+
+
+def hook_review(root, slug="t1", builder="opus", reviewer="opus", text="No Blocker or Major.\nHERD-REVIEW: PASS",
+                model="claude-{}-5-5", agent_type="herd:herd-reviewer", reviewer_path=None, builder_path=None,
+                reviewer_lines=None, builder_before_start=False, synthetic_last=False, handback=False,
+                last_message=None, seen=True):
+    """Run the SubagentStop review hook as Claude Code would at the end of a herd-reviewer subagent, with the
+    logs where spike S3 found them: <session>.jsonl and <session>/subagents/agent-<id>.jsonl."""
+    _LOGS[0] += 1
+    sid, aid = f"s{_LOGS[0]}", f"a{_LOGS[0]}"
+    if builder_path == "missing":  # a log that does not exist, inside the test's own folder
+        builder_path = Path(root) / ".herd" / "logs" / f"missing-{sid}.jsonl"
+    main = Path(builder_path) if builder_path else transcript(
+        root, builder, model=model, before_start=builder_before_start, path=Path(root) / ".herd" / "logs" / f"{sid}.jsonl")
+    sid = main.stem
+    rev = main.parent / sid / "subagents" / f"agent-{aid}.jsonl"
+    if reviewer_path == "missing":
+        pass
+    elif reviewer_lines is not None:
+        rev.parent.mkdir(parents=True, exist_ok=True)
+        rev.write_text("".join(line + "\n" for line in reviewer_lines))
+    else:
+        transcript(root, reviewer, text=text, model=model, synthetic_last=synthetic_last, handback=handback, path=rev)
+    hook = {"session_id": sid, "transcript_path": str(main), "cwd": str(root), "agent_id": aid,
+            "agent_type": agent_type, "agent_transcript_path": str(rev), "hook_event_name": "SubagentStop",
+            "stop_hook_active": False}
+    if last_message is not None:
+        hook["last_assistant_message"] = last_message
+    if seen:  # as the Stop gate does: only it and the pre-init hook record which sessions are real
+        herd._see_session(Path(root), slug, str(main))
+    herd.review_hook(Path(root), hook)
 
 
 class Base(unittest.TestCase):
@@ -805,7 +872,7 @@ class TestCli(Base):
         rc, out, _ = self.run_cli("verify")
         self.assertEqual(rc, 0)
         self.assertIn("1 passing", out)
-        self.assertEqual(self.run_cli("review", "--by", "a fresh subagent", "no Blocker or Major")[0], 0)
+        hook_review(self.root)  # the review hook records the herd-reviewer subagent's review
         rc, out, _ = self.run_cli("done")
         self.assertEqual(rc, 0)
         self.assertFalse((self.root / ".herd/active").exists())
@@ -995,7 +1062,7 @@ class TestAttacks(Base):
         self.assertIn("collision", probs)
         for a in ("collision", "one-bad-part", "recount"):
             self.assertEqual(self.run_cli("note", "--tried", "--attack", a, f"n/a: {a} explained").returncode, 0)
-        self.assertEqual(self.run_cli("review", "--skipped", "no reviewer in this test").returncode, 0)
+        hook_review(self.root)
         herd.verify(self.root, "t1")
         self.assertEqual(herd.problems(self.root, "t1"), [])
         self.assertEqual(self.run_cli("done").returncode, 0)

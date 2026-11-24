@@ -2,6 +2,21 @@
 
 All notable changes to Herd. Versions follow `.claude-plugin/plugin.json`.
 
+## 0.7.0
+
+Part B of [`herd-guardrails.md`](docs/designs/herd-guardrails.md): the tier-up review.
+
+- **Added:** the `herd-reviewer` plugin agent (`agents/herd-reviewer.md`, `model: inherit`, tools Read, Grep, Glob, Bash). Its instructions are Herd's: review only the goal, criteria, `test_budget` and the diff it reads itself, list findings as Blocker, Major or Nit with a path and line, edit nothing, and end with `HERD-REVIEW: PASS` or `HERD-REVIEW: FAIL`.
+- **Added:** a SubagentStop hook (`herd review-hook`, matcher `^herd:herd-reviewer$`) records the review. It reads the reviewer's model and report from its session log (the report can be a `SubagentHandback` call, see spike S3) and the builder's highest model since `herd init` from the main session log. Never from what an agent writes. It never blocks and prints nothing. It counts only a reviewer log in the place Claude Code keeps it (`<session>/subagents/agent-<id>.jsonl` next to the main log), and the verdict is the last non-empty line of the reviewer's last turn.
+- **Added:** the review hook counts only a main session log that Herd saw itself: `herd init`'s pre-init hook and the Stop gate record each session from Claude Code's own hook input. The guard denies running Herd's hook commands (`gate`, `preinit`, `guard`, `review-hook`) by hand, in any form (`herd.py`, `python3 -m herd`, `-mscripts.herd`), writing into Claude Code's session logs (`*.jsonl`, `subagents/`; memory files stay writable), and editing the installed plugin (`CLAUDE_PLUGIN_ROOT`, unless it is the project), so a builder cannot record its own review with plain tool calls.
+- **Changed:** at medium and high risk a review counts only when the hook recorded it, its verdict is PASS, and the reviewer's tier is at least the builder's plus `[review] step` (default 1), capped at the top of `[review] tiers` (default haiku, sonnet, opus), as `herd.toml` had them at `herd init`: editing it during the task does not change the rule. Opus reviewing an Opus build counts, and the report says "same tier". A model that cannot be read, or matches no tier, does not count, and the reason says whether it was the reviewer's or the builder's. The earlier rules still apply: after all checks first passed, at the current risk or higher, and at high risk for the final content.
+- **Removed:** `herd review --skipped`. It exits with an error: a review is required at medium and high risk. `herd review --by` stays as a note and never counts at medium or high risk. Old skipped notes are still read and reported as unreviewed.
+- **Added:** 3 review rounds since all checks first passed without a PASS (rounds whose tiers would count) make the gate tell the agent to ask the human one question, and write an escalated stop record.
+- **Added:** `herd status` prints `Review: needs <tier> or higher (builder on <tier>)`, from the latest session log the gate or the pre-init hook saw; the gate's reason and the stop record's `next` name the model to spawn (`spawn herd-reviewer with model sonnet, then run herd verify`), and the stop record's `review.needed` is that tier.
+- **Added:** the report and the PR show the review's first line and how many rounds without PASS came before it; the PR lists those rounds under what is not proven.
+- **Changed:** the run skill's review step: spawn `herd-reviewer` one tier above you; there is no skip.
+- **Known limits:** the builder's tier comes from the main session log only, so work it delegated to its own subagents does not raise it, and a task resumed in a new session sees only that session. A new model family needs adding to `[review] tiers`. The hook does not check that the reviewer actually read the diff. A builder that runs a copy of `herd.py` as its own script, with logs it wrote, can still record a review: like `bash -c`, that is past what the guard reads.
+
 ## 0.6.0
 
 Part A of [`herd-guardrails.md`](docs/designs/herd-guardrails.md): the guard hook.

@@ -2393,7 +2393,9 @@ def problems(root, slug):
         out += ev.get("inputs_left") or []  # structure only: missing, misplaced inside a criterion, or incomplete
     risk = (ev.get("risk") or {}).get("effective")
     ok, why = review_state(root, slug, ev, notes)
-    if review_needed(ev) and not ok:
+    if review_needed(ev) and not ok and review_limit(notes):
+        out.append(review_limit(notes))  # at the limit: stop and ask, never "spawn another reviewer"
+    elif review_needed(ev) and not ok:
         need, _ = review_need(root, slug)
         model = (re.search(r"Spawn herd-reviewer with model ([\w.-]+)", why or "") or [None, need])[1]
         out.append(f"review missing ({why}): risk is {risk}. Spawn the herd-reviewer subagent "

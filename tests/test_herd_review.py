@@ -218,6 +218,9 @@ class TestVerdict(ReviewBase):
             self.assertIn("Blocker: b.py:2 crash", p.stdout, cmd)
         self.assertNotIn("Goal:", self.cli("review-brief").stdout)
         self.assertEqual(ev["summary"]["failing"], 0)
+        probs = " ".join(herd.problems(self.root, "t1"))  # `herd done` prints these: never "spawn a reviewer" at the limit
+        self.assertIn("review limit reached", probs)
+        self.assertNotIn("Spawn", probs)
 
     def test_a_pass_that_counts_resets_the_count_and_a_failed_one_does_not(self):
         self.ready()

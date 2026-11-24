@@ -33,7 +33,7 @@ All three keep the existing rules: standard library only, no new external servic
 * G4: Every denial is appended to `notes.jsonl` as kind `guard` and listed in the final report and the PR. Check: `test_guard_denial_is_reported`.
 * G5: No active task, or Python older than 3.11: the guard allows everything and prints nothing. An exception inside the guard allows the action and prints one line to stderr. Check: `test_guard_inactive_allows`, `test_guard_crash_allows`.
 * G6: `herd review --skipped` is removed. At medium and high risk, `herd done` and the gate refuse until a review recorded by the review hook counts. Check: `test_done_refuses_without_hook_review`.
-* G7: A review counts only if the reviewer's observed model tier is at least the builder's highest observed tier plus `[review] step` (default 0 since 0.8.0: the same tier; 1 in 0.7.0), capped at the top tier. A reviewer at the top tier when the builder is already there counts, and the report says "same tier". Check: `test_review_tier_rule`.
+* G7: A review counts only if the reviewer's observed model tier is at least the builder's highest observed tier plus `[review] step` (default 1, one tier above: in 0.7.0 and again since 0.10.0; 0, the same tier, in 0.8.0 and 0.9.0), capped at the top tier. A reviewer at the top tier when the builder is already there counts, and the report says "same tier". Check: `test_review_tier_rule`.
 * G8: Models are read from the session transcripts, never from what the agent writes. If the reviewer's or the builder's model cannot be read, the review does not count and the reason says which. Check: `test_unreadable_model_does_not_count`.
 * G9: The reviewer ends with one line `HERD-REVIEW: PASS` or `HERD-REVIEW: FAIL`. A missing or malformed line, or `FAIL`, does not count. After 3 counted rounds without `PASS` the criterion for escalation is met (Part C). Check: `test_review_verdict_parsed`, `test_three_failed_reviews_escalate`.
 * G10: Every stop without `herd done` writes `stopped.json` with the fields in Design C1. `herd status` prints it first. Check: `test_stop_record_on_release`, `test_stop_record_on_cancel`, `test_stop_record_on_escalation`.
@@ -142,8 +142,8 @@ Then `add_note(root, slug, "guard", "<tool>: <rule>")`. Add `"guard"` to `NOTE_K
 # Model tiers, lowest first. A model's tier is the first entry that its model id contains.
 tiers = ["haiku", "sonnet", "opus"]
 # How many tiers above the builder the reviewer must be, capped at the top tier.
-# 0 (the default since 0.8.0) is the builder's own tier; 0.7.0 defaulted to 1.
-step = 0
+# 1 (the default in 0.7.0 and since 0.10.0) is one tier above; 0.8.0 and 0.9.0 defaulted to 0, the builder's own tier.
+step = 1
 ```
 
 Unreadable or missing config means the defaults above. A model id that matches no tier is tier unknown (G8: does not count).
@@ -170,7 +170,7 @@ As built, after a fresh review: the hook counts only a main session log Herd saw
 
 **B5. CLI.** `herd review --skipped` exits with an error saying a review is required at medium and high risk. `herd review --by` stays for low risk and for notes, but it never counts at medium or high (rule 1 above). Old `skipped` notes in existing tasks are still read and reported as "unreviewed".
 
-**B6. Skill.** `skills/run/SKILL.md` step 7 becomes: "Spawn the `herd-reviewer` subagent on your own model (`herd status` prints the required one; one tier above in 0.7.0), giving it only the goal, criteria, `test_budget` and the diff. The hook records the review. Fix Blocker and Major findings and review again, at most 3 rounds. There is no skip: if no reviewer can run, say so and stop; Herd records why." `herd status` prints `Review: needs <tier> or higher (builder on <tier>)`.
+**B6. Skill.** `skills/run/SKILL.md` step 7 becomes: "Spawn the `herd-reviewer` subagent with a model one tier above yours (`herd status` prints it; on your own model in 0.8.0 and 0.9.0), giving it only the goal, criteria, `test_budget` and the diff. The hook records the review. Fix Blocker and Major findings and review again, at most 3 rounds. There is no skip: if no reviewer can run, say so and stop; Herd records why." `herd status` prints `Review: needs <tier> or higher (builder on <tier>)`.
 
 **B7. Escalation.** Three hook-recorded reviews with `FAIL` since green adds the task to the existing escalation list with cause `review`, so the gate says to ask the human one question.
 

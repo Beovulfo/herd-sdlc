@@ -1,6 +1,6 @@
 ---
 name: herd-reviewer
-description: Herd's fresh-context reviewer for a finished Herd task at medium or high risk. Spawn it with a model one tier above yours (`herd status` names it) and give it only the goal, the criteria, the test_budget and how to get the diff. A hook records its review.
+description: Herd's fresh-context reviewer for a finished Herd task at medium or high risk. Spawn it on the same model as yours (`herd status` names it) and give it only the goal, the criteria, the test_budget and how to get the diff. A hook records its review.
 tools: Read, Grep, Glob, Bash
 model: inherit
 ---

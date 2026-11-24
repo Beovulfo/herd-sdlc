@@ -2,6 +2,15 @@
 
 All notable changes to Herd. Versions follow `.claude-plugin/plugin.json`.
 
+## 0.8.0
+
+Lessons from a Haiku run built and reviewed by Opus with 0.7.0: it passed `herd done` with an Opus review (one tier above) and still failed the same three stores as 0.4.0. Its map format took a free pick cell per product, so the caller chose the side of the shelf, and the planner refused products whose chosen side was walled in although another side was open. The reviewer saw only the goal, the criteria and the diff, and no criterion mentioned shelves.
+
+- **Added:** the `refusal` standard attack, the fifth. Every kind of input the program refuses (cannot be reached, not found, invalid) must be confirmed refusable by separate, simpler code (such as a plain search) on generated inputs, so nothing the program could serve is refused. Like the others, `herd done` and the Stop gate need a command that `herd verify` ran and saw pass, or an `n/a:` reason.
+- **Added:** `herd verify` warns when the refusal attack is marked n/a although a changed code file raises an error that says cannot, unreachable, not found, no path, no route, no walkable or invalid. A word list over `raise` lines: it never blocks, it only questions the n/a.
+- **Changed:** the reviewer runs on the builder's model by default: `[review] step` is 0, not 1 (set `step = 1` in `herd.toml` for one tier above, as in 0.7.0). The run showed a stronger reviewer did not help here, and the same model costs less and needs no model the session may not have. The tier rule, the hook record, the rounds and the escalation are unchanged; `herd status`, the gate and the run skill name the builder's model.
+- **Known limit:** the refusal attack makes the agent check its refusals, but it cannot make it test products on their shelves: an agent whose generator hands the program pre-computed pick cells still passes. Catching a pre-computed input form earlier, at the criteria step, is not built.
+
 ## 0.7.0
 
 Part B of [`herd-guardrails.md`](docs/designs/herd-guardrails.md): the tier-up review.

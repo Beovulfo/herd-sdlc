@@ -36,6 +36,9 @@ def git(root, *args):
     subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
 
 
+ONE_ABOVE = "[review]\nstep = 1\n"
+
+
 class Base(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -56,6 +59,10 @@ class Base(unittest.TestCase):
                               capture_output=True, text=True)
 
     def start(self, text=TASK, goal="Add f() to app.py"):
+        if not (self.root / "herd.toml").exists():  # most review tests are about the tier rule: one tier above
+            (self.root / "herd.toml").write_text(ONE_ABOVE)
+            git(self.root, "add", "herd.toml")  # in HEAD, so it is not a change the task made
+            git(self.root, "commit", "-q", "-m", "review one tier above")
         herd.init_task(self.root, "t1", goal, request=REQUEST)
         (self.root / ".herd/tasks/t1/task.toml").write_text(text)
 
@@ -896,7 +903,7 @@ class TestStopRecord(Base):
         self.assertEqual(rec["problems"], probs)
         self.assertTrue(rec["resumable"])
         self.assertIn("spawn herd-reviewer", rec["next"])
-        self.assertEqual(rec["review"], {"needed": "one tier above the builder", "latest": None})
+        self.assertEqual(rec["review"], {"needed": "the builder's model", "latest": None})
         late_review(self.root)
         herd.verify(self.root, "t1")
         rec = herd.write_stop(self.root, "t1", "released")
@@ -1145,6 +1152,50 @@ class TestStopRecordAttacks(Base):
         herd.verify(self.root, "t1")  # the human answered; the agent went on
         self.assertEqual(self.cli("status").stdout.splitlines()[0],
                          f"Stopped {rec['at']}: escalated. The task went on after it (newer evidence): see below.")
+
+
+class TestRefusalAttack(Base):
+    def built(self):
+        self.start()
+        self.red_then_build()
+
+    def attacks(self, refusal_note="refusal attack", check=OK):
+        for a in herd.ATTACKS:
+            if a != "refusal":
+                herd.add_note(self.root, "t1", "tried", f"{a} attack", attack=a, check=OK)
+        herd.add_note(self.root, "t1", "tried", refusal_note, attack="refusal", check=check)
+
+    def test_the_refusal_attack_is_one_of_the_standard_attacks(self):
+        self.assertIn("refusal", herd.ATTACKS)
+        self.built()
+        for a in herd.ATTACKS:
+            if a != "refusal":
+                herd.add_note(self.root, "t1", "tried", f"{a} attack", attack=a, check=OK)
+        late_review(self.root)
+        herd.verify(self.root, "t1")
+        self.assertIn("refusal (no passing command)", " ".join(herd.problems(self.root, "t1")))
+
+    def test_na_refusal_with_a_refusing_raise_in_the_code_is_questioned(self):
+        self.built()
+        (self.root / "app.py").write_text('def f():\n    raise ValueError("product P1 cannot be reached")\n')
+        self.attacks("n/a: nothing is refused", check=None)
+        ev = herd.verify(self.root, "t1")
+        w = [x for x in ev["warnings"] if x.startswith("refusal attack is n/a")]
+        self.assertEqual(len(w), 1, ev["warnings"])
+        self.assertIn("app.py", w[0])
+
+    def test_a_passing_refusal_command_or_code_without_refusals_is_not_questioned(self):
+        self.built()
+        (self.root / "app.py").write_text('def f():\n    raise ValueError("product P1 cannot be reached")\n')
+        self.attacks()
+        self.assertFalse([x for x in herd.verify(self.root, "t1")["warnings"] if "refusal attack" in x])
+        (self.root / "app.py").write_text("def f():\n    return 1\n")
+        self.attacks("n/a: nothing is refused", check=None)
+        self.assertFalse([x for x in herd.verify(self.root, "t1")["warnings"] if "refusal attack" in x])
+
+    def test_the_default_reviewer_tier_is_the_builders(self):
+        self.assertEqual(herd.review_tiers(self.root), (list(herd.DEFAULT_TIERS), 0))
+
 
 if __name__ == "__main__":
     unittest.main()

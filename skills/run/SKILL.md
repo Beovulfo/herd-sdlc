@@ -16,18 +16,18 @@ Reference files hold the detail of a step. When a step names one, open it and re
 
 1. **Intake.** If `herd status` starts with `Stopped` and gives a `Next`, do that first. Otherwise pick a short slug. Trivial change (one file, no new behaviour, an existing check can fail first)? Take the quick route: [quick.md](quick.md). Otherwise run `herd init <slug> "<goal>" --request "<the user's message, verbatim>"`. Add `--worktree` when `herd.toml` has `[worktree] required = true`, the user asks for it, or other agents work in this repository: [worktree.md](worktree.md). Then run `herd triage "<goal text>"`. It prints the risk floor. You may raise it, never lower it. Do not ask clarifying questions: state assumptions.
 2. **Criteria.** Follow the `herd:criteria` skill, then run `herd check` and fix its warnings. Use `herd detect` for the real test command. To plan evidence with the user, point them to `/herd:evidence`.
-3. **Red.** Run `herd verify` before writing code. Checks must fail. Code written earlier is flagged. A check that already passes proves nothing: tighten it. A check marked `(ran zero tests)` found no tests: fix its command.
+3. **Red.** Run `herd verify` before writing code. Checks must fail. A check that already passes proves nothing: tighten it. A check marked `(ran zero tests)` found no tests: fix its command.
 4. **Gate.** Risk `high`: show the criteria table and assumptions, ask one approval question, wait. Otherwise show them and continue. Always ask if the user said to confirm criteria first.
-5. **Build.** On branch `herd/<slug>` (`herd init` creates it and switches to it; if it warns that it could not, create it yourself), tests first, minimal changes within the goal. Use Superpowers (`writing-plans`, `test-driven-development`, `subagent-driven-development`) when installed; otherwise work in short steps yourself.
+5. **Build.** On branch `herd/<slug>` (`herd init` creates it and switches to it; if it warns that it could not, create it yourself), tests first, minimal changes within the goal. Use Superpowers (`writing-plans`, `test-driven-development`, `subagent-driven-development`) when installed.
 6. **Break it** (standard route, never skipped). Read [adversarial.md](adversarial.md) now and follow it: attack exactly what the request promises, and run its five standard attacks. `herd done` refuses until each one has a command that `herd verify` ran and saw pass.
 7. **Review** (medium and high risk), once all checks pass. Spawn the `herd-reviewer` subagent with a model one tier above yours (`herd status` prints it), giving it only what `herd review-brief` prints. The hook records it. Fix Blocker and Major findings and review again, at most 3 rounds; decline Nits in one line. After a PASS that counts, commit and run `herd done`. No skip: if no reviewer can run, say so and stop.
-8. **Verify.** Run `herd verify` after every change. It prints one line, plus what needs attention, including when to escalate.
+8. **Verify.** Run `herd verify` once the work is done and after each review fix. While working, run only your changed tests or `herd verify --only <id>` (writes no evidence). It prints one line, plus what needs attention, including when to escalate.
 9. **Escalate only when needed:** an irreversible action, a real trade-off, or stuck after the caps. Ask **one** question with 2 or 3 numbered options. Never stop for missing detail. If the human drops the task, run `herd cancel --reason "<their words>"`. Never cancel to get past the gate.
 10. **Finish.** Commit on the task branch if the project allows it; otherwise say it is uncommitted. If the request asked for a pull request or `herd.toml` has `[pr] open = true`, follow [pr.md](pr.md): it opens the PR before the final verify. Run `herd verify`, then `herd done`. It prints the final report, filled from the evidence and the notes.
 
 ## Final report
 
-Paste the report `herd done` prints, as written. Log each decision the moment you make it, so the report has it: `herd note --decision "<decision>; <reason>; <how to override>"`.
+Paste the report `herd done` prints, as written. Log each decision the moment you make it: `herd note --decision "<decision>; <reason>; <how to override>"`.
 
 ## Writing
 

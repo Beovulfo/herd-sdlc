@@ -161,7 +161,7 @@ Every review ends with the answers; there is no `HERD-REVIEW` line. The Blocker,
 
    A `none` review does not count and `round` is false; a new `_tier_rule` reason carries the text.
    `_escalations()` counts three `none` focus reviews in a row, with no counting review between them, as its own cause, apart from `_failed_rounds()`; a new constant of 3 sets the limit, because `ESCALATE_AFTER` counts failing verifies of one criterion.
-6. **Record.** The review note stores `focus: {brief, answered, unanswered, unconfirmed, holds: [ids, at most 30], breaks: [{id, command (clipped to 2000, because `herd verify` reruns it), exit, tail (clipped to 300), confirmed}], extra: [...]}`. The hook appends the full answers, commands and exits to the round in `focus.json`, which `REVIEW_CHARS` does not clip. One round is a few kilobytes.
+6. **Record.** The review note stores `focus: {brief, answered, unanswered, unconfirmed, holds: [every confirmed id, because a late id closes a break], breaks: [{id, command (clipped to 2000, because `herd verify` reruns it), exit, tail (clipped to 300), confirmed}], extra: [...]}`. The hook appends the full answers, commands and exits to the round in `focus.json`, which `REVIEW_CHARS` does not clip. One round is a few kilobytes.
 
 `hooks/hooks.json` keeps the review hook's timeout at 30 s today; this raises it to 180 s: the G10 deadline of 120 s plus parsing and the existing log reads. The guard and pre-init hooks keep 10 s.
 

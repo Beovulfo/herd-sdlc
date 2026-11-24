@@ -464,6 +464,17 @@ class FocusBreakTests(FocusBase):
 
 
 class FocusReasonTests(FocusBase):
+    def test_holds_are_kept_past_thirty_items(self):
+        self.ready()
+        path = herd._dir(self.root, "t1") / "task.toml"
+        limits = "\\n".join(f"limit {k}" for k in range(33))
+        path.write_text(path.read_text().replace('known_limits = "Repeated calls are not timed."', f'known_limits = "{limits}"'))
+        b = self.brief()
+        self.assertGreater(len(self.items), 30)
+        n = self.answer(b)
+        self.assertEqual((n["verdict"], n["focus"]["holds"]), ("PASS", self.ids()))  # the last item is kept
+        self.assertEqual(self.ids()[-1], "C:refusal")
+
     def test_unanswered_reviews_escalate(self):
         b = self.focused()
         for k in range(2):
@@ -576,7 +587,7 @@ class FocusAttackTests(FocusBase):
         self.assertEqual(n["focus"]["answered"], len(self.items) - 1)
         n = self.answer(b, C_collision="FOCUS C:collision: holds: python3 -c \"import sys; sys.exit(1)\"")
         self.assertEqual(n["focus"]["unconfirmed"], ["C:collision"])  # one failing holds leaves the others confirmed
-        self.assertEqual(len(n["focus"]["holds"]), len(self.items))
+        self.assertEqual(n["focus"]["holds"], [i for i in self.ids() if i != "C:collision"])  # only confirmed ones
         d = herd._dir(self.root, "t1")
         rounds = herd.focus_rounds(self.root, "t1")
         (d / "focus.json").write_text(json.dumps([7, "x"] + rounds))  # a junk entry beside a good round
@@ -592,7 +603,7 @@ class FocusAttackTests(FocusBase):
         self.assertEqual(sorted(confirmed), sorted(set(self.ids() + ["x0.1"]) - {"C:refusal"}))
         self.assertEqual(f["unconfirmed"], ["C:refusal"])
         self.assertEqual(f["answered"], len(self.items))
-        self.assertEqual(sorted(f["holds"] + [x["id"] for x in f["breaks"]]), sorted(self.ids()))
+        self.assertEqual(sorted(f["holds"] + [x["id"] for x in f["breaks"]] + f["unconfirmed"]), sorted(self.ids()))
         self.assertEqual(n["verdict"], "FAIL")
 
     def test_refusal(self):

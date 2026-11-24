@@ -1540,7 +1540,7 @@ def focus_judge(root, slug, text):
         {"id": f"x{idx}.{n}", **x} for n, x in enumerate(parsed["extra"], 1)]})
     _save_focus(root, slug, rounds)
     rec["unconfirmed"] = [i for i, r in runs.items() if not r["confirmed"] and not i.startswith("x")]
-    rec["holds"] = [i for i in ids if ans[i]["verdict"] == "holds"][:FOCUS_MAX]
+    rec["holds"] = [i for i in ids if ans[i]["verdict"] == "holds" and runs[i]["confirmed"]]  # all of them: a late id closes a break
     rec["breaks"] = [{"id": i, "command": _clip(r["command"], 2000), "exit": r["exit"], "tail": _clip(r["tail"], 300),
                       "confirmed": r["confirmed"], "why": r["why"]} for i, r in runs.items() if r["verdict"] == "breaks"]
     rec["extra"] = [{"id": f"x{idx}.{n}", "text": _clip(x["text"], 300), "command": _clip(x["command"] or "", 300),

@@ -1,3 +1,5 @@
+import contextlib
+import io
 import json
 import re
 import os
@@ -6,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import traceback
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -40,6 +43,28 @@ OK = "python3 -c \"import json\""  # an attack command that passes and is not va
 def git(root, *args):
     subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
 
+
+def run_herd(cwd, *args, input=None):
+    """Run a herd command as `python3 scripts/herd.py` would, in this process: no interpreter start for tests that
+    are not about the process itself (TestCli, the env, concurrency and old-Python tests keep real subprocesses).
+    The result has returncode, stdout and stderr."""
+    out, err, code, here = io.StringIO(), io.StringIO(), 0, os.getcwd()
+    os.chdir(cwd)
+    try:
+        with mock.patch("sys.stdin", io.StringIO(input or "")), contextlib.redirect_stdout(out), \
+                contextlib.redirect_stderr(err):
+            try:
+                code = herd.main([str(a) for a in args])
+            except SystemExit as e:
+                if isinstance(e.code, str):  # sys.exit("message"): the message goes to stderr, the status is 1
+                    print(e.code, file=sys.stderr)
+                code = e.code if isinstance(e.code, int) else int(e.code is not None)
+            except Exception:  # a traceback and exit 1, as the real process would
+                traceback.print_exc()
+                code = 1
+    finally:
+        os.chdir(here)
+    return subprocess.CompletedProcess(args, code or 0, out.getvalue(), err.getvalue())
 
 
 def late_review(root, slug="t1"):
@@ -129,15 +154,28 @@ def hook_review(root, slug="t1", builder="opus", reviewer="opus", text="No Block
 
 
 class Base(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        """One template repository per test class; each test works in a copy of it (git init is not under test)."""
+        super().setUpClass()
+        cls.template = tempfile.TemporaryDirectory()
+        root = Path(cls.template.name)
+        git(root, "init", "-q")
+        git(root, "config", "user.email", "t@example.com")
+        git(root, "config", "user.name", "t")
+        (root / "README.md").write_text("x")
+        git(root, "add", "-A")
+        git(root, "commit", "-q", "-m", "init")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.template.cleanup()
+        super().tearDownClass()
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
-        git(self.root, "init", "-q")
-        git(self.root, "config", "user.email", "t@example.com")
-        git(self.root, "config", "user.name", "t")
-        (self.root / "README.md").write_text("x")
-        git(self.root, "add", "-A")
-        git(self.root, "commit", "-q", "-m", "init")
+        shutil.copytree(self.template.name, self.root, dirs_exist_ok=True)
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -244,8 +282,7 @@ class TestHygiene(Base):
 
     def test_hygiene_cli_prints_warning_and_exits_zero(self):
         self.task(TASK.replace("test -f greet.txt", "true"))
-        p = subprocess.run(["python3", str(Path(herd.__file__)), "check"], cwd=self.root,
-                           capture_output=True, text=True)
+        p = run_herd(self.root, "check")
         self.assertEqual(p.returncode, 0)
         self.assertIn("ok", p.stdout)
         self.assertIn("warning: C1", p.stdout)
@@ -307,11 +344,9 @@ class TestQuick(Base):
         self.assertEqual(herd.problems(self.root, "q1"), [])
 
     def test_cli_quick(self):
-        p = subprocess.run(["python3", str(Path(herd.__file__)), "init", "q1", "Fix typo", "--quick", "true"],
-                           cwd=self.root, capture_output=True, text=True)
+        p = run_herd(self.root, "init", "q1", "Fix typo", "--quick", "true")
         self.assertEqual(p.returncode, 0, p.stderr)
-        p = subprocess.run(["python3", str(Path(herd.__file__)), "init", "q2", "Fix auth/x.py", "--quick", "true"],
-                           cwd=self.root, capture_output=True, text=True)
+        p = run_herd(self.root, "init", "q2", "Fix auth/x.py", "--quick", "true")
         self.assertEqual(p.returncode, 1)
         self.assertIn("high", p.stderr)
 
@@ -414,8 +449,7 @@ class TestVerbatim(Base):
         self.assertIsNone(herd.verify(self.root, "t2")["human_not_verbatim"])
 
     def test_cli_request_flag_and_check(self):
-        run = lambda *a: subprocess.run(["python3", str(Path(herd.__file__)), *a], cwd=self.root,
-                                        capture_output=True, text=True)
+        run = lambda *a: run_herd(self.root, *a)
         self.assertEqual(run("init", "t1", "g", "--request", self.REQUEST).returncode, 0)
         (self.root / ".herd/tasks/t1/task.toml").write_text(
             'goal = "g"\n[[criteria]]\nid = "C1"\ntext = "reworded"\nsource = "human"\ncheck = "python3 -V"\n')
@@ -660,8 +694,7 @@ class TestNotes(Base):
         self.assertEqual(herd.problems(self.root, "t1"), [])
 
     def test_notes_added_after_the_last_verify_still_reach_done_and_status(self):
-        run = lambda *a: subprocess.run(["python3", str(Path(herd.__file__)), *a], cwd=self.root,
-                                        capture_output=True, text=True)
+        run = lambda *a: run_herd(self.root, *a)
         self.task(attacks=True)
         (self.root / "greet.txt").write_text("hello")
         self.assertEqual(run("verify").returncode, 0)
@@ -672,8 +705,7 @@ class TestNotes(Base):
         self.assertIn("late finding", (self.root / ".herd/tasks/t1/evidence.md").read_text())
 
     def test_cli_note_flags(self):
-        run = lambda *a: subprocess.run(["python3", str(Path(herd.__file__)), *a], cwd=self.root,
-                                        capture_output=True, text=True)
+        run = lambda *a: run_herd(self.root, *a)
         self.task()
         for flag, kind in (("--found", "found"), ("--fixed", "fixed"), ("--open", "open"), ("--tried", "tried")):
             p = run("note", flag, f"a {kind} note")
@@ -687,8 +719,7 @@ class TestNotes(Base):
 
 class TestSlugFallback(Base):
     def run_cli(self, *args):
-        return subprocess.run(["python3", str(Path(herd.__file__)), *args], cwd=self.root,
-                              capture_output=True, text=True)
+        return run_herd(self.root, *args)
 
     def finish_one(self, slug="t1"):
         herd.init_task(self.root, slug, "g")
@@ -785,14 +816,12 @@ class TestTiming(Base):
 class TestDetectCli(Base):
     def test_detect_prints_json(self):
         (self.root / "Cargo.toml").write_text("")
-        p = subprocess.run(["python3", str(Path(herd.__file__)), "detect"], cwd=self.root,
-                           capture_output=True, text=True)
+        p = run_herd(self.root, "detect")
         self.assertEqual(p.returncode, 0)
         self.assertEqual(json.loads(p.stdout)[0]["type"], "rust")
 
     def test_detect_empty_repo(self):
-        p = subprocess.run(["python3", str(Path(herd.__file__)), "detect"], cwd=self.root,
-                           capture_output=True, text=True)
+        p = run_herd(self.root, "detect")
         self.assertEqual(json.loads(p.stdout), [])
 
 
@@ -863,8 +892,7 @@ class TestGate(Base):
         self.assertIsNone(self.gate())  # after MAX_BLOCKS it lets the agent stop and say why
 
     def run_done(self):
-        return subprocess.run(["python3", str(Path(herd.__file__)), "done"], cwd=self.root,
-                              capture_output=True, text=True).returncode
+        return run_herd(self.root, "done").returncode
 
 
 class TestCli(Base):
@@ -951,8 +979,7 @@ class TestCancel(Base):
             herd.cancel_task(self.root, "nope")
 
     def test_cli_cancel_and_status(self):
-        run = lambda *a: subprocess.run(["python3", str(Path(herd.__file__)), *a], cwd=self.root,
-                                        capture_output=True, text=True)
+        run = lambda *a: run_herd(self.root, *a)
         run("init", "t1", "g")
         p = run("cancel", "--reason", "superseded")
         self.assertEqual(p.returncode, 0, p.stderr)
@@ -1037,15 +1064,14 @@ class TestZeroTests(Base):
         self.attacks()
         herd.verify(self.root, "t1")
         self.assertEqual(herd.problems(self.root, "t1"), [])  # advisory: the gate does not block on it
-        p = subprocess.run(["python3", str(Path(herd.__file__)), "done"], cwd=self.root, capture_output=True, text=True)
+        p = run_herd(self.root, "done")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         (self.root / ".herd/tasks/t1/task.toml").write_text(TASK.replace("test -f greet.txt", "test -n x"))
         self.assertNotIn("zero tests", herd.report(herd.verify(self.root, "t1")))
 
     def test_cli_verify_marks_the_line(self):
         self.task("python3 -c \"print('collected 0 items')\"")
-        p = subprocess.run(["python3", str(Path(herd.__file__)), "verify"], cwd=self.root,
-                           capture_output=True, text=True)
+        p = run_herd(self.root, "verify")
         self.assertEqual(p.returncode, 0)
         self.assertIn("C1 passing (ran zero tests)", p.stdout)
 
@@ -1054,8 +1080,7 @@ class TestAttacks(Base):
     """On the standard route `herd done` needs a recorded attempt for each standard attack."""
 
     def run_cli(self, *args):
-        return subprocess.run([sys.executable, str(Path(herd.__file__)), *args], cwd=self.root,
-                              capture_output=True, text=True)
+        return run_herd(self.root, *args)
 
     def test_done_and_gate_refuse_until_every_attack_is_recorded(self):
         self.task()
@@ -1157,8 +1182,7 @@ class TestTaskBranch(Base):
     """A plain `herd init` puts the work on its own branch herd/<slug>, cut from the current one."""
 
     def cli(self, *args, cwd=None):
-        return subprocess.run([sys.executable, str(Path(herd.__file__)), *args], cwd=cwd or self.root,
-                              capture_output=True, text=True)
+        return run_herd(cwd or self.root, *args)
 
     def branch(self, root=None):
         return subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=root or self.root,
@@ -1219,8 +1243,7 @@ class TestAttackChecks(Base):
     """Each standard attack names a command; herd verify runs it; the gate counts only passing ones."""
 
     def cli(self, *args):
-        return subprocess.run([sys.executable, str(Path(herd.__file__)), *args], cwd=self.root,
-                              capture_output=True, text=True)
+        return run_herd(self.root, *args)
 
     def ready(self):
         self.task()
@@ -1807,8 +1830,7 @@ class TestWorktree(Base):
         self.herd("init", "t1", "Write out.txt", "--worktree")
         sub = self.wt("t1") / "deep" / "dir"
         sub.mkdir(parents=True)
-        p = subprocess.run([sys.executable, str(Path(herd.__file__)), "gate"], cwd=self.root,
-                           input=json.dumps({"cwd": str(sub)}), capture_output=True, text=True)
+        p = run_herd(self.root, "gate", input=json.dumps({"cwd": str(sub)}))
         self.assertIn('"decision": "block"', p.stdout)
         self.assertIn("t1", p.stdout)
 
@@ -1835,8 +1857,7 @@ class TestWorktree(Base):
         deeper = pkg / "src"
         deeper.mkdir()
         self.assertIn("t1", self.herd("verify", cwd=deeper).stdout + self.herd("status", cwd=deeper).stdout)
-        gate = subprocess.run([sys.executable, str(Path(herd.__file__)), "gate"], cwd=self.root,
-                              input=json.dumps({"cwd": str(deeper)}), capture_output=True, text=True)
+        gate = run_herd(self.root, "gate", input=json.dumps({"cwd": str(deeper)}))
         self.assertIn('"decision": "block"', gate.stdout)
         p = self.herd("init", "t2", "Write out.txt", "--worktree", cwd=pkg)
         self.assertEqual(p.returncode, 0, p.stderr)
@@ -1867,8 +1888,7 @@ class TestBudgets(Base):
         (self.root / "greet.txt").write_text("hello")
 
     def cli(self, *args):
-        p = subprocess.run([sys.executable, str(Path(herd.__file__)), *args], cwd=self.root,
-                           capture_output=True, text=True)
+        p = run_herd(self.root, *args)
         out = p.stdout.strip().splitlines()
         if args[:1] == ("verify",):  # 0.4.0: one summary line for `herd check` warnings, budgeted on its own
             warn = [line for line in out if "herd check warning" in line]

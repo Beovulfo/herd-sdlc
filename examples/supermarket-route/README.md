@@ -22,7 +22,7 @@ The Herd plugin is installed from this repository, so it ships this folder, incl
 - every other run of the same leg, including its log and error files;
 - the network (`WebFetch`, `WebSearch`, and outbound connections from Bash).
 
-It refuses to start if the root is inside your home folder, if the root exists, or if a copy of the hidden verifier or a probe (`verify_general.py`, `robustness_probe.py`, `probe6.py`) sits under `/tmp`, `/private/tmp` or `$TMPDIR` where a run could read it. Each run gets its own empty git repository, git config and plugin copy. The plugin copy is built with `git archive` of the tag's `plugin/` folder (0.12.2 and later), or, for older tags, of the whole tree without `examples/`, `tests/` and `docs/`.
+It refuses to start if the root is inside your home folder, if the root exists, or if a copy of any task's hidden verifier, probe or reference solver (`verify_general.py`, `robustness_probe.py`, `probe6.py`, `bus_verify.py`, `bus_probe.py`, `bus_reference.py`) sits under `/tmp`, `/private/tmp` or `$TMPDIR` where a run could read it. Each run gets its own empty git repository, git config and plugin copy. The plugin copy is built with `git archive` of the tag's `plugin/` folder (0.12.2 and later), or, for older tags, of the whole tree without `examples/`, `tests/` and `docs/`. `--task` (`supermarket-route` or `bus-transfer`, a name or a path) supplies that task's `prompt.md` unless `--prompt` is given.
 
 ```
 python3 examples/supermarket-route/verifier/run_leg.py --name haiku-herd-v0.12.1 --runs 6 \
@@ -41,7 +41,7 @@ After a run finishes, audit its log:
 python3 examples/supermarket-route/verifier/leak_audit.py RUN.jsonl --work <root>/run-N/work
 ```
 
-The audit does two things. It reports what the sandbox blocked: any tool result with a `<sandbox_violations>` block, `Operation not permitted` or `denied by your permission settings` (a blocked attempt is still a finding), and any `WebFetch` or `WebSearch` call, in the main run and in subagents. It also proves the run used the isolation settings: it reads `<root>/run-N/settings.json` (or `--settings FILE`) and reports `not isolated` unless the sandbox is on, unsandboxed commands are off, and the deny rules for `~/`, `Read(~/**)`, `WebFetch` and `WebSearch` are present. It does not try to read paths from commands: shell text cannot be parsed completely. The sandbox is the guard, and `--selftest` shows it blocks reads on your machine.
+The audit does three things. It reports what the sandbox blocked: any tool result with a `<sandbox_violations>` block, `Operation not permitted` or `denied by your permission settings` (a blocked attempt is still a finding), and any `WebFetch` or `WebSearch` call, in the main run and in subagents. It also proves the run used the isolation settings: it reads `<root>/run-N/settings.json` (or `--settings FILE`) and reports `not isolated` unless the sandbox is on, unsandboxed commands are off, and the deny rules for `~/`, `Read(~/**)`, `WebFetch` and `WebSearch` are present. It does not try to read paths from commands: shell text cannot be parsed completely. The sandbox is the guard, and `--selftest` shows it blocks reads on your machine. Third, it reports any file in the `--work` folder named like a hidden file of any task.
 
 Do not put the root directly in `/tmp`: every other entry of the root's parent is denied, which would include Claude Code's own scratch folder. The default root is `$TMPDIR/herd-bench/<name>`.
 

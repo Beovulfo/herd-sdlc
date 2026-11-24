@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -2036,6 +2037,149 @@ class TestOldPython(Base):
         p = self.run_old("status")
         self.assertEqual(p.returncode, 1)
         self.assertIn("herd needs Python 3.11 or newer", p.stderr)
+
+
+FIRST_ATTACK = next(iter(herd.ATTACKS))
+
+
+class TestVerifyOnly(Base):
+    """`herd verify --only <id>`: one check, nothing written, never counts for the gate."""
+
+    def run_cli(self, *args):
+        p = subprocess.run(["python3", str(Path(herd.__file__)), *args], cwd=self.root,
+                           capture_output=True, text=True)
+        return p.returncode, p.stdout, p.stderr
+
+    def state(self):
+        d = self.root / ".herd/tasks/t1"
+        return {p.name: p.read_bytes() for p in d.iterdir() if p.is_file()}
+
+    def test_only_writes_nothing(self):
+        self.task(attacks=True)
+        herd.verify(self.root, "t1")  # the red run, C1 failing
+        rc, out, _ = self.run_cli("verify", "--only", "C1")
+        self.assertEqual(rc, 1)
+        self.assertIn("C1 failing", out)
+        (self.root / "greet.txt").write_text("hello")
+        before = self.state()
+        rc, out, _ = self.run_cli("verify", "--only", "C1")
+        self.assertEqual(rc, 0)
+        self.assertRegex(out, r"C1 passing \(\d+(\.\d+)? s\)")
+        self.assertEqual(self.state(), before)  # evidence.json, evidence.md, green.json, fails.json: none touched
+
+    def test_only_runs_an_attack_by_name(self):
+        self.task(attacks=True)
+        herd.verify(self.root, "t1")
+        before = self.state()
+        rc, out, _ = self.run_cli("verify", "--only", FIRST_ATTACK)
+        self.assertEqual(rc, 0)
+        self.assertIn(f"{FIRST_ATTACK} passing", out)
+        self.assertEqual(self.state(), before)
+
+    def test_only_uses_the_latest_attack_note(self):
+        self.task()
+        herd.verify(self.root, "t1")
+        a = FIRST_ATTACK
+        herd.add_note(self.root, "t1", "tried", "old", attack=a, check="false")
+        herd.add_note(self.root, "t1", "tried", "new", attack=a, check=OK)
+        self.assertEqual(self.run_cli("verify", "--only", a)[0], 0)
+
+    def test_only_timeout_prints_as_failing(self):
+        self.task()
+        herd.verify(self.root, "t1")
+        herd.add_note(self.root, "t1", "tried", "slow", attack=FIRST_ATTACK, check="sleep 5", timeout=0.2)
+        rc, out, _ = self.run_cli("verify", "--only", FIRST_ATTACK)
+        self.assertEqual(rc, 1)
+        self.assertIn("failing", out)
+        self.assertIn("timeout", out)
+
+    def test_only_does_not_satisfy_gate(self):
+        self.task(attacks=True)
+        (self.root / "greet.txt").write_text("hello")
+        herd.verify(self.root, "t1")
+        (self.root / "greet.txt").write_text("changed")  # an edit after the full verify
+        self.assertEqual(self.run_cli("verify", "--only", "C1")[0], 0)
+        self.assertIn("stale", herd.gate(self.root, {})["reason"])
+        self.assertNotEqual(self.run_cli("done")[0], 0)  # herd done still refuses stale evidence
+        self.assertTrue((self.root / ".herd/active").exists())
+
+    def test_only_unknown_id(self):
+        self.task(attacks=True)
+        herd.verify(self.root, "t1")
+        rc, out, err = self.run_cli("verify", "--only", "C9")
+        self.assertEqual(rc, 1)
+        for name in ("C1", "C2", FIRST_ATTACK):
+            self.assertIn(name, out + err)
+
+    def test_only_before_red_refuses(self):
+        self.task()
+        rc, out, err = self.run_cli("verify", "--only", "C1")
+        self.assertEqual(rc, 1)
+        self.assertIn("herd verify", out + err)
+        self.assertFalse((self.root / ".herd/tasks/t1/red.json").exists())
+        self.assertFalse((self.root / ".herd/tasks/t1/evidence.json").exists())
+
+    def test_only_needs_an_id(self):
+        self.task()
+        rc, _, err = self.run_cli("verify", "--only")
+        self.assertEqual(rc, 1)
+        self.assertIn("usage: herd verify", err)
+
+    def test_skill_verify_points(self):
+        text = (Path(herd.__file__).parent.parent / "skills/run/SKILL.md").read_text()
+        step = re.search(r"^8\. \*\*Verify\.\*\*.*$", text, re.M).group(0)
+        self.assertNotIn("after every change", step)
+        self.assertIn("once the work is done and after each review fix", step)
+        self.assertIn("herd verify --only", step)
+
+    def test_only_bad_input_ends_with_a_message(self):
+        self.task()
+        herd.verify(self.root, "t1")
+        for args in (["--only", ""], ["--only", "c1"], ["--only", "C1; rm -rf x"], ["t1", "--only", "nope"],
+                     ["--only", "C1", "--only", "C2"]):
+            rc, out, err = self.run_cli("verify", *args)
+            self.assertIn(rc, (0, 1), args)
+            self.assertNotIn("Traceback", out + err, args)
+        rc, _, err = self.run_cli("verify", "nosuchtask", "--only", "C1")
+        self.assertEqual(rc, 1)
+        self.assertNotIn("Traceback", err)
+
+    def test_only_with_a_slug_and_verbose(self):
+        self.task()
+        herd.verify(self.root, "t1")
+        (self.root / "greet.txt").write_text("hello")
+        rc, out, _ = self.run_cli("verify", "t1", "--verbose", "--only", "C1")
+        self.assertEqual((rc, out.split()[:2]), (0, ["C1", "passing"]))
+
+    def test_only_collision_the_latest_attack_note_wins_both_ways(self):
+        self.task()
+        herd.verify(self.root, "t1")
+        herd.add_note(self.root, "t1", "tried", "good", attack=FIRST_ATTACK, check=OK)
+        herd.add_note(self.root, "t1", "tried", "later and broken", attack=FIRST_ATTACK, check="false")
+        self.assertEqual(self.run_cli("verify", "--only", FIRST_ATTACK)[0], 1)
+        herd.add_note(self.root, "t1", "tried", "n/a: nothing to test", attack="collision")
+        rc, out, _ = self.run_cli("verify", "--only", "collision")  # an n/a note has no command to run
+        self.assertEqual(rc, 1)
+        self.assertIn("no criterion or attack", out)
+
+    def test_only_one_bad_part_other_checks_do_not_matter(self):
+        self.task()
+        herd.verify(self.root, "t1")
+        herd.add_note(self.root, "t1", "tried", "broken", attack="collision", check="false")
+        (self.root / "greet.txt").write_text("hello")
+        self.assertEqual(self.run_cli("verify", "--only", "C1")[0], 0)  # C2 is unchecked, collision fails
+        self.assertEqual(self.run_cli("verify", "--only", "C2")[0], 1)  # an unchecked criterion is not passing
+
+    def test_only_recount_reports_the_real_time(self):
+        self.task()
+        herd.verify(self.root, "t1")
+        herd.add_note(self.root, "t1", "tried", "slow", attack=FIRST_ATTACK, check="python3 -c 'import time; time.sleep(1.2)'")
+        began = time.monotonic()
+        rc, out, _ = self.run_cli("verify", "--only", FIRST_ATTACK)
+        wall = time.monotonic() - began
+        secs = int(re.search(r"\((\d+) s\)", out).group(1))
+        self.assertEqual(rc, 0)
+        self.assertTrue(1 <= secs <= wall + 1, (secs, wall))
 
 
 if __name__ == "__main__":

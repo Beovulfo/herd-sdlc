@@ -263,6 +263,7 @@ class TestReviewerSaw(ReviewBase):
         return self.state()
 
     def test_a_review_that_saw_nothing_does_not_count(self):
+        self.lift = True
         self.ready()
         for calls in ([], [("Grep", {"pattern": "f"})], [("Bash", {"command": "git diff --stat"})],
                       [("Bash", {"command": "git show --name-only HEAD"})], [("Bash", {"command": "git log -3"})],

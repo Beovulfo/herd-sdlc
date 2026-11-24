@@ -2,6 +2,14 @@
 
 All notable changes to Herd. Versions follow `plugin/.claude-plugin/plugin.json`.
 
+## Unreleased
+
+No plugin file changed, so no version bump. Benchmark 2, a bus transfer planner (issue #57), is built; no leg has run yet.
+
+- **Added:** `examples/bus-transfer/`: `prompt.md` (the median-person wording), a README (method, isolation, how to score), and `verifier/` with the hidden verifier `bus_verify.py` (hand, random, grid, radial, clusters and overnight networks at sizes S to XL; every journey checked against the timetable, the change time and an oracle's earliest arrival; "not possible" accepted only when the oracle finds none), the robustness probe `bus_probe.py` (6 bad inputs), the reference solver and two wrong solvers `bus_reference.py` (static Dijkstra, no change time), `ADAPTER_SPEC.md` and `test_bus_verify.py`.
+- **Changed:** `run_leg.py` takes `--task bus-transfer` or `--task supermarket-route` (a name or a path); the task supplies `prompt.md` unless `--prompt` is given, and the hidden file names of every task are refused where a run could read them. `leak_audit.py` also reports a hidden verifier file found in a run's work folder and takes `--task`. CI now runs `test_leak_audit` and `test_bus_verify`.
+- **Known limits:** the verifier judges one service day with one global change time; L and XL are generated and solved by the oracle in tests but not run through a full solver.
+
 ## 0.12.10
 
 Installs no longer ship `examples/`. `.claude-plugin/marketplace.json` had `"source": "./"`, so an install copied the whole repository into the plugin cache, including `examples/` (the hidden benchmark verifier and old solutions). The 0.12.1 leak audit found this as a weakness of benchmark runs. Verified live: a fresh install into a temporary `CLAUDE_CONFIG_DIR` before the move held `examples/`, `tests/` and `docs/`; after it holds only `hooks`, `agents`, `skills`, `scripts`, `assets`, `LICENSE` and `NOTICE`, and `tests.test_layout` checks that.

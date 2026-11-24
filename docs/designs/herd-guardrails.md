@@ -172,7 +172,7 @@ As built, after a fresh review: the hook counts only a main session log Herd saw
 
 **B6. Skill.** `skills/run/SKILL.md` step 7 becomes: "Spawn the `herd-reviewer` subagent with a model one tier above yours (`herd status` prints it; on your own model in 0.8.0 and 0.9.0), giving it only the goal, criteria, `test_budget` and the diff. The hook records the review. Fix Blocker and Major findings and review again, at most 3 rounds. There is no skip: if no reviewer can run, say so and stop; Herd records why." `herd status` prints `Review: needs <tier> or higher (builder on <tier>)`.
 
-**B7. Escalation.** Three hook-recorded reviews with `FAIL` since green adds the task to the existing escalation list with cause `review`, so the gate says to ask the human one question.
+**B7. Escalation.** (Changed in 0.12.3: the limit is `MAX_REVIEW_ROUNDS = 2` hook-recorded reviews of any kind since the last counting PASS, issue #45.) Three hook-recorded reviews with `FAIL` since green adds the task to the existing escalation list with cause `review`, so the gate says to ask the human one question.
 
 ### Part C: stop record
 

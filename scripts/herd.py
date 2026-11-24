@@ -2250,8 +2250,9 @@ def guard(root, hook):
     if not slug or not _dir(root, slug).exists() or cancelled(root, slug):
         return None
     if "agent_id" not in hook:  # a subagent's own call: the main session is what the review hook asks about
-        _see_session(root, slug, hook.get("transcript_path"))  # issue #40: `herd init` through $H or an alias
-    tool, inp = hook.get("tool_name"), hook.get("tool_input")  # is unreadable to the pre-init hook
+        # issue #40: `herd init` through $H or an alias is unreadable to the pre-init hook
+        _see_session(root, slug, hook.get("transcript_path"))
+    tool, inp = hook.get("tool_name"), hook.get("tool_input")
     inp, cwd = inp if isinstance(inp, dict) else {}, str(hook.get("cwd") or root)
     globs, commands = guard_config(root)
     logs = hook.get("transcript_path")

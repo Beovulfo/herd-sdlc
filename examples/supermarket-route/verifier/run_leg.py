@@ -2,8 +2,11 @@
 """Launch N headless runs of one benchmark leg, each isolated from the hidden verifier, the published
 solutions, the other runs and the network. See the "Run isolation" section of ../README.md.
 
-  python3 run_leg.py --name haiku-herd-v0.12.1 --runs 6 --model claude-haiku-5-5 --prompt PROMPT_FILE \
+  python3 run_leg.py --name haiku-herd-v0.12.1 --runs 6 --model claude-haiku-5-5 (--task TASK | --prompt PROMPT_FILE) \
       [--herd-tag v0.12.1] [--root DIR] [--budget 10] [--dry-run]
+
+TASK is a folder under examples/ (supermarket-route, bus-transfer), as a name or a path; it supplies
+examples/TASK/prompt.md unless --prompt is given. The hidden files of every task are refused in a run's reach.
   python3 run_leg.py --selftest
 
 Prove a finished run stayed inside its sandbox with leak_audit.py.
@@ -19,9 +22,21 @@ import sys
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-PLANTED_NAMES = {"verify_general.py", "robustness_probe.py", "probe6.py"}
+EXAMPLES = SCRIPT_DIR.parent.parent
+# File names of each task's hidden verifier and probes: no copy may sit where a run can read it.
+HIDDEN = {"supermarket-route": {"verify_general.py", "robustness_probe.py", "probe6.py"},
+          "bus-transfer": {"bus_verify.py", "bus_probe.py", "bus_reference.py"}}
+PLANTED_NAMES = set().union(*HIDDEN.values())
 TOOLS = "Bash,Read,Write,Edit,MultiEdit,Glob,Grep,Agent,Skill"
 GITCONFIG = "[user]\n\tname = bench\n\temail = bench@example.com\n"
+
+
+def resolve_task(value):
+    """The task folder name for a name or a path such as examples/bus-transfer/, or ValueError listing the tasks."""
+    name = Path(str(value)).name
+    if name not in HIDDEN or not (EXAMPLES / name).is_dir():
+        raise ValueError(f"unknown task {value!r}; known tasks: {', '.join(sorted(HIDDEN))}")
+    return name
 
 
 def parse(argv):
@@ -30,6 +45,7 @@ def parse(argv):
     ap.add_argument("--runs", type=int)
     ap.add_argument("--model")
     ap.add_argument("--prompt")
+    ap.add_argument("--task")
     ap.add_argument("--herd-tag")
     ap.add_argument("--root")
     ap.add_argument("--budget", type=float, default=10)
@@ -140,18 +156,30 @@ def start(cmd, run_dir, log, err, env):
                                 stdout=out, stderr=errf, start_new_session=True)
 
 
+def load_prompt(ns):
+    """(prompt text, None), or (None, reason). Resolves --task into ns.task and, when --prompt is absent, ns.prompt."""
+    try:
+        if ns.task:
+            ns.task = resolve_task(ns.task)
+        ns.prompt = ns.prompt or str(EXAMPLES / ns.task / "prompt.md")
+        return Path(ns.prompt).read_text(), None
+    except ValueError as e:
+        return None, str(e)
+    except OSError as e:
+        return None, f"cannot read the prompt file {ns.prompt}: {e.strerror}"
+
+
 def run(argv, env=None, scan_dirs=None):  # noqa: C901
     env = dict(os.environ if env is None else env)
     ns = parse(argv)
     if ns.selftest:
         return selftest(env)
-    if not (ns.name and ns.runs and ns.runs > 0 and ns.model and ns.prompt):
-        print("--name, --runs (at least 1), --model and --prompt are required", file=sys.stderr)
+    if not (ns.name and ns.runs and ns.runs > 0 and ns.model and (ns.prompt or ns.task)):
+        print("--name, --runs (at least 1), --model and --prompt or --task are required", file=sys.stderr)
         return 2
-    try:
-        prompt = Path(ns.prompt).read_text()
-    except OSError as e:
-        print(f"refused: cannot read the prompt file {ns.prompt}: {e.strerror}", file=sys.stderr)
+    prompt, error = load_prompt(ns)
+    if error:
+        print(f"refused: {error}", file=sys.stderr)
         return 2
     tmpdir = env.get("TMPDIR") or "/tmp"
     root = Path(os.path.realpath(ns.root or os.path.join(tmpdir, "herd-bench", ns.name)))

@@ -9,7 +9,7 @@ import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 
-LIMIT_SECONDS = 30
+LIMIT_SECONDS = 50
 MIN_TESTS = 467  # the count before the speed-up
 
 

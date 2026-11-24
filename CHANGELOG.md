@@ -4,7 +4,7 @@ All notable changes to Herd. Versions follow `.claude-plugin/plugin.json`.
 
 ## Unreleased
 
-Faster tests (issue #32). Tests only: nothing under `scripts/`, `hooks/`, `skills/` or `agents/` changed, so the plugin version is not bumped. The 30 s goal was not reached; the best measured number is below, with the reason.
+Faster tests (issue #32). Tests only: nothing under `scripts/`, `hooks/`, `skills/` or `agents/` changed, so the plugin version is not bumped. The 30 s goal was not reached; the owner accepted about 45 s ("Regarding 32, 45 seconds is fine, let's merge when all green", relayed by Collie), so the suite-speed limit is 50 s (45 s measured plus margin).
 
 - **Done:** each test class builds one template git repository and each test copies it (`shutil.copytree`) instead of five git commands in `setUp` (`tests/test_herd_cli.py`, `tests/test_harness_rules.py`). 23 `python3 scripts/herd.py` subprocess call sites in those two files now call `herd.main(argv)` in process through `run_herd` (captured stdout, stderr, exit code). Test count and assertions are unchanged: 467 tests before and after.
 - **End-to-end tests that keep a real process:** `TestCli.run_cli` in `tests/test_herd_cli.py` (init, status, done, gate, triage, usage and help), `test_gate_reads_hook_json_from_stdin`, the env tests, the concurrency tests, the old-Python tests, and every subprocess hook test in `tests/test_herd_guard.py`, `tests/test_herd_lint.py` and `tests/test_herd_review.py`.

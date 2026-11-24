@@ -1,0 +1,32 @@
+# Executor: herd-sdlc-engineer. Any change to Herd. Node details: the agent file section named in `ref`.
+name: change
+start: ground
+nodes:
+  ground:        {type: act, ref: "Ground check", does: "Read CLAUDE.md, CHANGELOG top, PRD status, designs, backlog, memory, git state vs origin/main, open PRs, sibling notes", parallel: [CLAUDE.md, CHANGELOG.md, docs/PRD.md, docs/designs, docs/backlog.md], next: scope}
+  scope:         {type: think, ref: "Principles", does: "Quote Toni's words; classify bug, feature, docs, benchmark or release; list files it touches", next: in_lane}
+  in_lane:       {type: check, does: "Touches only what Toni asked and no file another open PR or session owns", pass: design_needed, fail: gate_scope}
+  gate_scope:    {type: gate, ask: "This overlaps an open PR or goes beyond the ask: go ahead, narrow it, or wait?", approve: design_needed, edit: scope, skip: report}
+  design_needed: {type: check, does: "New behaviour, file format or hook, or a change to what herd done accepts", pass: design, fail: plan}
+  design:        {type: think, ref: "Design", does: "EGM-style doc in docs/designs/: goals with named tests, not proven, alternatives", next: design_review}
+  design_review: {type: act, does: "Fresh-context review of the doc (EGM reviewers); list Blocker, Major, Nit", next: design_ok}
+  design_ok:     {type: check, does: "No Blocker or Major left; every goal has a named check; Toni's ask met word for word", pass: gate_design, fail: design, max: 2, on_exhausted: gate_design}
+  gate_design:   {type: gate, ask: "Approve the design before code? (open findings listed)", approve: plan, edit: design, skip: report}
+  plan:          {type: think, ref: "Enforce by code", does: "Per rule, code or hook versus skill text; cost per run and per tool call", next: code_first}
+  code_first:    {type: check, does: "Every new rule is code or a hook, or the plan says why not; no word list on agent text; nothing specific to the benchmark", pass: build, fail: plan, max: 2, on_exhausted: gate_scope}
+  build:         {type: act, ref: "Build", does: "Run /herd:run in a Herd worktree on herd/<slug>; tests first", next: checks}
+  checks:        {type: check, does: "unittest, ruff, plugin validate, graph validate and herd done pass; outputs quoted", pass: quality_risk, fail: build, max: 3, on_exhausted: gate_stuck}
+  gate_stuck:    {type: gate, ask: "Stuck after the retries: one question with 2 or 3 numbered options", approve: build, skip: report}
+  quality_risk:  {type: check, ref: "Quality over tokens", does: "Change cuts skill text, removes or relaxes a check, or moves a default the benchmark depends on", pass: benchmark, fail: sync}
+  benchmark:     {type: sub, graph: benchmark, does: "Smoke leg on the changed version", next: bench_ok}
+  bench_ok:      {type: check, does: "Hidden verifier and probe scores not below the last release", pass: sync, fail: build, max: 2, on_exhausted: gate_stuck}
+  sync:          {type: act, ref: "Docs sync", does: "README, skills, CLAUDE.md, PRD status, CHANGELOG why and Known limits, plugin.json version", next: stale}
+  stale:         {type: check, does: "No stale code, comments or docs; no check done twice; skill words did not grow when a rule moved to code", pass: privacy, fail: sync, max: 2, on_exhausted: privacy}
+  privacy:       {type: check, does: "No employer data, internal URLs, credentials or personal email; no emojis or em-dashes", pass: gate_push, fail: sync}
+  gate_push:     {type: gate, ask: "Commit as Beovulfo, push herd/<slug> and open a draft PR? (a request that already asked opens it)", approve: push, skip: learn}
+  push:          {type: act, side_effect: true, does: "Commit as Beovulfo, push through the gh credential helper, gh pr create --draft with evidence first", next: ci}
+  ci:            {type: check, does: "CI green on Python 3.11, 3.12 and 3.13", pass: gate_merge, fail: fix_ci, max: 2, on_exhausted: gate_stuck}
+  fix_ci:        {type: act, side_effect: true, does: "Fix the cause on the same branch and push", next: ci}
+  gate_merge:    {type: gate, ask: "Merge? Only Toni's words in this session open this; default no", approve: merge, skip: learn}
+  merge:         {type: act, side_effect: true, does: "Merge, then update the branches of the other pending PRs one by one", next: learn}
+  learn:         {type: act, ref: "Learning", does: "Turn each correction Toni made in this run into a rule in the agent file, with its source", next: report}
+  report:        {type: end, does: "Path taken; done, verified, not verified, pending; PR link; diff of the agent file"}

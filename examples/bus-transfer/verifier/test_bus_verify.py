@@ -5,6 +5,7 @@ import io
 import json
 import os
 import random
+import signal
 import subprocess
 import sys
 import tempfile
@@ -581,6 +582,78 @@ class TestOtherReading(unittest.TestCase):
             for q in c["queries"]:
                 if bv.oracle_arrival(c, q) is None:
                     self.assertFalse(bv.static_reachable(c, q["from"], q["to"]), (label, q))
+
+
+class ProbeClassify(Probe):
+    """Only a clear message with a non-zero exit counts as handled: a signal, silence or a traceback does not."""
+
+    def run_cli(self, code, sc="unknown_stop"):
+        root, _ = self.project()
+        return bp.classify(sc, ["-c", code], str(root))
+
+    def test_a_program_killed_by_a_signal_is_not_handled(self):
+        code = "import os, signal; os.kill(os.getpid(), signal.SIGTERM)"
+        self.assertEqual(self.run_cli(code), "signal")
+        self.assertEqual(self.run_cli(code, sc="normal"), "FAILS")
+
+    def test_a_non_zero_exit_with_no_output_is_not_handled(self):
+        self.assertEqual(self.run_cli("import sys; sys.exit(1)"), "no message")
+        self.assertEqual(self.run_cli("import sys; print('  ', file=sys.stderr); sys.exit(1)"), "no message")
+
+    def test_a_traceback_is_a_crash_and_a_clear_message_is_handled(self):
+        self.assertEqual(self.run_cli("raise KeyError('x')"), "CRASH")
+        self.assertEqual(self.run_cli("import sys; print('error: no such stop', file=sys.stderr); sys.exit(1)"),
+                         "clean error")
+
+    def test_a_silent_success_is_not_handled(self):
+        self.assertEqual(self.run_cli("import sys; sys.exit(0)"), "silent")
+
+    def test_signal_and_empty_exit_cost_their_probe_point_in_the_count(self):
+        root, mod = self.project(unknown="import os, signal; os.kill(os.getpid(), signal.SIGTERM)")
+        res = bp.run_probe(root, mod)
+        self.assertEqual(res[bp.SCENARIOS.index("unknown_stop")], "signal")
+        self.assertEqual(bp.handled(res), 5)
+        root, mod = self.project(unknown="sys.exit(1)")
+        res = bp.run_probe(root, mod)
+        self.assertEqual(res[bp.SCENARIOS.index("unknown_stop")], "no message")
+        self.assertEqual(bp.handled(res), 5)
+
+
+class TimeFormat(unittest.TestCase):
+    """The spec says how times are written; the verifier rejects a time that is not a whole number of minutes."""
+
+    def spec(self):
+        return (TASK / "verifier" / "ADAPTER_SPEC.md").read_text()
+
+    def test_the_spec_states_the_time_format_and_the_conversion_rule(self):
+        text = self.spec()
+        self.assertIn("## Time format", text)
+        section = text.split("## Time format", 1)[1].split("\n## ", 1)[0]
+        for phrase in ("whole minutes", "integer", "560.0", "HH:MM", "may convert", "must not"):
+            self.assertIn(phrase, section)
+        self.assertNotIn("—", text)
+
+    def test_a_float_arrival_is_rejected(self):
+        c = bv.hand_cases()[2]
+        q = c["queries"][0]
+        good = br.solve(c, q)
+        bv.validate_answer(c, q, good, 560)
+        with self.assertRaisesRegex(AssertionError, "whole number of minutes"):
+            bv.validate_answer(c, q, {**good, "arrival": 560.0}, 560)
+        with self.assertRaisesRegex(AssertionError, "whole number of minutes"):
+            bv.validate_answer(c, q, {**good, "arrival": True}, 560)
+
+    def test_a_float_leg_minute_is_rejected_and_the_case_fails(self):
+        c = bv.hand_cases()[2]
+        q = c["queries"][0]
+        good = br.solve(c, q)
+        for key in ("dep", "arr"):
+            bad = json.loads(json.dumps(good))
+            bad["legs"][0][key] = float(bad["legs"][0][key])
+            with self.assertRaisesRegex(AssertionError, "whole number of minutes"):
+                bv.validate_answer(c, q, bad, 560)
+            self.assertIn("whole number of minutes", bv.check_case(c, {"answers": [bad]}))
+        self.assertIsNone(bv.check_case(c, {"answers": [good]}))
 
 
 if __name__ == "__main__":

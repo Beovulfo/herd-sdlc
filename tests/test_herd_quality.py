@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 from scripts import herd
-from tests.test_harness_rules import APP_CHECK, NO_INPUTS, REQUEST, TASK, Base
+from tests.test_harness_rules import APP_CHECK, NO_INPUTS, REQUEST, TASK, Base, git
 from tests.test_herd_cli import transcript
 from tests.test_herd_review import ReviewBase
 
@@ -277,6 +277,8 @@ class TestReviewerSaw(ReviewBase):
 
     def test_a_review_that_saw_the_change_counts(self):
         self.ready()
+        git(self.root, "add", "app.py")  # tracked, so in git diff (a new untracked file is in none: see below)
+        git(self.root, "commit", "-q", "-m", "build")
         for calls in ([("Bash", {"command": "git diff"})], [("Bash", {"command": f"git -C {self.root} --no-pager diff HEAD~1"})],
                       [("Bash", {"command": f"cd {self.root} && git show HEAD"})], [("Bash", {"command": "git log -p -2"})],
                       [("Bash", {"command": "git diff --stat && git diff -- app.py"})],
@@ -291,6 +293,16 @@ class TestReviewerSaw(ReviewBase):
                       herd._review(herd.load_notes(self.root, "t1")))
         self.check([("Bash", {"command": "git diff"})])
         self.assertIn("ran git diff or git show, read 0 of 1 changed code file)", herd._review(herd.load_notes(self.root, "t1")))
+
+    def test_a_new_untracked_file_must_be_read_even_with_the_diff(self):  # 0.12.1: no git diff shows it
+        self.ready()  # app.py is new and untracked
+        ok, why = self.check([("Bash", {"command": "git diff"})])
+        self.assertFalse(ok)
+        self.assertEqual(why, "the reviewer printed the diff but did not read these new files, which no git diff "
+                              "shows: app.py: spawn herd-reviewer again with what `herd review-brief` prints")
+        self.assertIn("New files, in no `git diff`: read each one with Read: app.py", herd.review_brief(self.root, "t1"))
+        ok, _ = self.check([("Bash", {"command": "git diff"}), ("Read", {"file_path": str(self.root / "app.py")})])
+        self.assertTrue(ok)
 
     def test_every_changed_code_file_must_be_read_without_a_diff(self):
         self.ready()

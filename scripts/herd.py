@@ -1072,6 +1072,9 @@ def _tier_rule(root, slug, n):
         return False, f"the {which} model could not be read: {n.get('unread') or 'its tier is unknown'}"
     if n.get("saw") is None:
         return False, "the review was recorded before Herd 0.10.0 checked what the reviewer read: spawn herd-reviewer again"
+    if not n["saw"] and n.get("diff_seen") and n.get("new_unread"):  # 0.12.1: new files are in no git diff
+        return False, (f"the reviewer printed the diff but did not read these new files, which no git diff shows: "
+                       f"{', '.join(n['new_unread'])}: spawn herd-reviewer again with what `herd review-brief` prints")
     if not n["saw"]:
         missed = n.get("code_unread") or []
         more = (n.get("code_total") or 0) - (n.get("code_read") or 0) - len(missed)
@@ -1272,6 +1275,68 @@ def bad_refs(root, text):
     return out[:MAX_REFS]
 
 
+def untracked(root):
+    """Paths (relative to root) git does not track yet and does not ignore: in no `git diff`."""
+    return set(_git(root, "ls-files", "--others", "--exclude-standard").decode().splitlines())
+
+
+def review_files(root, slug):
+    """(the changed files a reviewer must read unless it prints the diff, or None when the changes cannot be told;
+    whether they are every changed file because no code file changed). The review hook counts against this list,
+    and `herd review-brief` prints it, so the brief and the check agree."""
+    start = _state(_dir(root, slug) / "start.json", {})
+    mine = task_changes(root, start, changed_since(root, start.get("head")))
+    code = None if mine is None else [f for f in mine if is_code(f, root)]
+    files = [f for f in mine or [] if not (f.lower().endswith(BUILT_EXT) or BUILT_DIRS & set(Path(f).parts))]
+    any_file = code == [] and bool(files)  # no code changed (tests, config, CI): every changed file but build output
+    return (files if any_file else code), any_file
+
+
+def pass_hint(root, slug, ev, notes):
+    """One line once a review that counts is recorded for this content: stop working, commit, `herd done`; and what
+    the review rule does with later edits at this risk. None otherwise."""
+    if (not ev or not review_needed(ev) or ev["summary"]["failing"] or _stale(root, slug, ev)
+            or not review_state(root, slug, ev, notes)[0]):
+        return None
+    later = ("at high risk any file you change after it needs another review (a commit alone does not)"
+             if (ev.get("risk") or {}).get("effective") == "high" else
+             "at medium risk it keeps counting after edits unless the risk rises to high, but no reviewer sees them")
+    return (f"Review passed and counts: fix only Blocker and Major findings, start no new work, commit and run "
+            f"`herd done`; {later}")
+
+
+def review_brief(root, slug):
+    """The reviewer's brief, assembled from Herd's records, for the builder to pass to herd-reviewer as it is: the
+    goal, the criteria with their checks, test_budget, known_limits, the request verbatim, the inputs, the files the
+    review hook will check were read, and the diff command from the commit `herd init` started from."""
+    task, d = load_task(root, slug), _dir(root, slug)
+    head = _state(d / "start.json", {}).get("head")
+    req = (d / "request.md").read_text() if (d / "request.md").exists() else None
+    files, any_file = review_files(root, slug)
+    out = ["Review this finished change for Herd. Judge only what you read and run.", "", f"Goal: {task.get('goal', '')}",
+           "", "Criteria (id, source, text, check):"]
+    out += [f"- {c.get('id', '?')} ({c.get('source', '?')}): {c.get('text', '')}"
+            + (f" Check: `{c['check']}`" if str(c.get("check") or "").strip() else " Check: none (unchecked)")
+            for c in task.get("criteria", []) if isinstance(c, dict)]
+    out += ["", f"Test budget: {task.get('test_budget') or 'none stated'}",
+            f"Known limits: {task.get('known_limits') or 'none stated'}"]
+    if isinstance(task.get("inputs"), list) and any(isinstance(x, dict) for x in task["inputs"]):
+        out.append(inputs_line(task["inputs"]))
+    out += ["", "The human's request, word for word:", req.strip() if req else "(none recorded)", ""]
+    if files is None:
+        out.append("Changed files: unknown (no commit at `herd init`): read the diff with `git diff HEAD` and "
+                   "`git status`.")
+    else:
+        what = "changed files (no code file changed)" if any_file else "changed code files"
+        out.append(f"Read every one of these {len(files)} {what} with Read before you judge, or print the whole diff:")
+        out += [f"- {f}" for f in files] or ["- (none)"]
+        out.append(f"Diff, committed and not: `git diff {head}`")
+        new = [f for f in files if f in untracked(root)]
+        if new:  # no git diff shows a file git does not track: the review hook needs these read either way
+            out.append("New files, in no `git diff`: read each one with Read: " + ", ".join(new))
+    return "\n".join(out) + "\n"
+
+
 def review_hook(root, hook):
     """SubagentStop hook for the herd-reviewer agent: record its review from the session logs, never from what
     an agent writes. Never blocks and prints nothing; other agents and stops with no active task do nothing."""
@@ -1307,19 +1372,16 @@ def review_hook(root, hook):
     unread = (f"the reviewer's log is not where Claude Code keeps it ({rev})" if not placed
               else None if tier else f"{model} matches no tier" if model else f"no model in the reviewer's log {rev}")
     diff, read = reviewer_saw(root, str(hook.get("cwd") or root), lines)
-    start = _state(_dir(root, slug) / "start.json", {})
-    mine = task_changes(root, start, changed_since(root, start.get("head")))
-    code = None if mine is None else [f for f in mine if is_code(f, root)]
-    files = [f for f in mine or [] if not (f.lower().endswith(BUILT_EXT) or BUILT_DIRS & set(Path(f).parts))]
-    any_file = code == [] and bool(files)  # no code changed (tests, config, CI): every changed file but build output
-    code = files if any_file else code
+    code, any_file = review_files(root, slug)
+    new = [f for f in code or [] if f in untracked(root) and f not in read]  # in no git diff: must be read
     extra = {"source": "hook", "tier": tier, "builder_tier": btier, "top": tier == tiers[-1],
              "verdict": found[1] if found else "none", "unread": unread or bwhy,
              # what the reviewer saw (0.10.0): it counts only if it printed the diff or read every changed code file
              "diff_seen": diff, "code_total": None if code is None else len(code),
              "code_read": None if code is None else sum(f in read for f in code),
              "code_unread": [f for f in code or [] if f not in read][:MAX_REFS], "any_file": any_file,
-             "saw": diff or code is None or all(f in read for f in code), "bad_refs": bad_refs(root, text)}
+             "new_unread": new[:MAX_REFS], "bad_refs": bad_refs(root, text),
+             "saw": code is None or all(f in read for f in code) or (diff and not new)}
     # a round, for escalation and the report: after all checks first passed, by a reviewer whose tier would count
     extra["round"] = (_dir(root, slug) / "green.json").exists() and _tier_rule(root, slug, dict(extra, verdict="PASS"))[0]
     add_review(root, slug, by=model or "an unknown model", text=_clip((text or "").strip() or "(no report)", REVIEW_CHARS),
@@ -2302,8 +2364,7 @@ def problems(root, slug):
         model = (re.search(r"Spawn herd-reviewer with model ([\w.-]+)", why or "") or [None, need])[1]
         out.append(f"review missing ({why}): risk is {risk}. Spawn the herd-reviewer subagent "
                    + (f"with model {model}" if model else "one tier above yours")
-                   + ", giving it only the goal, criteria, test_budget, the request, the inputs and the diff; the "
-                   "review hook records it")
+                   + ", giving it only what `herd review-brief` prints; the review hook records it")
     if ev.get("route") != "quick":
         ran = {(a["at"], a["text"], a.get("check")) for a in ev.get("attacks") or []}
         if any(n["kind"] == "tried" and n.get("attack") and (n["at"], n["text"], n.get("check")) not in ran
@@ -2413,6 +2474,8 @@ USAGE = {
     "note": 'herd note --found|--fixed|--open|--decision|--late-red|--human-change|--tried [--attack bad-input|collision|one-bad-part|recount --check "<command>" [--timeout S]] "text"',
     "review": 'herd review --by "<reviewer>" "<what they found>"   (a note; at medium and high risk only the review hook counts)',
     "review-hook": "herd review-hook   (the SubagentStop hook for herd-reviewer: records its review from the session logs)",
+    "review-brief": "herd review-brief [slug]   (the brief to pass to herd-reviewer as it is: criteria, request, "
+                    "inputs, the files it must read, the diff command)",
     "detect": "herd detect",
     "lint": "herd lint [--suggest]   (without --suggest: the PostToolUse hook, reads hook JSON on stdin)",
     "verify": "herd verify [slug] [--verbose]",
@@ -2543,6 +2606,9 @@ def main(argv):
                       + (" (and more: `herd check` lists them)" if len(w) > 1 else ""))
             for cid in ev.get("escalate") or []:
                 print(f"  {cid} failed {ESCALATE_AFTER} times in a row: ask the human one question (see the run skill)")
+            hint = pass_hint(root, ev["task"], ev, load_notes(root, ev["task"]))
+            if hint:
+                print(f"  {hint}")
             return 1 if s["failing"] or any(st == "failing" for st, _ in states.values()) else 0
         elif cmd == "status":
             as_json = "--json" in args
@@ -2564,8 +2630,9 @@ def main(argv):
                 print(f"cancelled at {c['at']}" + (f": {c['reason']}" if c["reason"] else ""))
                 return 0
             if ev and review_needed(ev):
+                hint = pass_hint(root, slug, ev, load_notes(root, slug))
                 need, builder = review_need(root, slug)
-                print(f"Review: needs {need} or higher (builder on {builder})" if need
+                print(hint if hint else f"Review: needs {need} or higher (builder on {builder})" if need
                       else f"Review: needs a reviewer one tier above the builder ({builder})")
             probs = problems(root, slug)
             print("not done: " + "; ".join(probs) if probs else "done: evidence is fresh and passing")
@@ -2579,6 +2646,8 @@ def main(argv):
                 raise UsageError
             add_review(root, _slug_arg(root, []), by=by, text=args[0])
             print(f"review recorded by {by}: a note; at medium and high risk only a review the hook records counts")
+        elif cmd == "review-brief":
+            print(review_brief(root, _slug_arg(root, args)), end="")
         elif cmd == "review-hook":  # SubagentStop hook: never blocks the session
             try:
                 raw = sys.stdin.read() if not sys.stdin.isatty() else ""

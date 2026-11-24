@@ -61,7 +61,7 @@ _LOGS = [0]
 
 
 def transcript(root, models, name="main", text="done", model="claude-{}-5-5", before_start=False,
-               synthetic_last=False, handback=False, path=None, saw=True):
+               synthetic_last=False, handback=False, path=None, saw=True, reads=()):
     """A Claude Code session log like the ones in spike S3: one assistant line per tier name in models, the last
     one carrying text (or, with handback, a SubagentHandback report; with text None, no text at all), after a
     `git diff` call unless saw is False. It lives under .herd/, which the evidence fingerprint ignores."""
@@ -85,7 +85,8 @@ def transcript(root, models, name="main", text="done", model="claude-{}-5-5", be
         elif last:
             content = [{"type": "text", "text": text}]
         if last and saw:
-            content = [{"type": "tool_use", "name": "Bash", "input": {"command": "git diff"}}] + content
+            content = ([{"type": "tool_use", "name": "Bash", "input": {"command": "git diff"}}]
+                       + [{"type": "tool_use", "name": "Read", "input": {"file_path": str(r)}} for r in reads] + content)
         rows.append({"type": "assistant", "timestamp": ts, "message": {"model": model.format(tier), "content": content}})
     if synthetic_last:
         rows.append({"type": "assistant", "timestamp": ts, "message": {"model": "<synthetic>", "content": []}})
@@ -113,8 +114,10 @@ def hook_review(root, slug="t1", builder="opus", reviewer="opus", text="No Block
         rev.parent.mkdir(parents=True, exist_ok=True)
         rev.write_text("".join(line + "\n" for line in reviewer_lines))
     else:
+        files, _ = herd.review_files(Path(root), slug) if (herd._dir(root, slug) / "start.json").exists() else ([], 0)
+        new = [Path(root) / f for f in files or [] if f in herd.untracked(Path(root))]  # in no git diff (0.12.1)
         transcript(root, reviewer, text=text, model=model, synthetic_last=synthetic_last, handback=handback, path=rev,
-                   saw=saw)
+                   saw=saw, reads=new if saw else ())
     hook = {"session_id": sid, "transcript_path": str(main), "cwd": str(root), "agent_id": aid,
             "agent_type": agent_type, "agent_transcript_path": str(rev), "hook_event_name": "SubagentStop",
             "stop_hook_active": False}

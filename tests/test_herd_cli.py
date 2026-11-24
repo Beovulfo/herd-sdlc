@@ -1862,8 +1862,8 @@ class TestBudgets(Base):
     # (3) short skills, rare parts in reference files read only when needed
     def test_skill_word_budgets(self):
         # quality first: 0.3.1 raised run from 800 when the break-it attacks moved back into it
-        budget = {"run": 830, "criteria": 450, "evidence": 450}  # 0.4.0: rules the CLI enforces left the skill;
-        # 0.5.0: +10 for resuming from the stop record
+        budget = {"run": 845, "criteria": 450, "evidence": 450}  # 0.4.0: rules the CLI enforces left the skill;
+        # 0.5.0: +10 for resuming from the stop record; 0.6.0: +15 for the guard rule
         for name, limit in budget.items():
             self.assertLessEqual(words((SKILLS / name / "SKILL.md").read_text()), limit, name)
 

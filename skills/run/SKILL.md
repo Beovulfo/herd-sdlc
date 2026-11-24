@@ -42,3 +42,4 @@ Paste the report `herd done` prints, as written. Log each decision the moment yo
 - Never weaken human criteria or checks to make them pass. If a check is wrong, say so and ask. Record a human's change with `herd note --human-change`.
 - Log every finding, fix, open limit and attack attempt with `herd note --found|--fixed|--open|--tried "..."` the moment it happens, in any step: one call each. Notes logged together are flagged, because their times then mean nothing.
 - If the Stop hook blocks you, fix the cause and run `herd verify`. Never edit evidence files by hand.
+- A `Herd guard` denial is final: follow its reason, never work around it.

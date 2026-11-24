@@ -277,8 +277,9 @@ class FocusHookTests(FocusBase):
         self.assertEqual(self.answer(b, C_refusal=f"FOCUS C:refusal: holds: {ok}")["verdict"], "PASS")
         same = PASS_CMD.format("one")
         n = self.answer(b, C_refusal=f"FOCUS C:refusal: holds: {same}", C_recount=f"FOCUS C:recount: holds:  {same} ")
-        self.assertEqual(n["verdict"], "none")  # the command of another item
+        self.assertEqual(n["verdict"], "none")  # a holds with the command of another item is unconfirmed
         self.assertIn("same command", n["focus"]["why"])
+        self.assertEqual(sorted(n["focus"]["unconfirmed"]), ["C:recount", "C:refusal"])
 
     def break_with(self, **over):
         return self.answer(self.focused(), **over)
@@ -294,6 +295,12 @@ class FocusHookTests(FocusBase):
         full = herd.focus_rounds(self.root, "t1")[-1]["reviews"][-1]  # the full answers are kept in focus.json
         self.assertEqual(full["answers"]["C:recount"]["command"], BREAK_CMD)
         self.assertEqual(full["answers"]["C:recount"]["exit"], 3)
+
+    def test_one_command_may_confirm_two_breaks(self):
+        b = self.focused()
+        n = self.answer(b, C_recount=f"FOCUS C:recount: breaks: {BREAK_CMD}", C_refusal=f"FOCUS C:refusal: breaks: {BREAK_CMD}")
+        self.assertEqual((n["verdict"], n["round"]), ("FAIL", True))
+        self.assertEqual([x["id"] for x in n["focus"]["breaks"] if x["confirmed"]], ["C:recount", "C:refusal"])
 
     def test_exit_one_is_unconfirmed(self):
         bad = "python3 -c \"import nosuchmodule\""  # a NameError or typo exits 1
@@ -455,6 +462,17 @@ class FocusBreakTests(FocusBase):
         n = self.answer(self.brief(), C_recount=f"FOCUS C:recount: breaks: {DEFECT}")  # it breaks again: open again
         herd.verify(self.root, "t1")
         self.assertTrue([p for p in herd.problems(self.root, "t1") if "still breaks" in p])
+
+    def test_a_none_review_opens_no_break(self):
+        b = self.focused()
+        mutate = "python3 -c \"open('app.py', 'a').write('#')\"; python3 -c \"import sys; sys.exit(3)\""
+        n = self.answer(b, C_recount=f"FOCUS C:recount: breaks: {mutate}")
+        self.assertEqual(n["verdict"], "none")  # the rerun changed the content: nothing was judged
+        before = (self.root / "app.py").read_text()
+        ev = herd.verify(self.root, "t1")
+        self.assertEqual(ev["focus_breaks"], [])
+        self.assertEqual((self.root / "app.py").read_text(), before)  # verify did not run the writing command again
+        self.assertFalse([p for p in herd.problems(self.root, "t1") if "still breaks" in p])
 
     def test_none_review_does_not_close_a_break(self):
         self.broken()

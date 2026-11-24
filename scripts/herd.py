@@ -1407,13 +1407,13 @@ def focus_breaks(notes, live):
     opens it again, and a review that does not count closes nothing."""
     broken = {}
     for n in notes:
-        if n.get("kind") != "review":
+        if n.get("kind") != "review" or n.get("verdict") not in ("PASS", "FAIL"):  # a `none` review judged nothing
             continue
         f = n.get("focus") if isinstance(n.get("focus"), dict) else {}
         for b in f.get("breaks") or []:
             if isinstance(b, dict) and b.get("confirmed"):
                 broken[b["id"]] = {"command": b.get("command", ""), "open": True}
-        if n.get("round") and n.get("verdict") in ("PASS", "FAIL"):
+        if n.get("round"):
             for i in f.get("holds") or []:
                 if i in broken:
                     broken[i]["open"] = False
@@ -1472,11 +1472,13 @@ def focus_reader(command):
     return bool(segments) and all(_is_reader(w) for w in segments)
 
 
-def _rerun(root, command, kind, until):
+def _rerun(root, command, kind, until, repeated=False):
     """(exit or None, output tail, why not confirmed or None) for one command the reviewer gave. Run from the project
     root after the guard's rules; kind is "holds" (confirmed by exit 0), "breaks" or "extra" (exit 3)."""
     if focus_reader(command):
         return None, "", "a file reader tests nothing"
+    if repeated and kind == "holds":
+        return None, "", "the same command answers another item"
     if guard(root, {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(root)}, record=False):
         return None, "", "denied by the guard's rules"
     left = until - time.monotonic()
@@ -1518,9 +1520,6 @@ def focus_judge(root, slug, text):
         problems_.append(f"unknown ids: {', '.join(i for i in ans if i not in held)}")
     if parsed["bad"]:
         problems_.append(f"unusable FOCUS lines (each needs `holds` or `breaks` and a command, once): {', '.join(dict.fromkeys(parsed['bad']))}")
-    repeated = [i for ids_ in commands.values() if len(ids_) > 1 for i in ids_]
-    if repeated:
-        problems_.append(f"the same command answers more than one item: {', '.join(repeated)}")
     if problems_:
         rec["why"] = "; ".join(problems_) + ": spawn herd-reviewer again with what `herd review-brief` prints"
         rec["unanswered"] = rec["unanswered"] or [i for i in parsed["bad"] if i in held]
@@ -1532,7 +1531,8 @@ def focus_judge(root, slug, text):
     extras = {f"x{idx}.{n}": x for n, x in enumerate(parsed["extra"], 1)}
     for i, kind in order:
         command = ans[i]["command"] if i in ans else extras[i]["command"]
-        code, tail, why = _rerun(root, command, kind, until)
+        code, tail, why = _rerun(root, command, kind, until,
+                                 i in ans and len(commands.get(" ".join(command.split()), ())) > 1)
         runs[i] = {"verdict": kind if i in ans else "extra", "command": command, "exit": code, "tail": tail,
                    "confirmed": why is None, "why": why}
     changed = content_id(root) != before

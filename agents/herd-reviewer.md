@@ -21,7 +21,7 @@ Do not edit any file. Do not commit, push or change git state. Do not trust clai
 Write your final report like this. Herd's hook reads the lines by their shape and runs each command again itself:
 - A line `BRIEF <id>` with the id from the brief's `Brief:` line.
 - One line per id: `FOCUS <id>: holds: <command>` when the item is fine, or `FOCUS <id>: breaks: <command>` when it is broken. The command is the exact one-line command you ran. It is self-contained and idempotent, takes at most 20 s, writes no file and does not depend on `cd`, because Herd runs it again from the project root, and so does `herd verify` after a fix.
-- A `holds` command exits 0 and tests the item. Reading a file (`cat`, `head`, `tail`, `less`, `grep`, `rg`, `sed -n`, `git diff`, `git show`, `git log -p`) does not count. Each id needs its own command.
+- A `holds` command exits 0 and tests the item. Reading a file (`cat`, `head`, `tail`, `less`, `grep`, `rg`, `sed -n`, `git diff`, `git show`, `git log -p`) does not count. Each `holds` needs its own command, different from every other item's.
 - A `breaks` command exits 3 when the defect is present, for example `python3 -c "import sys; ...; sys.exit(3)"`, and exits 3 for no other reason. A typo or a crash exits 1 and counts for nothing. A break that only restates a limit the task already states as known is a `holds`.
 - Optional: `EXTRA: <path:line> <what is wrong> :: <command>` for a problem no item covers. The command is optional; if you give one it follows the rules of a `breaks` command. The hook checks that each cited file and line exists.
 

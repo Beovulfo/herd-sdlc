@@ -485,6 +485,29 @@ def _quotes(text, source):
     return bool(t) and re.search(edge_l + re.escape(t) + edge_r, _squash(source)) is not None
 
 
+def corrections(frozen, snapshot, request):
+    """{"corrected": ids, "removed": ids} when the human criteria changed after the first verify only toward the
+    request's words, else None. That holds when every human criterion now quotes the request, and every frozen human
+    text that quoted it, or that the human reworded with a note, is still inside some human criterion (so none of the
+    human's words was narrowed or dropped); a frozen text that did not quote the request was never the human's words.
+    Removing a human criterion, or turning it agent-proposed, still needs the human's note. Only criteria whose text
+    changed in words under an id frozen before are re-frozen, check included: a text unchanged but for case, spacing or
+    punctuation keeps its frozen check, so a weakened check there still needs the note; a new id stays "added"."""
+    now = {cid: s for cid, s in snapshot.items() if s["source"] == "human"}
+    old = {cid: c for cid, c in frozen.items() if isinstance(c, dict) and c.get("source") == "human"}
+    if not now or not all(_quotes(s["text"], request) for s in now.values()):
+        return None
+    if not all(any(_quotes(c.get("text", ""), s["text"]) for s in now.values())  # the human's words, kept
+               for c in old.values() if _quotes(c.get("text", ""), request) or c.get("by_note")):
+        return None
+    if any(cid not in now for cid in old):  # removed, or turned agent-proposed: its check goes with it, so ask
+        return None
+    changed = sorted(cid for cid, s in now.items() if isinstance(frozen.get(cid), dict)  # a new id stays "added"
+                     and (_squash(frozen[cid].get("text", "")) != _squash(s["text"])
+                          or frozen[cid].get("source") != "human"))
+    return {"corrected": changed} if changed else None
+
+
 def human_unquoted(task, request, notes=()):
     """Ids of `human` criteria whose text is not a verbatim quote of the request, nor of a `human-change` note
     for that id (the human's own rewording, the note the frozen-criteria rule accepts). None if no request."""
@@ -922,17 +945,16 @@ def verify(root, slug):
             frozen_path.write_text(json.dumps(frozen))
     req_path = d / "request.md"
     request_text = req_path.read_text() if req_path.exists() else None
-    for cid, snap in snapshot.items() if request_text is not None and not lost else ():
-        fz = frozen.get(cid)  # a frozen text that did not quote the request, now restored to the request's words
-        if (isinstance(fz, dict) and fz.get("source") == "human" and snap["source"] == "human"
-                and fz.get("text") != snap["text"] and not _quotes(fz.get("text", ""), request_text)
-                and _quotes(snap["text"], request_text)):
-            frozen[cid] = dict(fz, text=snap["text"])
-            frozen_path.write_text(json.dumps(frozen))
-    frozen = {cid: {k: v for k, v in c.items() if k != "by_note"} for cid, c in frozen.items()}
+    fixed = corrections(frozen, snapshot, request_text) if request_text is not None and not lost else None
+    if fixed:  # the human criteria moved toward the request's words, keeping every earlier quote: re-freeze them
+        for cid in fixed["corrected"]:
+            frozen[cid] = dict(snapshot[cid], corrected=True)
+        frozen_path.write_text(json.dumps(frozen))
+    corrected = sorted(cid for cid, c in frozen.items() if c.get("corrected"))
+    frozen = {cid: {k: v for k, v in c.items() if k not in ("by_note", "corrected")} for cid, c in frozen.items()}
     now_by_id = {c["id"]: c for c in task["criteria"]}
     human_changed = [(cid, "removed" if cid not in now_by_id else "changed") for cid, c in frozen.items()
-                     if c["source"] == "human" and (cid not in now_by_id or now_by_id[cid]["text"] != c["text"]
+                     if c["source"] == "human" and (cid not in now_by_id or _squash(now_by_id[cid]["text"]) != _squash(c["text"])
                                                     or now_by_id[cid]["source"] != "human")]
     checks_changed = [cid for cid, c in now_by_id.items() if frozen and cid in frozen and c["check"] != frozen[cid]["check"]]
     human_checks = [cid for cid in checks_changed if frozen[cid]["source"] == "human"]
@@ -963,7 +985,7 @@ def verify(root, slug):
           "inputs": task.get("inputs"), "inputs_left": inputs_left, "red": {"failed": red.get("failed", 0), "total": red.get("total", 0), "code_before": red.get("code_before"),
                   "code_hidden": hidden, "stashed": red.get("stashed") or []} if red else None, "red_unreadable": red_unreadable, "timing": timing,
           "human_not_verbatim": human_not_verbatim, "risk": risk_of(root, start, changed if changed is not None else changed_since(root, "HEAD")),
-          "legacy": bool(start.get("legacy") or not start), "human_changed": human_changed, "checks_changed": checks_changed, "human_checks_changed": human_checks,
+          "legacy": bool(start.get("legacy") or not start), "human_changed": human_changed, "human_corrected": corrected, "checks_changed": checks_changed, "human_checks_changed": human_checks,
           "added_after_red": added,
           "warnings": warnings, "escalate": [cid for cid, n in fails.items() if n >= ESCALATE_AFTER],
           "fingerprint": fingerprint(root), "content": content_id(root), "task_sha": _task_sha(root, slug),
@@ -1546,6 +1568,11 @@ def _rule_lines(ev, notes):
         why = [n["text"] for n in notes if n["kind"] == "late-red"]
         out.append(f"Red first not proven: {', '.join(code[:5])}{' and more' if len(code) > 5 else ''} changed "
                    "before the first verify" + (f". Reason: {why[-1]}" if why else ""))
+    if ev.get("human_corrected"):  # accepted without a note, shown for the human to confirm
+        ids = ev["human_corrected"]
+        out.append(f"{', '.join(ids)} corrected after the first verify to verbatim quotes of the request, keeping every "
+                   f"earlier human quote: confirm the split; {'their checks' if len(ids) > 1 else 'its check'} may "
+                   "not have been seen failing")
     out += [f"{cid} was removed after the first verify" if how == "removed" else f"{cid} changed after the first verify"
             for cid, how in ev.get("human_changed") or []]
     out += [f"{cid}: check changed after the first verify, so it was never seen failing"

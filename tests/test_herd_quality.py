@@ -406,3 +406,126 @@ class TestBadRefs(ReviewBase):
         self.assertEqual(herd.bad_refs(self.root, "a symlink-free text with no refs"), [])
         self.assertEqual(len(herd.bad_refs(self.root, " ".join(f"m{i}.py:1" for i in range(50)))), herd.MAX_REFS)
 
+
+FAST = 'python3 -c "import app"'  # a check that passes once app.py exists
+
+
+class TestCorrections(Base):
+    """0.11.1: human criteria changed after the first verify only toward the request's words are a correction, not
+    the human's change (a Haiku run re-split its quotes after an intake FAIL and could not finish)."""
+    REQ = "Build it. It must return 1 for any call. It must be fast. Errors print one line."
+
+    def toml(self, *crit):
+        head = 'goal = "g"\ntest_budget = "probes"\nknown_limits = "none"\ninputs = []\n'
+        return head + "".join(f'\n[[criteria]]\nid = "{cid}"\ntext = {json.dumps(text)}\nsource = "{src}"\n'
+                              + ('coverage = "one call"\n' if src == "human" else "") + f"check = {json.dumps(chk)}\n"
+                              for cid, text, src, chk in crit)
+
+    def ready(self, *crit, request=True):
+        herd.init_task(self.root, "t1", "g", request=self.REQ if request else None)
+        (self.root / ".herd/tasks/t1/task.toml").write_text(self.toml(*crit))
+        intake_review(self.root)
+        (self.root / "tests").mkdir(exist_ok=True)
+        (self.root / "tests/test_app.py").write_text("import app\n")
+        herd.verify(self.root, "t1")  # red
+        (self.root / "app.py").write_text("def f():\n    return 1\n")
+        self.attacks_and_review()
+        herd.verify(self.root, "t1")
+
+    def change(self, *crit):
+        (self.root / ".herd/tasks/t1/task.toml").write_text(self.toml(*crit))
+        intake_review(self.root)
+        ev = herd.verify(self.root, "t1")
+        return ev, herd.problems(self.root, "t1")
+
+    FIRST = (("C1", "It must return 1 for any call", "human", APP_CHECK), ("C2", "It must be fast", "human", FAST),
+             ("C3", "Given f, then it returns", "agent-proposed", FAST))
+
+    def test_a_re_split_of_the_quotes_is_a_correction(self):
+        self.ready(*self.FIRST)
+        ev, probs = self.change(("C1", "It must return 1 for any call. It must be fast", "human", APP_CHECK + " && true"),
+                                ("C2", "Errors print one line", "human", FAST),
+                                ("C3", "Build it", "human", FAST))
+        self.assertEqual((ev["human_changed"], ev["human_checks_changed"], ev["human_corrected"]),
+                         ([], [], ["C1", "C2", "C3"]))
+        self.assertEqual(probs, [])
+        line = ("C1, C2, C3 corrected after the first verify to verbatim quotes of the request, keeping every earlier "
+                "human quote: confirm the split; their checks may not have been seen failing")
+        self.assertIn(line, herd.report(ev))
+        self.assertIn("- " + line, herd.pr_body(self.root, "t1"))
+        herd.verify(self.root, "t1")
+        self.assertEqual(herd.problems(self.root, "t1"), [])  # stays corrected at the next verify
+        _, probs = self.change(*self.FIRST[:2], ("C3", "Build it", "human", FAST))  # the joined quote cut back
+        self.assertIn("human criterion C1 changed after the first verify", " ".join(probs))
+
+    def test_a_non_quote_corrected_to_a_quote_is_accepted(self):
+        self.ready(("C1", "f returns one for one call", "human", APP_CHECK), self.FIRST[2])
+        ev, probs = self.change(("C1", "It must return 1 for any call", "human", FAST), self.FIRST[2])
+        self.assertEqual((probs, ev["human_corrected"]), ([], ["C1"]))
+
+    def test_a_narrowed_or_dropped_quote_still_needs_the_humans_note(self):
+        self.ready(*self.FIRST)
+        _, probs = self.change(("C1", "It must return 1", "human", APP_CHECK), self.FIRST[1], self.FIRST[2])
+        self.assertIn("human criterion C1 changed after the first verify", " ".join(probs))  # truncated
+        _, probs = self.change(self.FIRST[0], ("C2", "Errors print one line", "human", FAST), self.FIRST[2])
+        self.assertIn("human criterion C2 changed after the first verify", " ".join(probs))  # its quote is gone
+        _, probs = self.change(self.FIRST[0], self.FIRST[2])
+        self.assertIn("human criterion C2 was removed", " ".join(probs))
+        _, probs = self.change(("C1", "It must return 1 for any call. It must be fast", "human", APP_CHECK),
+                               self.FIRST[2])
+        self.assertIn("human criterion C2 was removed", " ".join(probs))  # its quote is in C1, but not its check
+        _, probs = self.change(self.FIRST[0], ("C2", "It must be fast", "agent-proposed", FAST), self.FIRST[2])
+        self.assertIn("human criterion C2 changed after the first verify", " ".join(probs))  # turned agent-proposed
+
+    def test_a_weakened_check_on_an_unchanged_text_is_still_refused(self):
+        self.ready(*self.FIRST)
+        _, probs = self.change((*self.FIRST[0][:3], FAST), ("C2", "It must be fast. Errors print one line", "human", FAST),
+                               self.FIRST[2])
+        self.assertEqual([p.split(":")[0] for p in probs if "human criterion" in p],
+                         ["the check of human criterion C1 changed after the first verify"])
+
+    def test_a_formatting_edit_keeps_the_frozen_check(self):
+        self.ready(*self.FIRST)
+        ev, probs = self.change(("C1", "it must return 1 for any call.", "human", FAST), self.FIRST[1], self.FIRST[2])
+        self.assertEqual((ev["human_changed"], ev["human_corrected"]), ([], []))  # the same words
+        self.assertEqual([p.split(":")[0] for p in probs if "human criterion" in p],
+                         ["the check of human criterion C1 changed after the first verify"])  # weakened: refused
+        _, probs = self.change(("C1", "it must return 1 for any call.", "human", APP_CHECK), *self.FIRST[1:])
+        self.assertEqual(probs, [])
+
+    def test_the_humans_own_rewording_is_kept_like_a_quote(self):
+        self.ready(*self.FIRST)
+        own = ("C1", "f returns 1 within 2 ms for every call", "human", APP_CHECK)
+        self.change(own, *self.FIRST[1:])
+        herd.add_note(self.root, "t1", "human-change", "C1: the human said: f returns 1 within 2 ms for every call")
+        intake_review(self.root)
+        herd.verify(self.root, "t1")
+        self.assertNotIn("C1 changed", " ".join(herd.problems(self.root, "t1")))
+        _, probs = self.change(self.FIRST[0], *self.FIRST[1:])  # back to a quote: the human's rewording would be lost
+        self.assertIn("human criterion C1 changed after the first verify", " ".join(probs))
+
+    def test_an_id_swap_is_accepted_and_shown(self):
+        self.ready(*self.FIRST)
+        ev, probs = self.change(("C1", "It must be fast", "human", FAST), ("C2", "It must return 1 for any call", "human",
+                                                                        APP_CHECK), self.FIRST[2])
+        self.assertEqual((probs, ev["human_corrected"]), ([], ["C1", "C2"]))
+        self.assertIn("C1, C2 corrected after the first verify", herd.report(ev))
+
+    def test_not_all_quotes_removed_non_quote_new_ids_and_no_request_keep_todays_rules(self):
+        self.ready(*self.FIRST)
+        _, probs = self.change(("C1", "It must return 1 for any call", "human", APP_CHECK),
+                               ("C2", "It must be quick", "human", FAST), self.FIRST[2])
+        self.assertIn("human criterion C2 changed after the first verify", " ".join(probs))  # not a quote
+        ev, probs = self.change(*self.FIRST, ("C4", "Errors print one line", "human", FAST))
+        self.assertEqual((ev["added_after_red"], ev["human_corrected"]), (["C4"], []))  # a new id stays "added"
+        self.tearDown()
+        self.setUp()
+        self.ready(("C1", "f returns one", "human", APP_CHECK), ("C2", "It must be fast", "human", FAST), self.FIRST[2])
+        _, probs = self.change(self.FIRST[1], self.FIRST[2])
+        self.assertIn("human criterion C1 was removed", " ".join(probs))  # a non-quote removed: its meaning may be lost
+        self.tearDown()
+        self.setUp()
+        self.ready(*self.FIRST, request=False)
+        _, probs = self.change(("C1", "It must return 1 for any call. It must be fast", "human", APP_CHECK),
+                               ("C2", "Errors print one line", "human", FAST), self.FIRST[2])
+        self.assertIn("human criterion C2 changed after the first verify", " ".join(probs))

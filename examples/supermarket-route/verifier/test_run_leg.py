@@ -99,6 +99,17 @@ class TestRefusals(Base):
 
 
 class TestDryRun(Base):
+    def test_old_layout_tag_is_archived_from_the_root(self):
+        old = "685d69a"  # 0.12.1: the plugin sat at the repository root
+        if not rl.tag_exists(old):
+            self.skipTest("the 0.12.1 commit is not in this clone")
+        code, out = run_main(self.args("--dry-run", "--herd-tag", old), self.env, [str(self.tmpdir)])
+        self.assertEqual(code, 0, out)
+        plugin = self.tmpdir / "herd-bench" / "leg" / "run-1" / "plugin"
+        self.assertTrue((plugin / "scripts" / "herd.py").is_file())
+        self.assertTrue((plugin / ".claude-plugin" / "plugin.json").is_file())
+        self.assertFalse((plugin / "examples").exists())
+
     def test_dry_run_writes_everything_and_starts_nothing(self):
         with mock.patch.object(rl, "start", side_effect=AssertionError("started")):
             code, out = run_main(self.args("--dry-run", "--herd-tag", "HEAD", "--budget", "7"),

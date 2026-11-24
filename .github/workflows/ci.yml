@@ -16,6 +16,8 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: python -m unittest discover -s tests -t .
       - run: python examples/supermarket-route/verifier/test_verify_general.py
+      - run: python -m unittest test_run_leg
+        working-directory: examples/supermarket-route/verifier
   lint:
     runs-on: ubuntu-latest
     steps:

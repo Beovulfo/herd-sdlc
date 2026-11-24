@@ -154,10 +154,12 @@ Unreadable or missing config means the defaults above. A model id that matches n
 1. No active task, or `agent_type` is not `herd:herd-reviewer`: return, record nothing. A project's own `.claude/agents/herd-reviewer.md` does not count: its prompt is not Herd's (S3).
 2. Read the reviewer transcript (`agent_transcript_path`): its model (the last assistant `message.model` other than `<synthetic>`) and its final text: the last of its assistant text blocks and `SubagentHandback` `input.message` values, else the hook input's `last_assistant_message` (S3).
 3. Read the main transcript (`transcript_path`): the builder's highest tier among assistant lines at or after the time in the task's `started` file (S3: `start.json` has no time).
-4. Parse the last line matching `^HERD-REVIEW: (PASS|FAIL)$`.
+4. Parse the last line matching `^HERD-REVIEW: (PASS|FAIL)$`. As built: the report's last non-empty line must be that line (Markdown around it is ignored), and only the reviewer's last turn is read.
 5. Call `add_review()` with `by = <reviewer model id>`, `text = <findings, clipped to 2,000 chars>`, and extra fields `source = "hook"`, `tier`, `builder_tier`, `verdict` (`PASS`, `FAIL` or `none`).
 
 Never block, never print to stdout. On an exception: one stderr line, exit 0.
+
+As built, after a fresh review: the hook counts only a main session log Herd saw itself (the pre-init hook at `herd init` and the Stop gate record each session into `start.json`), and only a reviewer log at `<session>/subagents/agent-<id>.jsonl` next to it. The guard denies running Herd's hook commands by hand, writing the session logs, and editing the installed plugin. `[review]` is fixed at `herd init`.
 
 **B4. Counting.** `review_state()` gains these rules, checked after the existing ones:
 * The note has no `source == "hook"`: "recorded by hand, not by the review hook: spawn herd-reviewer".

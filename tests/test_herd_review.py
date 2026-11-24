@@ -1,6 +1,7 @@
 """Part B of docs/designs/herd-guardrails.md: the tier-up review, recorded by the SubagentStop hook."""
 import json
 import random
+import re
 import shutil
 import subprocess
 import sys
@@ -207,8 +208,10 @@ class TestWiringAndStatus(ReviewBase):
         self.assertEqual(front["model"], "inherit")
         self.assertEqual({t.strip() for t in front["tools"].split(",")}, {"Read", "Grep", "Glob", "Bash"})
         body = text.split("---", 2)[2]
-        for word in ("HERD-REVIEW: PASS", "HERD-REVIEW: FAIL", "Blocker", "Major", "Nit", "Do not edit"):
+        for word in ("BRIEF <id>", "FOCUS <id>: holds:", "FOCUS <id>: breaks:", "EXTRA:", "exits 3", "Do not edit"):
             self.assertIn(word, body)
+        for word in ("HERD-REVIEW: PASS", "HERD-REVIEW: FAIL", "Blocker", "Nit"):
+            self.assertNotIn(word, body.replace("no Blocker, Major or Nit scale", ""))
         hooks = json.loads((ROOT / "hooks/hooks.json").read_text())["hooks"]["SubagentStop"]
         self.assertEqual([(e["matcher"], h["command"].rsplit(" ", 1)[-1]) for e in hooks for h in e["hooks"]],
                          [("^herd:herd-reviewer$", "review-hook")])
@@ -356,7 +359,7 @@ class TestReviewFindings(ReviewBase):
         self.assertEqual(review, "Review: claude-sonnet-5-5 (sonnet, builder on haiku; PASS, after 2 rounds "
                                  "without PASS; ran git diff or git show, read 1 of 1 changed code file): No Blocker or Major.")
         body = herd.pr_body(self.root, "t1")
-        self.assertIn("2 review rounds found Blocker or Major issues before the PASS", body)
+        self.assertIn("2 review rounds found a focus item that breaks before the PASS", body)
         self.assertNotIn("\nHERD-REVIEW: PASS", body)
 
     def test_status_and_next_step_say_what_is_known(self):
@@ -466,8 +469,11 @@ class TestReviewBrief(ReviewBase):
         self.assertIn("Read every one of these 2 changed code files with Read before you judge, or print the whole "
                       "diff:\n- app.py\n- util.py\n", brief)
         self.assertIn(f"Diff, committed and not: `git diff {head}`", brief)
-        p = self.cli("review-brief")
-        self.assertEqual((p.returncode, p.stdout), (0, brief))
+        p = self.cli("review-brief")  # the same brief, a new round: only the Brief id differs
+        self.assertEqual(p.returncode, 0)
+        ident = lambda t: re.sub(r"Brief: \w+", "Brief: ID", t)  # noqa: E731
+        self.assertEqual(ident(p.stdout), ident(brief))
+        self.assertEqual(len(herd.focus_rounds(self.root, "t1")), 2)
         herd.verify(self.root, "t1")
         self.assertIn("giving it only what `herd review-brief` prints", " ".join(herd.problems(self.root, "t1")))
 
@@ -478,7 +484,7 @@ class TestReviewBrief(ReviewBase):
         calls = [{"type": "tool_use", "name": "Read", "input": {"file_path": str(self.root / f)}} for f in files]
         lines = [json.dumps({"type": "assistant", "message": {"model": "claude-sonnet-5-5", "content": calls}}),
                  json.dumps({"type": "assistant", "message": {"model": "claude-sonnet-5-5", "content": [
-                     {"type": "text", "text": "Fine.\nHERD-REVIEW: PASS"}]}})]
+                     {"type": "text", "text": focus_text(self.root, "t1", "Fine.")}]}})]
         self.review(builder="haiku", reviewer_lines=lines)
         self.assertEqual((self.last()["saw"], self.last()["code_unread"]), (True, []))
         self.review(builder="haiku", reviewer_lines=[lines[0].replace("util.py", "other.py"), lines[1]])
@@ -504,7 +510,7 @@ class TestPassHint(ReviewBase):
         self.review(builder="haiku", reviewer="sonnet", text="Major: x.\nHERD-REVIEW: FAIL")
         self.assertNotIn("Review passed", self.cli("verify").stdout)
         self.review(builder="haiku", reviewer="sonnet")
-        hint = ("Review passed and counts: fix only Blocker and Major findings, start no new work, commit and run "
+        hint = ("Review passed and counts: start no new work, commit and run "
                 "`herd done`; at medium risk it keeps counting after edits unless the risk rises to high, but no "
                 "reviewer sees them")
         self.assertIn("  " + hint, self.cli("verify").stdout)

@@ -1962,10 +1962,11 @@ class TestBudgets(Base):
     # (3) short skills, rare parts in reference files read only when needed
     def test_skill_word_budgets(self):
         # quality first: 0.3.1 raised run from 800 when the break-it attacks moved back into it
-        budget = {"run": 845, "criteria": 490, "evidence": 450}  # 0.4.0: rules the CLI enforces left the skill;
+        budget = {"run": 860, "criteria": 495, "evidence": 450}  # 0.4.0: rules the CLI enforces left the skill;
         # 0.5.0: +10 for resuming from the stop record; 0.6.0: +15 for the guard rule; 0.9.0: criteria +30 for `inputs`;
         # 0.10.0: criteria +20 for the top-level [[inputs]] example (a Haiku run put `inputs` inside [[criteria]])
         # 0.11.0: run +30 for an intake review step, given back in 0.12.0 when it was removed
+        # 0.13.0: run +15 for the Focus review step, criteria +5 for one limit per line
         for name, limit in budget.items():
             self.assertLessEqual(words((SKILLS / name / "SKILL.md").read_text()), limit, name)
 

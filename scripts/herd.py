@@ -1313,7 +1313,7 @@ def pass_hint(root, slug, ev, notes):
     later = ("at high risk any file you change after it needs another review (a commit alone does not)"
              if (ev.get("risk") or {}).get("effective") == "high" else
              "at medium risk it keeps counting after edits unless the risk rises to high, but no reviewer sees them")
-    return (f"Review passed and counts: fix only Blocker and Major findings, start no new work, commit and run "
+    return (f"Review passed and counts: start no new work, commit and run "
             f"`herd done`; {later}")
 
 
@@ -1986,8 +1986,8 @@ def pr_body(root, slug):
     if ev.get("route") != "quick" and (review is None or review.startswith("skipped:")):
         gaps.append(f"- The change is unreviewed: {review[len('skipped: '):] if review else 'no review recorded'}")
     if _failed_rounds(notes):
-        gaps.append(f"- {_failed_rounds(notes)} review round{'s' if _failed_rounds(notes) != 1 else ''} found Blocker "
-                    "or Major issues before the PASS: read them in the caveat log")
+        gaps.append(f"- {_failed_rounds(notes)} review round{'s' if _failed_rounds(notes) != 1 else ''} found a focus item "
+                    "that breaks before the PASS: read them in the caveat log")
     if ev.get("warnings"):
         w = ev["warnings"]
         gaps.append(f"- {len(w)} `herd check` warning{'s' if len(w) != 1 else ''}"

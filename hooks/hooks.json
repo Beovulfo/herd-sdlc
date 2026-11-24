@@ -53,7 +53,7 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/herd.py\" review-hook",
-            "timeout": 30
+            "timeout": 180
           }
         ]
       }

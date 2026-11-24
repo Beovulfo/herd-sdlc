@@ -16,7 +16,7 @@ A task is done when its criteria pass, proven by commands. Criteria live in `.he
 5. **Fill gaps, never block.** Write missing checks yourself. If nothing can run, `check = ""`: unchecked, never met.
 6. **Include one edge or failure case:** wrong input, empty state, or what must not change. List each input as a top-level `[[inputs]]` table (see Format): the program takes the human's form, never one the caller prepares first.
 7. **Fail first.** Run `herd verify` before writing code; tighten any check that already passes. Human criteria are then frozen.
-8. **Say what is not tested** (medium and high risk: `herd done` refuses while these or `inputs` are empty). Top-level `test_budget`: what is and is not tested, at which level. `known_limits`: when the claim may fail.
+8. **Say what is not tested** (medium and high risk: `herd done` refuses while these or `inputs` are empty). Top-level `test_budget`: what is and is not tested, at which level. `known_limits`: when the claim may fail, one limit per line.
 9. **Validate.** `herd check` (run by every `herd verify`) warns about checks that run no project code (`true`, `echo`, `test -f`), vague `coverage`, limits that narrow an any/every claim and a missing `inputs`.
 
 ## Format

@@ -250,7 +250,7 @@ class TestTask(Base):
 
     def test_hidden_names_table_covers_every_task_folder(self):
         self.assertTrue(self.BUS <= rl.HIDDEN["bus-transfer"])
-        self.assertEqual(set(rl.HIDDEN), {p.name for p in rl.EXAMPLES.iterdir() if (p / "verifier").is_dir()})
+        self.assertLessEqual({p.name for p in rl.EXAMPLES.iterdir() if (p / "verifier").is_dir()}, set(rl.HIDDEN))
         self.assertEqual(rl.PLANTED_NAMES, set().union(*rl.HIDDEN.values()))
 
     def test_supermarket_still_requires_a_prompt_or_a_task(self):

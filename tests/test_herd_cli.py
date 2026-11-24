@@ -2039,10 +2039,6 @@ class TestOldPython(Base):
         self.assertIn("herd needs Python 3.11 or newer", p.stderr)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 FIRST_ATTACK = next(iter(herd.ATTACKS))
 
 
@@ -2184,3 +2180,7 @@ class TestVerifyOnly(Base):
         secs = int(re.search(r"\((\d+) s\)", out).group(1))
         self.assertEqual(rc, 0)
         self.assertTrue(1 <= secs <= wall + 1, (secs, wall))
+
+
+if __name__ == "__main__":
+    unittest.main()

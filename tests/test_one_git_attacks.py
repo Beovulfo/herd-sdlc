@@ -16,7 +16,7 @@ def git(cwd, *args):
     return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout
 
 
-def make_repo(base, seed, sub="", edits=True):
+def make_repo(base, seed, sub="", edits=True):  # noqa: C901
     """A repository with committed files (under `sub`), then random edits: modify, delete, rename, add, stage, ignore,
     chmod, commit. Returns (project root, start commit)."""
     rnd = random.Random(seed)

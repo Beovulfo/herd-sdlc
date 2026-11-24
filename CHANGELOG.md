@@ -2,6 +2,16 @@
 
 All notable changes to Herd. Versions follow `.claude-plugin/plugin.json`.
 
+## 0.12.2
+
+Reviews now count in headless `claude -p "/herd:run ..."` sessions (issue #40). Before, every review note had `builder_tier` null and `round` false, with the reason "the main session log is not one Herd saw", so the builder reran reviews and tasks took an hour.
+
+- **Why:** the review hook counts a review only when the main session log is one Herd recorded. Only the pre-init hook (right before `herd init`) and the Stop gate recorded it. A real headless run showed the first failed: the agent ran `H="python3 .../herd.py"; $H init calc ...`, and the hook reads the command text, so it cannot see through the variable. `start.json` then had no `sessions` until the first Stop block, which comes after the review. A run that happened to write the literal `herd.py init` was fine, so the bug looked random.
+- **Fixed:** the guard hook (PreToolUse, Bash and edit tools) now records the session log from Claude Code's own hook input on every call while a task is active, through the same `_see_session` the Stop gate uses. The first tool call after `herd init` records it, long before a review. A subagent's call (it has an `agent_id`) records nothing.
+- **Kept:** the trust rule. Only a session recorded from Claude Code's own hook input counts. `herd guard` and `herd gate` run by hand are denied by the guard, and no path in a command or a note is ever read as a session.
+- **Added:** `tests/headless_check.py`, a real headless run (about $0.10) that exits 0 only when a review note shows a builder tier and round true. It is a criterion check, not a unittest.
+- **Known limits:** the session is recorded at the first Bash or edit tool call after `herd init`; a review spawned before any such call would not count. A Claude Code version that omits `transcript_path` from PreToolUse input records nothing, and the review then does not count. The real run depends on the model, so one failure is rerun once before it is called a bug.
+
 ## 0.12.1
 
 Cuts review rounds without lowering the bar. The 0.12.0 Haiku run cost $1.07, of which $0.39 was four Sonnet review rounds. Round 2 passed but did not count, because its brief, written by the builder, did not name two changed code files (`__init__.py`, `generator.py`) and the reviewer did not read them. That cost a whole extra round. After the passing round the builder kept polishing Nits and rebuilt its heuristic, which led to more rounds.

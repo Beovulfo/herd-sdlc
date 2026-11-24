@@ -1367,8 +1367,8 @@ def review_hook(root, hook):
     if isinstance(main, str) and os.path.realpath(main) in known:
         btier, bwhy = builder_tier(main, since, tiers)
     else:  # logs the agent wrote itself, handed to a copy of this hook: not a session Claude Code ran
-        btier, bwhy = None, ("the main session log is not one Herd saw (only the pre-init hook and the Stop gate "
-                             "record sessions)")
+        btier, bwhy = None, ("the main session log is not one Herd saw (only the pre-init hook, the guard and the "
+                             "Stop gate record sessions)")
     unread = (f"the reviewer's log is not where Claude Code keeps it ({rev})" if not placed
               else None if tier else f"{model} matches no tier" if model else f"no model in the reviewer's log {rev}")
     diff, read = reviewer_saw(root, str(hook.get("cwd") or root), lines)
@@ -2249,7 +2249,9 @@ def guard(root, hook):
     slug = active_slug(root)
     if not slug or not _dir(root, slug).exists() or cancelled(root, slug):
         return None
-    tool, inp = hook.get("tool_name"), hook.get("tool_input")
+    if "agent_id" not in hook:  # a subagent's own call: the main session is what the review hook asks about
+        _see_session(root, slug, hook.get("transcript_path"))  # issue #40: `herd init` through $H or an alias
+    tool, inp = hook.get("tool_name"), hook.get("tool_input")  # is unreadable to the pre-init hook
     inp, cwd = inp if isinstance(inp, dict) else {}, str(hook.get("cwd") or root)
     globs, commands = guard_config(root)
     logs = hook.get("transcript_path")
@@ -2384,8 +2386,9 @@ def problems(root, slug):
 
 
 def _see_session(root, slug, log):
-    """Record a session log the Stop gate saw (from Claude Code's own hook input): the review hook counts only
-    reviews from sessions recorded here or by the pre-init hook, and `herd status` reads the latest."""
+    """Record a session log the Stop gate or the guard saw (from Claude Code's own hook input; `herd gate` and
+    `herd guard` are denied to the agent): the review hook counts only reviews from sessions recorded here or by
+    the pre-init hook, and `herd status` reads the latest."""
     start = _state(_dir(root, slug) / "start.json", None)
     if not (isinstance(log, str) and log and start is not None):
         return

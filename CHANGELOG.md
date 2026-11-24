@@ -2,6 +2,21 @@
 
 All notable changes to Herd. Versions follow `.claude-plugin/plugin.json`.
 
+## 0.11.1
+
+Fixes a deadlock a live Haiku run hit on 0.11.0. Its human criteria at the first verify were cut quotes, and C4 was its own sentence. The intake reviewer failed them twice, so the agent re-split the request into verbatim quotes under the same ids: new C2 and C3 were other sentences of the request, and C4 joined the old C2 and C3. The intake review then passed, but the frozen-criteria rule from 0.4.0 refused every change until the human's words were recorded with `herd note --human-change`. The agent rightly would not claim the human changed them, and the task stopped.
+
+- **Fixed:** after the first verify, a change that only moves the human criteria toward the recorded request needs no note. That holds when every human criterion now quotes the request, and every frozen human text that quoted it, or that the human reworded with a note, is still inside one of them, so none of the human's words was narrowed or dropped. A frozen text that did not quote the request and was not the human's rewording was never the human's words. Criteria whose text changed in words are re-frozen with their checks. A text changed only in case, spacing or punctuation now counts as unchanged and keeps its frozen check. The report and the PR show `C2, C3, C4 corrected after the first verify to verbatim quotes of the request, keeping every earlier human quote: confirm the split`, noting that their checks may not have been seen failing. This replaces the narrower 0.10.0 rule, which accepted only a non-quote restored to a quote under the same id, and not its check.
+- **Unchanged:** these still need the human's note:
+  - a quote cut shorter or dropped;
+  - a text that is still not a quote;
+  - a human rewording replaced;
+  - a check changed on a human criterion whose words did not change;
+  - a human criterion removed or turned agent-proposed.
+
+  A new id is still shown as "added after the first verify". With no recorded request, today's rules apply.
+- **Known limit:** the rule compares quotes, not meaning. A re-split or an id swap that keeps every quote passes, even if it moves a quote to a criterion with a weaker check. The report and the PR list the corrected ids for the human to confirm, and the `corrected` mark stays for the rest of the task.
+
 ## 0.11.0
 
 An intake review: a reviewer that reads the criteria as the human would, before any code ([`herd-intake-review.md`](docs/designs/herd-intake-review.md)). No reviewer ever compared the human's words with the program's input form. A Haiku build took a pre-chosen pick cell per product where the human said products are located in the map, and no review or attack noticed, because the final reviewer sees only the diff.

@@ -73,6 +73,7 @@ class Base(unittest.TestCase):
         ev = herd.verify(self.root, "t1")
         self.assertEqual(ev["summary"]["failing"], 2)
         (self.root / "app.py").write_text("def f():\n    return 1\n")
+        return ev  # the first verify
 
     def attacks_and_review(self):
         for a in herd.ATTACKS:
@@ -1175,26 +1176,63 @@ class TestRefusalAttack(Base):
         herd.verify(self.root, "t1")
         self.assertIn("refusal (no passing command)", " ".join(herd.problems(self.root, "t1")))
 
-    def test_na_refusal_with_a_refusing_raise_in_the_code_is_questioned(self):
-        self.built()
-        (self.root / "app.py").write_text('def f():\n    raise ValueError("product P1 cannot be reached")\n')
-        self.attacks("n/a: nothing is refused", check=None)
-        ev = herd.verify(self.root, "t1")
-        w = [x for x in ev["warnings"] if x.startswith("refusal attack is n/a")]
-        self.assertEqual(len(w), 1, ev["warnings"])
-        self.assertIn("app.py", w[0])
-
-    def test_a_passing_refusal_command_or_code_without_refusals_is_not_questioned(self):
-        self.built()
-        (self.root / "app.py").write_text('def f():\n    raise ValueError("product P1 cannot be reached")\n')
-        self.attacks()
-        self.assertFalse([x for x in herd.verify(self.root, "t1")["warnings"] if "refusal attack" in x])
-        (self.root / "app.py").write_text("def f():\n    return 1\n")
-        self.attacks("n/a: nothing is refused", check=None)
-        self.assertFalse([x for x in herd.verify(self.root, "t1")["warnings"] if "refusal attack" in x])
-
     def test_the_default_reviewer_tier_is_the_builders(self):
         self.assertEqual(herd.review_tiers(self.root), (list(herd.DEFAULT_TIERS), 0))
+
+
+
+class TestInputsAndRefusalFirst(Base):
+    IN = '\n[[inputs]]\nhuman = "a call"\nprogram = "{}"\n'
+
+    @staticmethod
+    def about_inputs(w):
+        return w.startswith(("no `inputs`", "inputs #", "`inputs`"))
+
+    def warnings(self, text):
+        self.start(text)
+        return self.red_then_build()["warnings"]
+
+    def test_no_inputs_is_questioned_and_an_empty_list_is_not(self):
+        self.assertTrue([w for w in self.warnings(TASK) if w.startswith("no `inputs`")])
+
+    def test_empty_inputs_and_the_quick_route_are_not_questioned(self):
+        self.assertFalse([w for w in self.warnings("inputs = []\n" + TASK) if self.about_inputs(w)])
+
+    def test_an_input_without_both_forms_is_questioned(self):
+        w = self.warnings(TASK + '\n[[inputs]]\nhuman = "a call"\n')
+        self.assertTrue([x for x in w if x.startswith("inputs #1")], w)
+
+    def test_the_inputs_are_shown_for_the_human_to_compare(self):
+        text = TASK + self.IN.format("a call, as typed")
+        self.warnings(text)
+        ev = herd.verify(self.root, "t1")
+        line = "Inputs (as you described them -> as the program receives them): a call -> a call, as typed"
+        self.assertIn(line, herd.report(ev))
+        self.assertIn(line, herd.pr_body(self.root, "t1"))
+
+    def test_the_first_verify_asks_for_the_refusal_attack(self):
+        self.start()
+        self.assertIn(herd.REFUSAL_FIRST, self.red_then_build()["warnings"])
+        self.assertNotIn(herd.REFUSAL_FIRST, herd.verify(self.root, "t1")["warnings"])  # only the first verify asks
+
+    def test_a_refusal_attack_logged_before_the_first_verify_stops_the_question(self):
+        self.start()
+        herd.add_note(self.root, "t1", "tried", "refusals", attack="refusal", check=OK)
+        self.assertNotIn(herd.REFUSAL_FIRST, self.red_then_build()["warnings"])
+
+    def test_a_refusal_attack_logged_after_the_first_verify_is_warned_about(self):
+        self.start()
+        self.red_then_build()
+        herd.add_note(self.root, "t1", "tried", "refusals", attack="refusal", check=OK)
+        w = herd.verify(self.root, "t1")["warnings"]
+        self.assertTrue([x for x in w if x.startswith("refusal attack was logged after the first verify")], w)
+
+    def test_a_refusal_attack_logged_before_the_first_verify_is_not_late(self):
+        self.start()
+        herd.add_note(self.root, "t1", "tried", "refusals", attack="refusal", check=OK)
+        self.red_then_build()
+        w = herd.verify(self.root, "t1")["warnings"]
+        self.assertFalse([x for x in w if x.startswith("refusal attack was logged after")], w)
 
 
 if __name__ == "__main__":

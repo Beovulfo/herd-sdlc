@@ -146,8 +146,9 @@ ATTACKS = {"bad-input": "bad input at every entry point ends in a clear message,
                       "collision inputs too",
            "refusal": "every kind of input the program refuses (cannot be reached, not found, invalid) is confirmed "
                       "refusable by separate, simpler code on generated inputs, so nothing it could serve is refused"}
-# ponytail: a word list over raise lines; it never blocks, it only questions an `n/a:` refusal attack
-REFUSES = re.compile(r"raise\s+\w[\w.]*\(.*(unreach|cannot|can't|not found|no path|no route|no walkable|invalid)", re.I)
+REFUSAL_FIRST = ("no refusal attack yet: before building, list what the program will refuse (cannot be reached, "
+                 "not found, invalid) and log `herd note --tried --attack refusal --check \"<command>\"` with "
+                 "separate code; it should fail now")
 RANDOM = re.compile(r"\b(random\w*|seed(s|ed)?|fuzz\w*|property[- ]based|property tests?|hypothesis)\b", re.I)
 UNIVERSAL = re.compile(r"\b(any|every|all|whatever|whichever|arbitrary)\b", re.I)  # a human claim over all inputs
 # ponytail: a word list, so it misses limits worded otherwise and flags some harmless ones; it never blocks
@@ -489,22 +490,35 @@ def length_warnings(task):
     return out
 
 
-def refusal_warnings(root, attacks, changed):
-    """The refusal attack marked n/a although the changed code raises a refusal: the claim is open, so say so."""
-    latest = [a for a in attacks or [] if a.get("attack") == "refusal"][-1:]  # a later note replaces an earlier
-    if not latest or _attack_state(latest[0]) != "na":
+def inputs_line(inputs):
+    """`Inputs: <as the human described it> -> <as the program receives it>`, for the human to compare."""
+    return "Inputs (as you described them -> as the program receives them): " + "; ".join(
+        f"{str(x.get('human', '?')).strip()} -> {str(x.get('program', '?')).strip()}" for x in inputs if isinstance(x, dict))
+
+
+def input_warnings(task):
+    """Advisory: each input of a standard task as the human described it and as the program receives it."""
+    ins = task.get("inputs")
+    if task.get("route", "standard") == "quick":
         return []
-    for f in changed or []:
-        if is_code(f, root):
-            try:
-                text = (Path(root) / f).read_text(errors="replace")
-            except OSError:
-                continue
-            m = REFUSES.search(text)
-            if m:
-                return [f"refusal attack is n/a but {f} refuses input (`{m.group(0).strip()[:80]}`): "
-                        "confirm each refusal is true on generated inputs, or say why it cannot be"]
-    return []
+    if ins is None:
+        return ["no `inputs`: list each input as the human described it and as the program receives it "
+                "(`inputs = []` if it takes none), so a step the caller must do first is seen before building"]
+    if not isinstance(ins, list):
+        return ["`inputs` must be a list of tables, each with `human` and `program`"]
+    bad = [i for i, x in enumerate(ins, 1) if not (isinstance(x, dict) and str(x.get("human", "")).strip()
+                                                    and str(x.get("program", "")).strip())]
+    return [f"inputs #{i}: give `human` (the input as the human described it) and `program` (as the program "
+            "receives it)" for i in bad]
+
+
+def refusal_late(root, slug, red):
+    """The refusal attack first logged after the first verify (by note order, not by time): it did not shape the design."""
+    notes = load_notes(root, slug)
+    i = next((i for i, n in enumerate(notes) if n["kind"] == "tried" and n.get("attack") == "refusal"), None)
+    if i is None or not red or not isinstance(red.get("notes"), int) or i < red["notes"]:
+        return []
+    return ["refusal attack was logged after the first verify, so it did not shape the design: log it before building"]
 
 
 def coverage_warnings(task):
@@ -827,7 +841,7 @@ def verify(root, slug):
         frozen_path.write_text(json.dumps({cid: dict(fz.get(cid, s), check=s["check"]) for cid, s in snapshot.items()}
                                           | {cid: c for cid, c in fz.items() if cid not in snapshot}))
         red_path.write_text(json.dumps({
-            "at": now(), "at_epoch": datetime.now(timezone.utc).timestamp(),
+            "at": now(), "at_epoch": datetime.now(timezone.utc).timestamp(), "notes": len(load_notes(root, slug)),
             "failed": sum(r["status"] == "failing" for r in checked), "total": len(checked),
             "code_before": None if mine is None else [f for f in mine if is_code(f, root)], "seen": mine or [],
             "stashed": _stashed_since(root, start.get("stashes"))}))
@@ -865,7 +879,9 @@ def verify(root, slug):
     request_text = req_path.read_text() if req_path.exists() else None
     human_not_verbatim = human_unquoted(task, request_text)
     warnings = (check_warnings(task, request_text) + coverage_warnings(task) + length_warnings(task)
-                + refusal_warnings(root, attacks, changed))
+                + input_warnings(task)
+                + ([REFUSAL_FIRST] if first and not any(a.get("attack") == "refusal" for a in attacks) else [])
+                + refusal_late(root, slug, red))
     fails_path = d / "fails.json"  # consecutive failing verifies per criterion, for the escalation rule
     fails = _state(fails_path, {})
     fails = {r["id"]: fails.get(r["id"], 0) + 1 if r["status"] == "failing" and not first else 0 for r in results}
@@ -882,7 +898,7 @@ def verify(root, slug):
     ev = {"task": slug, "goal": task["goal"], "at": now(), "head": head, "dirty": dirty,
           "route": task.get("route", "standard"), "test_budget": task.get("test_budget"),
           "known_limits": task.get("known_limits"), "notes": load_notes(root, slug),
-          "red": {"failed": red.get("failed", 0), "total": red.get("total", 0), "code_before": red.get("code_before"),
+          "inputs": task.get("inputs"), "red": {"failed": red.get("failed", 0), "total": red.get("total", 0), "code_before": red.get("code_before"),
                   "code_hidden": hidden, "stashed": red.get("stashed") or []} if red else None, "red_unreadable": red_unreadable, "timing": timing,
           "human_not_verbatim": human_not_verbatim, "risk": risk_of(root, start, changed if changed is not None else changed_since(root, "HEAD")),
           "legacy": bool(start.get("legacy") or not start), "human_changed": human_changed, "checks_changed": checks_changed, "human_checks_changed": human_checks,
@@ -1306,6 +1322,8 @@ def report(ev, notes=None):
         lines.append(f"Test budget: {ev['test_budget']}")
     if ev.get("known_limits"):
         lines.append(f"Known limits: {ev['known_limits']}")
+    if ev.get("inputs"):
+        lines.append(inputs_line(ev["inputs"]))
     if ev.get("route") != "quick":
         lines.append(_attack_line(notes, ev.get("attacks")) or "Adversarial pass: not recorded")
     if ev.get("risk"):
@@ -1449,6 +1467,8 @@ def pr_body(root, slug):
         details.append(f"Elapsed: {fmt_duration(ev['timing']['elapsed_s'])} from `herd init` to the last verify")
     if ev.get("test_budget"):
         details.append(f"Test budget: {ev['test_budget']}")
+    if ev.get("inputs"):
+        details.append(inputs_line(ev["inputs"]))
     if _attack_line(notes, ev.get("attacks")):
         details.append(_attack_line(notes, ev.get("attacks")))
     # the reviewer's view ends here; the rest is collapsed, nothing is dropped

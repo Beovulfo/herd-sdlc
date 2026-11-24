@@ -2,12 +2,21 @@
 
 All notable changes to Herd. Versions follow `.claude-plugin/plugin.json`.
 
+## 0.9.0
+
+Moves the question that exposes a Haiku design flaw from after the build to the criteria step. The flaw was a map format that took a pick cell per product, so the caller chose the side of the shelf and the program refused products whose chosen side was walled in. 0.8.0 checks the refusals after building; this version moves the question to the criteria step.
+
+- **Added:** `inputs` in `task.toml`: each input as the human described it (`human`) and as the program receives it (`program`); `inputs = []` for none. `herd verify` warns when it is missing on the standard route or an entry lacks a field. The evidence report and the PR show both forms for the human to compare. No word matching: nothing reads the wording, so it only helps when the agent states the forms honestly and the human reads them.
+- **Added:** the first `herd verify` warns when no refusal attack is logged yet, and a later `herd verify` warns when the refusal attack was first logged after the first verify (by note order), so it did not shape the design.
+- **Changed:** the criteria skill asks for `inputs` (+18 words, budget 470) and the adversarial reference says to log the refusal attack before building.
+- **Removed:** the 0.8.0 warning for a refusal attack marked n/a while the changed code raises a refusal, and no word list was added for inputs: both read wording, which can be dodged and flags harmless text.
+- **Known limit:** an agent can describe the program's form as "the map" and still take pick cells. Nothing here sees the code's real input format.
+
 ## 0.8.0
 
 Lessons from a Haiku run built and reviewed by Opus with 0.7.0: it passed `herd done` with an Opus review (one tier above) and still failed the same three stores as 0.4.0. Its map format took a free pick cell per product, so the caller chose the side of the shelf, and the planner refused products whose chosen side was walled in although another side was open. The reviewer saw only the goal, the criteria and the diff, and no criterion mentioned shelves.
 
 - **Added:** the `refusal` standard attack, the fifth. Every kind of input the program refuses (cannot be reached, not found, invalid) must be confirmed refusable by separate, simpler code (such as a plain search) on generated inputs, so nothing the program could serve is refused. Like the others, `herd done` and the Stop gate need a command that `herd verify` ran and saw pass, or an `n/a:` reason.
-- **Added:** `herd verify` warns when the refusal attack is marked n/a although a changed code file raises an error that says cannot, unreachable, not found, no path, no route, no walkable or invalid. A word list over `raise` lines: it never blocks, it only questions the n/a.
 - **Changed:** the reviewer runs on the builder's model by default: `[review] step` is 0, not 1 (set `step = 1` in `herd.toml` for one tier above, as in 0.7.0). The run showed a stronger reviewer did not help here, and the same model costs less and needs no model the session may not have. The tier rule, the hook record, the rounds and the escalation are unchanged; `herd status`, the gate and the run skill name the builder's model.
 - **Known limit:** the refusal attack makes the agent check its refusals, but it cannot make it test products on their shelves: an agent whose generator hands the program pre-computed pick cells still passes. Catching a pre-computed input form earlier, at the criteria step, is not built.
 

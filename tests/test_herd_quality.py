@@ -7,7 +7,7 @@ from pathlib import Path
 
 from scripts import herd
 from tests.test_harness_rules import APP_CHECK, NO_INPUTS, REQUEST, TASK, Base, git
-from tests.test_herd_cli import transcript
+from tests.test_herd_cli import focus_text, transcript
 from tests.test_herd_review import ReviewBase
 
 NARROWED = TASK.replace('text = "It must return 1 for any call"', 'text = "It must return 1 for one call"')
@@ -259,7 +259,8 @@ def reviewer_log(path, calls, report="No Blocker or Major.\nHERD-REVIEW: PASS", 
 
 class TestReviewerSaw(ReviewBase):
     def check(self, calls, report="No Blocker or Major.\nHERD-REVIEW: PASS"):
-        self.review(builder="haiku", reviewer="sonnet", reviewer_lines=reviewer_log(None, calls, report))
+        self.review(builder="haiku", reviewer="sonnet",
+                    reviewer_lines=reviewer_log(None, calls, focus_text(self.root, "t1", report)))
         return self.state()
 
     def test_a_review_that_saw_nothing_does_not_count(self):
@@ -354,7 +355,7 @@ class TestReviewerSaw(ReviewBase):
         self.assertIn("the reviewer did not read: app.py", self.state()[1])
         self.review(builder="haiku", reviewer="sonnet", handback=True)
         self.assertTrue(self.state()[0])
-        self.review(builder="haiku", reviewer="sonnet", text=None, last_message="ok\nHERD-REVIEW: PASS")
+        self.review(builder="haiku", reviewer="sonnet", text=None, last_message=focus_text(self.root, "t1", "ok"))
         self.assertTrue(self.state()[0])  # the last line is a `git diff` call
 
     def test_the_hook_stays_silent_and_non_blocking(self):

@@ -2,11 +2,14 @@
 import glob
 import json
 import os
+import time
 import tomllib
 import unittest
+import unittest.mock
 from pathlib import Path
 
 from scripts import herd
+from tests.test_herd_review import ReviewBase
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "focus-replay"
 
@@ -170,6 +173,319 @@ class ReplayTests(unittest.TestCase):
                 "run5 lost store": has(5, lambda i: i["id"] == "D:1")}
         print("rows not pointed at: " + (", ".join(k for k, v in rows.items() if not v) or "none"))
         self.assertGreaterEqual(sum(rows.values()), 8, rows)
+
+
+PASS_CMD = "python3 -c \"print('{}')\""  # a command that exits 0 and differs per id
+BREAK_CMD = "python3 -c \"import sys; print('defect'); sys.exit(3)\""
+
+
+class FocusBase(ReviewBase):
+    """A medium-risk focus task: 8 items (A:C1, B:budget, B:limit-1 and the five attacks C:*)."""
+
+    def focused(self):
+        self.ready()
+        return self.brief()
+
+    def review(self, **kw):
+        return super().review(answers=False, **kw)  # the tests write the answers themselves
+
+    def brief(self):
+        task, notes = herd.load_task(self.root, "t1"), herd.load_notes(self.root, "t1")
+        files, _ = herd.review_files(self.root, "t1")
+        self.items = herd.focus_items(task, notes, files or ())
+        return herd.add_focus_round(self.root, "t1", self.items)
+
+    def ids(self):
+        return [i["id"] for i in self.items]
+
+    def lines(self, brief, **over):
+        """BRIEF and one answer per item: holds with a passing command, unless over[id] (with : as _) replaces it."""
+        out = [f"BRIEF {brief}"]
+        for i in self.items:
+            out.append(over.get(i["id"].replace(":", "_").replace("-", "_")) or
+                       f"FOCUS {i['id']}: holds: {PASS_CMD.format(i['id'])}")
+        return out
+
+    def answer(self, brief, extra=(), **over):
+        self.review(text="\n".join(self.lines(brief, **over) + list(extra)), builder="haiku", reviewer="sonnet")
+        return self.last()
+
+
+class FocusHookTests(FocusBase):
+    def test_unanswered_focus_item_does_not_count(self):
+        b = self.focused()
+        lines = self.lines(b)[:-2]  # the last two items are not answered
+        self.review(text="\n".join(lines), builder="haiku", reviewer="sonnet")
+        n = self.last()
+        self.assertEqual((n["verdict"], n["round"]), ("none", False))
+        self.assertEqual(n["focus"]["unanswered"], self.ids()[-2:])
+        self.assertIn(self.ids()[-1], n["focus"]["why"])
+        self.assertFalse(self.state()[0])
+        self.review(text="Looks fine.\nHERD-REVIEW: PASS", builder="haiku", reviewer="sonnet")  # prose, as before
+        n = self.last()
+        self.assertEqual((n["verdict"], n["round"]), ("none", False))
+        self.assertEqual(n["focus"]["unanswered"], self.ids())
+        self.assertFalse(self.state()[0])
+        n = self.answer(b, **{"C_refusal": "FOCUS C:nope: holds: python3 -c 1"})  # an unknown id and a missing one
+        self.assertEqual(n["verdict"], "none")
+        self.assertIn("C:nope", n["focus"]["why"])
+        self.assertEqual(n["focus"]["unanswered"], ["C:refusal"])
+
+    def test_breaks_without_command_does_not_count(self):
+        b = self.focused()
+        for bad in ("FOCUS C:recount: breaks:", "FOCUS C:recount: breaks:   ", "FOCUS C:recount: breaks"):
+            n = self.answer(b, C_recount=bad)
+            self.assertEqual((n["verdict"], n["round"]), ("none", False), bad)
+            self.assertIn("C:recount", n["focus"]["why"])
+            self.assertIn("C:recount", n["focus"]["unanswered"])
+
+    def test_stale_or_missing_brief_does_not_count(self):
+        b = self.focused()
+        old = b
+        herd.add_note(self.root, "t1", "open", "a limit added while the reviewer ran")  # one more item
+        n = self.answer(old)  # the brief is the latest round, but the items now have one more
+        self.assertEqual(n["verdict"], "none")
+        self.assertIn("B:note-", n["focus"]["why"])
+        b2 = self.brief()
+        n = self.answer(old)  # an older round
+        self.assertEqual(n["verdict"], "none")
+        self.assertIn("not the latest brief", n["focus"]["why"])
+        text = "\n".join(self.lines(b2)[1:])
+        self.review(text=text, builder="haiku", reviewer="sonnet")
+        self.assertIn("no BRIEF line", self.last()["focus"]["why"])
+        lines = self.lines(b2)
+        self.review(text="\n".join(["Report", "", lines[0], "(prose)"] + lines[1:]), builder="haiku",
+                    reviewer="sonnet")  # BRIEF on line 3, not first
+        self.assertEqual(self.last()["verdict"], "PASS")
+
+    def test_holds_needs_a_passing_command(self):
+        b = self.focused()
+        n = self.answer(b)  # CUJ 3: every item holds
+        self.assertEqual((n["verdict"], n["round"]), ("PASS", True))
+        self.assertEqual(n["focus"]["holds"], self.ids())
+        self.assertEqual(n["focus"]["unconfirmed"], [])
+        self.assertTrue(self.state()[0])
+        cases = {"exit 1": "python3 -c \"import sys; sys.exit(1)\"", "no file reader": "cat app.py",
+                 "a pipe of readers": "grep -n f app.py | head -3", "git diff": "git diff HEAD",
+                 "sed -n": "sed -n 1,2p app.py", "git log -p": "git log -p"}
+        for why, cmd in cases.items():
+            n = self.answer(b, C_refusal=f"FOCUS C:refusal: holds: {cmd}")
+            self.assertEqual((n["verdict"], n["round"]), ("none", False), why)
+            self.assertEqual(n["focus"]["unconfirmed"], ["C:refusal"], why)
+            self.assertIn("C:refusal", n["focus"]["why"])
+        ok = "python3 -c \"import app; assert app.f() == 1\" && cat app.py | wc -l"  # a reader inside a longer command
+        self.assertEqual(self.answer(b, C_refusal=f"FOCUS C:refusal: holds: {ok}")["verdict"], "PASS")
+        same = PASS_CMD.format("one")
+        n = self.answer(b, C_refusal=f"FOCUS C:refusal: holds: {same}", C_recount=f"FOCUS C:recount: holds:  {same} ")
+        self.assertEqual(n["verdict"], "none")  # the command of another item
+        self.assertIn("same command", n["focus"]["why"])
+
+    def break_with(self, **over):
+        return self.answer(self.focused(), **over)
+
+    def test_break_confirmed_by_failing_command(self):
+        n = self.break_with(C_recount=f"FOCUS C:recount: breaks: {BREAK_CMD}")
+        self.assertEqual((n["verdict"], n["round"]), ("FAIL", True))
+        [br] = n["focus"]["breaks"]
+        self.assertEqual((br["id"], br["exit"], br["confirmed"]), ("C:recount", 3, True))
+        self.assertIn("defect", br["tail"])
+        self.assertEqual(br["command"], BREAK_CMD)
+        self.assertNotIn("C:recount", n["focus"]["holds"])
+        full = herd.focus_rounds(self.root, "t1")[-1]["reviews"][-1]  # the full answers are kept in focus.json
+        self.assertEqual(full["answers"]["C:recount"]["command"], BREAK_CMD)
+        self.assertEqual(full["answers"]["C:recount"]["exit"], 3)
+
+    def test_exit_one_is_unconfirmed(self):
+        bad = "python3 -c \"import nosuchmodule\""  # a NameError or typo exits 1
+        n = self.break_with(C_recount=f"FOCUS C:recount: breaks: {bad}")
+        self.assertEqual((n["verdict"], n["round"]), ("none", False))
+        self.assertEqual(n["focus"]["unconfirmed"], ["C:recount"])
+        self.assertIn("C:recount", n["focus"]["why"])
+        n = self.answer(herd.focus_rounds(self.root, "t1")[-1]["brief"], C_recount=f"FOCUS C:recount: breaks: {bad}",
+                        C_refusal=f"FOCUS C:refusal: breaks: {BREAK_CMD}")
+        self.assertEqual(n["verdict"], "FAIL")  # a confirmed break elsewhere still fails, and names the other
+        self.assertEqual(n["focus"]["unconfirmed"], ["C:recount"])
+
+    def test_denied_command_is_unconfirmed(self):
+        denied = f"git push origin nowhere; {BREAK_CMD}"
+        before = [x for x in herd.load_notes(self.root, "t1") if x["kind"] == "guard"]
+        n = self.break_with(C_recount=f"FOCUS C:recount: breaks: {denied}")
+        self.assertEqual((n["verdict"], n["round"]), ("none", False))
+        self.assertEqual(n["focus"]["unconfirmed"], ["C:recount"])
+        self.assertIsNone(n["focus"]["breaks"][0]["exit"])  # never run
+        self.assertEqual([x for x in herd.load_notes(self.root, "t1") if x["kind"] == "guard"], before)  # no note
+
+    def test_break_that_passes_is_unconfirmed(self):
+        n = self.break_with(C_recount=f"FOCUS C:recount: breaks: {PASS_CMD.format('fine')}")
+        self.assertEqual((n["verdict"], n["round"]), ("none", False))
+        self.assertEqual(n["focus"]["breaks"][0]["exit"], 0)
+        self.assertFalse(n["focus"]["breaks"][0]["confirmed"])
+
+    def test_reader_break_is_unconfirmed(self):
+        n = self.break_with(C_recount="FOCUS C:recount: breaks: grep -n return app.py | head -2")
+        self.assertEqual((n["verdict"], n["round"]), ("none", False))
+        self.assertIsNone(n["focus"]["breaks"][0]["exit"])
+        self.assertIn("file reader", n["focus"]["breaks"][0]["why"])
+        self.assertTrue(herd.focus_reader("cat a.py && head b.py"))
+        self.assertTrue(herd.focus_reader("git diff HEAD | grep x"))
+        self.assertFalse(herd.focus_reader("python3 -c \"print(open('a').read())\""))
+        self.assertFalse(herd.focus_reader("cat a.py | python3 check.py"))
+        self.assertFalse(herd.focus_reader("sed -i s/a/b/ a.py"))
+
+    def test_verdict_from_answers_not_severity(self):
+        b = self.focused()
+        words = "Blocker: this is Major, a Nit, Minor and severe.\nHERD-REVIEW: FAIL"
+        self.review(text="\n".join(self.lines(b)) + "\n" + words, builder="haiku", reviewer="sonnet")
+        self.assertEqual(self.last()["verdict"], "PASS")  # holds all: severity words decide nothing
+        n = self.answer(b, extra=("No Blocker or Major.", "HERD-REVIEW: PASS"), C_recount=f"FOCUS C:recount: breaks: {BREAK_CMD}")
+        self.assertEqual(n["verdict"], "FAIL")  # a confirmed break fails, whatever the last line says
+
+    def test_extra_without_command_does_not_fail(self):
+        b = self.focused()
+        n = self.answer(b, extra=("EXTRA: app.py:1 the README says 12, the code 8",))
+        self.assertEqual((n["verdict"], n["round"]), ("PASS", True))
+        self.assertEqual(len(n["focus"]["extra"]), 1)
+        self.assertEqual(n["focus"]["extra"][0]["id"], "x0.1")
+        n = self.answer(b, extra=(f"EXTRA: app.py:1 wrong :: {BREAK_CMD}",))
+        self.assertEqual(n["verdict"], "FAIL")  # with a command that exits 3 on the rerun
+        self.assertTrue(n["focus"]["extra"][0]["confirmed"])
+        n = self.answer(b, extra=("EXTRA: app.py:1 wrong :: python3 -c \"import sys; sys.exit(1)\"",))
+        self.assertEqual(n["verdict"], "PASS")  # an unconfirmed EXTRA is shown, never none
+        self.assertFalse(n["focus"]["extra"][0]["confirmed"])
+
+    def test_rerun_deadline(self):
+        b = self.focused()
+        slow = "python3 -c \"import time; time.sleep(30)\""
+        with unittest.mock.patch.object(herd, "FOCUS_CMD_S", 1), unittest.mock.patch.object(herd, "FOCUS_TOTAL_S", 2):
+            t = time.monotonic()
+            n = self.answer(b, C_collision=f"FOCUS C:collision: holds: {slow} # a",
+                            C_recount=f"FOCUS C:recount: holds: {slow} # b",
+                            C_refusal=f"FOCUS C:refusal: breaks: {slow} # c")
+            took = time.monotonic() - t
+        self.assertLess(took, 8)
+        self.assertEqual(n["verdict"], "none")
+        self.assertEqual(sorted(n["focus"]["unconfirmed"]), ["C:collision", "C:one-bad-part", "C:recount", "C:refusal"])
+        self.assertIn("timeout", n["focus"]["breaks"][0]["tail"])  # breaks run first, 1 s each, then the cap is spent
+        full = herd.focus_rounds(self.root, "t1")[-1]["reviews"][-1]["answers"]
+        self.assertIsNone(full["C:collision"]["exit"])
+        self.assertIn("total", full["C:recount"]["tail"] + full["C:collision"]["tail"])
+
+    def test_rerun_that_changes_content_is_none(self):
+        b = self.focused()
+        mutate = "python3 -c \"open('app.py', 'a').write('# changed')\"; python3 -c \"import sys; sys.exit(3)\""
+        n = self.answer(b, C_recount=f"FOCUS C:recount: breaks: {mutate}")
+        self.assertEqual((n["verdict"], n["round"]), ("none", False))
+        self.assertIn("changed the content", n["focus"]["why"])
+
+    def test_review_needs_focus_round(self):
+        self.focused()
+        (herd._dir(self.root, "t1") / "focus.json").unlink()  # the builder never ran review-brief
+        self.review(builder="haiku", reviewer="sonnet", text="No Blocker or Major.\nHERD-REVIEW: PASS")
+        n = self.last()
+        self.assertEqual((n["verdict"], n["round"]), ("none", False))
+        self.assertIn("herd review-brief", n["focus"]["why"])
+        self.assertFalse(self.state()[0])
+        b = self.brief()  # a round exists, but the report is a verdict line and no answers
+        self.review(builder="haiku", reviewer="sonnet", text=f"BRIEF {b}\nNo Blocker or Major.\nHERD-REVIEW: PASS")
+        n = self.last()
+        self.assertEqual((n["verdict"], n["round"]), ("none", False))
+        self.assertEqual(n["focus"]["unanswered"], self.ids())
+
+
+class FocusAttackTests(FocusBase):
+    """The five standard attacks on the focus code, one command each (`herd note --tried --attack`)."""
+
+    def test_bad_input(self):
+        for bad in (None, 5, "", [], b"x", "FOCUS", "FOCUS :", "BRIEF", "EXTRA:", "FOCUS a: holds:", "\x00FOCUS a: holds: x"):
+            got = herd.parse_focus(bad)
+            self.assertEqual(set(got), {"brief", "answers", "bad", "extra"})
+        for t in ({"criteria": None}, {"criteria": [3, None, "x"], "inputs": "x", "known_limits": 4, "test_budget": None},
+                  {"criteria": [{"source": "human", "coverage": 4}]}, {}):
+            herd.focus_items(t, [{"kind": "open"}, {"kind": "tried", "attack": "refusal"}, {"kind": "decision", "text": None}])
+        b = self.focused()
+        d = herd._dir(self.root, "t1")
+        for junk in ("{not json", "{}", "[1, null, \"x\"]", ""):  # a focus.json that is not a list of rounds
+            (d / "focus.json").write_text(junk)
+            self.assertEqual(herd.focus_rounds(self.root, "t1"), [])
+            self.review(text="\n".join(self.lines(b)), builder="haiku", reviewer="sonnet")
+            self.assertEqual(self.last()["verdict"], "none")  # no usable round: never a traceback, never a PASS
+        self.review(text=None, last_message="BRIEF x", builder="haiku", reviewer="sonnet")
+        self.assertEqual(self.last()["verdict"], "none")
+
+    def test_collision(self):
+        t = task(criteria=[{"id": "C1", "source": "human", "text": "a", "coverage": "one", "check": ""},
+                           {"id": "C1", "source": "human", "text": "b", "coverage": "two", "check": ""}])
+        self.assertEqual([i["quote"] for i in herd.focus_items(t, []) if i["cat"] == "A"], ["one"])
+        b = self.focused()
+        same = "python3 -c \"print(1)\""  # two items answered by one command, two extras with one text
+        n = self.answer(b, extra=("EXTRA: a.py:1 x", "EXTRA: a.py:1 x"), C_recount=f"FOCUS C:recount: holds: {same}",
+                        C_refusal=f"FOCUS C:refusal: holds: {same}")
+        self.assertEqual(n["verdict"], "none")
+        n = self.answer(b, extra=("EXTRA: a.py:1 x", "EXTRA: a.py:1 x"))
+        self.assertEqual([x["id"] for x in n["focus"]["extra"]], ["x0.1", "x0.2"])  # same text, two ids
+        self.assertEqual(herd.parse_focus("FOCUS A: holds: a\nFOCUS A: breaks: b")["bad"], ["A"])
+
+    def test_one_bad_part(self):
+        b = self.focused()
+        n = self.answer(b, C_recount="FOCUS C:recount: holds: ", C_collision="FOCUS C:collision: holds: python3 -c \"import sys; sys.exit(1)\"")
+        self.assertEqual(n["focus"]["unanswered"], ["C:recount"])  # one bad line names only itself
+        self.assertEqual(n["focus"]["answered"], len(self.items) - 1)
+        n = self.answer(b, C_collision="FOCUS C:collision: holds: python3 -c \"import sys; sys.exit(1)\"")
+        self.assertEqual(n["focus"]["unconfirmed"], ["C:collision"])  # one failing holds leaves the others confirmed
+        self.assertEqual(len(n["focus"]["holds"]), len(self.items))
+        d = herd._dir(self.root, "t1")
+        rounds = herd.focus_rounds(self.root, "t1")
+        (d / "focus.json").write_text(json.dumps([7, "x"] + rounds))  # a junk entry beside a good round
+        self.assertEqual(herd.focus_rounds(self.root, "t1"), rounds)
+
+    def test_recount(self):
+        b = self.focused()
+        n = self.answer(b, C_recount=f"FOCUS C:recount: breaks: {BREAK_CMD}", C_refusal="FOCUS C:refusal: holds: python3 -c \"import sys; sys.exit(2)\"",
+                        extra=(f"EXTRA: a.py:1 x :: {BREAK_CMD} ",))
+        full = herd.focus_rounds(self.root, "t1")[-1]["reviews"][-1]["answers"]
+        confirmed = [i for i, a in full.items() if a["exit"] == (0 if a["verdict"] == "holds" else 3)]  # separate rule
+        f = n["focus"]
+        self.assertEqual(sorted(confirmed), sorted(set(self.ids() + ["x0.1"]) - {"C:refusal"}))
+        self.assertEqual(f["unconfirmed"], ["C:refusal"])
+        self.assertEqual(f["answered"], len(self.items))
+        self.assertEqual(sorted(f["holds"] + [x["id"] for x in f["breaks"]]), sorted(self.ids()))
+        self.assertEqual(n["verdict"], "FAIL")
+
+    def test_refusal(self):
+        """Every report the hook refuses (verdict none) is one a simple model also refuses; every other passes."""
+        import random
+        rng = random.Random(7)
+        b = self.focused()
+        for _ in range(6):
+            kinds, lines = [], [f"BRIEF {b}"]
+            for i in self.items:
+                kind = rng.choice(["holds", "holds", "missing", "dup", "badhold", "break", "badbreak", "reader"])
+                kinds.append(kind)
+                cmd = PASS_CMD.format(i["id"])
+                line = {"holds": f"holds: {cmd}", "dup": f"holds: {cmd}", "badhold": "holds: python3 -c \"import sys; sys.exit(4)\"",
+                        "break": f"breaks: {BREAK_CMD} # {i['id']}", "badbreak": f"breaks: {cmd}", "reader": "holds: cat app.py"}.get(kind)
+                if line:
+                    lines += [f"FOCUS {i['id']}: {line}"] * (2 if kind == "dup" else 1)
+            self.review(text="\n".join(lines), builder="haiku", reviewer="sonnet")
+            structure = "missing" in kinds or "dup" in kinds  # F4.5, in order: structure, a confirmed break, unconfirmed
+            want = ("none" if structure else "FAIL" if "break" in kinds else
+                    "none" if {"badhold", "badbreak", "reader"} & set(kinds) else "PASS")
+            self.assertEqual(self.last()["verdict"], want, (kinds, lines))
+
+
+class ParseFocusTests(unittest.TestCase):
+    def test_parse_focus(self):
+        text = "\n".join(["Report", "**BRIEF abc123**", "- FOCUS A:C1: holds: `python3 -c 1`", "  FOCUS B:limit-1: breaks: x -y",
+                          "FOCUS C:recount: breaks:", "FOCUS A:C1: holds: other", "EXTRA: a.py:3 bad :: ls -l", "EXTRA: b.py:4 bad",
+                          "FOCUS D:1 holds: no colon", "prose FOCUS Z:1: holds: not at the start"])
+        got = herd.parse_focus(text)
+        self.assertEqual(got["brief"], "abc123")
+        self.assertEqual(got["answers"]["B:limit-1"], {"verdict": "breaks", "command": "x -y"})
+        self.assertEqual(got["answers"]["A:C1"]["command"], "python3 -c 1")  # the first; the repeat is a bad line
+        self.assertEqual(sorted(got["bad"]), ["A:C1", "C:recount", "D:1"])
+        self.assertEqual(got["extra"], [{"text": "a.py:3 bad", "command": "ls -l"}, {"text": "b.py:4 bad", "command": None}])
+        self.assertIsNone(herd.parse_focus("no brief here")["brief"])
+        self.assertEqual(herd.parse_focus(None), {"brief": None, "answers": {}, "bad": [], "extra": []})
 
 
 if __name__ == "__main__":

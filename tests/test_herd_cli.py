@@ -94,10 +94,27 @@ def transcript(root, models, name="main", text="done", model="claude-{}-5-5", be
     return path
 
 
+def focus_text(root, slug, text):
+    """The report as a 0.13.0 reviewer writes it: `text`, then the BRIEF line and one answer per item (every item
+    holds, or the first breaks when the text ends with HERD-REVIEW: FAIL). Left as it is when it already answers."""
+    if not isinstance(text, str) or "FOCUS " in text or "BRIEF " in text:
+        return text
+    try:
+        files, _ = herd.review_files(Path(root), slug)
+        items = herd.focus_items(herd.load_task(root, slug), herd.load_notes(root, slug), files or ())
+        brief = herd.add_focus_round(Path(root), slug, items)
+    except (OSError, ValueError, KeyError, TypeError):  # no task here: a review the hook will not count
+        return text
+    fail = text.strip().endswith("HERD-REVIEW: FAIL")
+    return "\n".join([text, f"BRIEF {brief}"] + [
+        f"FOCUS {i['id']}: " + ("breaks: python3 -c \"import sys; sys.exit(3)\"" if fail and n == 0
+                                else f"holds: python3 -c \"print('{i['id']}')\"") for n, i in enumerate(items)])
+
+
 def hook_review(root, slug="t1", builder="opus", reviewer="opus", text="No Blocker or Major.\nHERD-REVIEW: PASS",
                 model="claude-{}-5-5", agent_type="herd:herd-reviewer", reviewer_path=None, builder_path=None,
                 reviewer_lines=None, builder_before_start=False, synthetic_last=False, handback=False,
-                last_message=None, seen=True, saw=True):
+                last_message=None, seen=True, saw=True, answers=True):
     """Run the SubagentStop review hook as Claude Code would at the end of a herd-reviewer subagent, with the
     logs where spike S3 found them: <session>.jsonl and <session>/subagents/agent-<id>.jsonl."""
     _LOGS[0] += 1
@@ -116,7 +133,7 @@ def hook_review(root, slug="t1", builder="opus", reviewer="opus", text="No Block
     else:
         files, _ = herd.review_files(Path(root), slug) if (herd._dir(root, slug) / "start.json").exists() else ([], 0)
         new = [Path(root) / f for f in files or [] if f in herd.untracked(Path(root))]  # in no git diff (0.12.1)
-        transcript(root, reviewer, text=text, model=model, synthetic_last=synthetic_last, handback=handback, path=rev,
+        transcript(root, reviewer, text=focus_text(root, slug, text) if answers else text, model=model, synthetic_last=synthetic_last, handback=handback, path=rev,
                    saw=saw, reads=new if saw else ())
     hook = {"session_id": sid, "transcript_path": str(main), "cwd": str(root), "agent_id": aid,
             "agent_type": agent_type, "agent_transcript_path": str(rev), "hook_event_name": "SubagentStop",

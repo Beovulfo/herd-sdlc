@@ -14,7 +14,7 @@ Today the `herd-reviewer` reads the whole change and writes findings rated Block
 
 1. `herd review-brief` adds a numbered Focus list built by code from `task.toml` and `notes.jsonl`: one item per entry of four categories, each quoting the evidence text and naming what to attack it with. No word list reads the agent's text: items come from fields and structure.
 2. The reviewer answers every item by its id with `holds` or `breaks`. A `breaks` carries a command that fails. The review hook checks structurally that every item is answered and runs each command itself. Severity labels decide nothing; a failing command does. General findings stay allowed and fail the review only with a failing command.
-3. After a `breaks`, the builder fixes and `herd verify` re-runs the checks. The next pass is a delta review: the broken items and what was added since. A pass in which every item holds ends the review.
+3. After a `breaks`, the builder fixes and `herd verify` re-runs the checks. The next pass is a full review again, with the full Focus list. A pass in which every item holds ends the review.
 4. The attacks still run before the review and at every `herd verify`. Nothing about them is relaxed.
 5. Cost and time per run are estimated and then measured. The target is fewer review rounds than 0.12.1 (10 rounds over 6 runs) with no lost quality.
 
@@ -48,7 +48,7 @@ Left out for lack of data: an attack marked `n/a` (the string appears in no note
 
 * G1: `focus_items(task, notes)` returns one item per entry, from fields and structure only, with a stable id (F1). Check: `test_focus_items_one_per_entry`, `test_focus_items_ids_are_stable`.
 * G2: No word list reads the agent's text. Rewording a coverage, limit or note, without changing its fields or line breaks, gives the same ids in the same order. Check: `test_focus_items_ignore_wording`.
-* G3: The list has at most 30 items plus its `decision` notes. Only `open` notes are cut, oldest first; if the rest alone exceed 30, nothing more is cut. The brief prints how many were cut. A list with no items sends the review to the old rule (G11). Check: `test_focus_cap_keeps_decisions`.
+* G3: The list has at most 30 items plus its `decision` notes. Only `open` notes are cut, oldest first; if the rest alone exceed 30, nothing more is cut. The brief prints how many were cut. Check: `test_focus_cap_keeps_decisions`.
 * G4: `herd review-brief` prints the items, each with its id, quote and what to attack it with, and a brief id; it appends the round to `focus.json`. Check: `test_review_brief_prints_focus`.
 * G5: The hook reads the answers (F3 grammar) and checks them against the latest round of `focus.json`, which the reviewer must have echoed by brief id and which it recomputes (F4.1). A missing or unknown id, or a `breaks` without a command, makes the review not count; the reason names the ids. It is not a round. Three `none` reviews of any cause (this goal, unconfirmed breaks, a stale round, a rerun that changed content) in a row, with no counting review between them, are an escalation. Check: `test_unanswered_focus_item_does_not_count`, `test_breaks_without_command_does_not_count`, `test_unanswered_reviews_escalate`.
 * G6: A `holds` needs a command that:
@@ -63,9 +63,9 @@ Left out for lack of data: an attack marked `n/a` (the string appears in no note
 
   Otherwise the break is unconfirmed, and F4.5 sets the verdict: a confirmed break elsewhere still gives FAIL; with none confirmed, the review does not count and the reason names the item. Check: `test_break_confirmed_by_failing_command`, `test_exit_one_is_unconfirmed`, `test_denied_command_is_unconfirmed`, `test_break_that_passes_is_unconfirmed`, `test_reader_break_is_unconfirmed`.
 * G8: The verdict is computed from the answers. Severity words decide nothing. An `EXTRA` finding without a command never fails a review. Check: `test_verdict_from_answers_not_severity`, `test_extra_without_command_does_not_fail`.
-* G9: After a confirmed break, `herd verify` reruns its command and stores `focus_breaks`; `problems()` refuses `herd done` while it exits 3 (any other result is shown, not blocking), until a later review that counts has answered that id `holds`. The next brief is a delta (F6): at medium risk, the broken items, new items and the files changed; at high risk, the full list again. A delta in which every item holds counts and ends the review; the report says when a break was closed with its command still exiting 3. Check: `test_open_break_blocks_done`, `test_delta_brief_lists_broken_items_and_changed_files`, `test_delta_pass_ends_review`, `test_high_risk_delta_is_full`.
+* G9: After a confirmed break, `herd verify` reruns its command and stores `focus_breaks`; `problems()` refuses `herd done` while it exits 3 (any other result is shown, not blocking), until a later review that counts has answered that id `holds`. The next brief is the full list again (there is no delta). The report says when a break was closed with its command still exiting 3. Check: `test_open_break_blocks_done`, `test_next_review_is_full_list`, `test_holds_closes_open_break`.
 * G10: The hook reruns every FOCUS command (`holds` and `breaks`) and every `EXTRA` command: `breaks` first, then `holds`, then `EXTRA`, each in item order. A command runs for at most 20 s and the total is capped at 120 s. A command past either cap is unconfirmed. Check: `test_rerun_deadline`.
-* G11: A task started on 0.13.0 has `focus: true` in `start.json`; its review needs a Focus round. A task without it, and any review recorded before 0.13.0, keeps the old rule and the `HERD-REVIEW` line. So does a focus task whose round has no items (G3). Check: `test_review_without_focus_keeps_old_rule`, `test_focus_task_needs_focus_round`.
+* G11: Every review on 0.13.0 needs Focus answers. A review with no focus round, or with a trailing `HERD-REVIEW` line and no answers, does not count and is not a round; the reason says to run `herd review-brief` and answer the Focus list. There is no legacy path: a task started on 0.12.x must finish on 0.12.x (or be started again). Check: `test_review_needs_focus_round`.
 * G12: The five attacks, the tier rule, the saw rule, the red-first rules and `ESCALATE_AFTER` are unchanged. Every existing test passes, except those F7 names, which get fixtures in the new form. Check: `python3 -m unittest discover -s tests -t .`.
 * G13: Replay. `focus_items()` over the saved `task.toml` and `notes.jsonl` of the benchmark runs, notes cut at the first review note, points at each expected finding of the Not proven table. Pass bar: for the six 0.12.1 runs, all expected rows (two: the cache Major and the run 6 lost store; the fixtures are the six runs' cut files under `tests/fixtures/focus-replay/`, unskipped); for the six 0.12.0 runs, at least 8 of the 10 expected rows that name an item (run from `HERD_BENCH_DIR`; skipped when unset). Merge needs the 0.12.0 replay to have run: its folders must be restored first. Both replays show fit, not prediction. The replay prints the item count per run (none above 30 besides decision notes) and the items that point at no finding. Check: `test_replay_points_at_findings_0121`, `test_replay_points_at_findings_0120`.
 * G14: Benchmark leg. Six Haiku runs on the new version, scored by the benchmark verifier. Pass: at most 8 review rounds over the six runs (0.12.1: 10), no run loses a store, Sonnet cost per run at most 0.12.1 plus 50% ($0.15); the leg reports the measured figure against that bar. Six runs are a smoke test: they cannot prove "no lost quality" (3 of the 12 earlier runs lost stores). Check: the leg's table, measured. A focus round measured $0.16 in S5(b).
@@ -82,8 +82,8 @@ Left out for lack of data: an attack marked `n/a` (the string appears in no note
 ## Open Questions
 
 1. **For B and D, what does an item name to attack?** Code can name a criterion's `check` (A) and an attack's `check` (C). For B (limits, notes) and D (inputs) the only structural pointer is the changed code files; mapping a limit or an input to a file would read wording. D lost two stores, so its item carries the strongest instruction: build the input from the `human` words and request, not from the `program` form (F1). The replay (G13) and the benchmark leg show whether that is enough.
-2. **Is a delta safe at medium risk?** It can miss a regression in an item it did not re-ask. Mitigation: the attacks and checks rerun at every verify. At high risk the delta is the full list. Whether to re-ask all items after any code change at medium risk is for the benchmark leg to answer, by counting regressions.
-3. **Decision 2 says a `breaks` command "fails".** A plain non-zero exit cannot show a defect (a typo exits 1), so the design narrows "fails" to exit 3, which the reviewer must choose on purpose (G7). Does a Sonnet reviewer do that reliably? Spike S5(b) tested it: all 5 breaks exited 3 on rerun.
+
+2. **Decision 2 says a `breaks` command "fails".** A plain non-zero exit cannot show a defect (a typo exits 1), so the design narrows "fails" to exit 3, which the reviewer must choose on purpose (G7). Does a Sonnet reviewer do that reliably? Spike S5(b) tested it: all 5 breaks exited 3 on rerun.
 
 ## Critical User Journeys (CUJs)
 
@@ -105,11 +105,11 @@ Left out for lack of data: an attack marked `n/a` (the string appears in no note
 * **When**: The hook records the review.
 * **Then**: The verdict is PASS and the round counts. `herd verify` prints the pass line, and the builder commits and runs `herd done`. One round. Test: `test_holds_needs_a_passing_command`.
 
-### CUJ 4: A break, a fix, a delta pass
+### CUJ 4: A break and a fix
 
 * **Given**: Item `C:refusal` broke with a confirmed command.
-* **When**: `herd done` refuses: "focus item C:refusal still breaks: `<command>`". The builder fixes the code and runs `herd verify`, which reports the command now passes. The builder runs `herd review-brief` again: a delta of `C:refusal`, new items and the changed files.
-* **Then**: The reviewer answers them; all hold; the review counts. Tests: `test_open_break_blocks_done`, `test_delta_pass_ends_review`.
+* **When**: `herd done` refuses: "focus item C:refusal still breaks: `<command>`". The builder fixes the code and runs `herd verify`, which reports the command now passes. The builder runs `herd review-brief` again and gets the full list.
+* **Then**: The reviewer answers every item; all hold; the review counts and closes the break. Tests: `test_open_break_blocks_done`, `test_holds_closes_open_break`.
 
 ### CUJ 5: A reviewer that does not answer
 
@@ -132,7 +132,7 @@ Left out for lack of data: an attack marked `n/a` (the string appears in no note
 
 ### F2. The brief and `focus.json`
 
-`review_brief()` appends, before the file list, `Focus list: answer every id`, the items, and a line `Brief: <id>`, the id being a hash of the items and the time. It appends the round `{brief, at, kind, items (id, qhash), files_sha}` to `.herd/tasks/<slug>/focus.json`. `kind` is `full` or `delta` (F6); `files_sha` is a hash of each file in `review_files()` at that time. A second `review-brief` adds a round and overwrites nothing. `focus.json` is added to `GUARD_STATE`: Herd's CLI and hooks write it, the agent never does. `herd init` writes `focus: true` to `start.json` (G11).
+`review_brief()` appends, before the file list, `Focus list: answer every id`, the items, and a line `Brief: <id>`, the id being a hash of the items and the time. It appends the round `{brief, at, items (id, qhash)}` to `.herd/tasks/<slug>/focus.json`. A second `review-brief` adds a round and overwrites nothing. `focus.json` is added to `GUARD_STATE`: Herd's CLI and hooks write it, the agent never does.
 
 ### F3. The reviewer's answer
 
@@ -143,13 +143,13 @@ Left out for lack of data: an attack marked `n/a` (the string appears in no note
 * make each command one line, self-contained, idempotent and at most 20 s: it may not write a file or depend on `cd`, because it is run again after the fix, by the hook and by `herd verify`, from the project root;
 * add general findings as `EXTRA: <path:line> <what is wrong> :: <command>`, the command optional and, if given, held to the same rules as a `breaks`.
 
-Without a Focus list it ends with `HERD-REVIEW: PASS` or `FAIL` as before (G11). The Blocker, Major and Nit scale is removed from the focus case.
+Every review ends with the answers; there is no `HERD-REVIEW` line. The Blocker, Major and Nit scale is removed.
 
 ### F4. The hook
 
 `review_hook()` keeps its inputs (`agent_type`, `transcript_path`, `agent_transcript_path`, `agent_id`, `cwd`, `last_assistant_message`) and its checks (model, tier, `saw`, `bad_refs`). After `text` is read, and before it is clipped to `REVIEW_CHARS` (2000, too short for 20 answers):
 
-1. **Parse and select the round.** An `open` or `decision` note added while the reviewer runs adds an item, so the builder must add none until the review is recorded (the run skill says so). `parse_focus(text)` reads the `BRIEF <id>` line, found anywhere in the text, and the lines matching the F3 regex. The id must be the latest round of `focus.json`. For a `full` round the hook also recomputes `focus_items()` and requires every recomputed id to be in the round (the builder cannot show the reviewer an older, smaller brief); for a `delta` round every id still open must be in it. No `BRIEF` line, an older round, or a missing id makes the review `none`, naming the ids.
+1. **Parse and select the round.** An `open` or `decision` note added while the reviewer runs adds an item, so the builder must add none until the review is recorded (the run skill says so). `parse_focus(text)` reads the `BRIEF <id>` line, found anywhere in the text, and the lines matching the F3 regex. The id must be the latest round of `focus.json`. The hook also recomputes `focus_items()` and requires every recomputed id to be in the round (the builder cannot show the reviewer an older, smaller brief); every id still open must be in it too. No `BRIEF` line, an older round, or a missing id makes the review `none`, naming the ids.
 2. **No log parsing.** The hook does not read the reviewer's tool results. S5(a) showed no command equals a logged call (the reviewer ran multi-line scripts, then wrote one-liners), so the evidence is the hook's own rerun (item 4). `reviewer_saw()` is unchanged.
 3. **Answers.** Missing ids, unknown ids and malformed lines are listed. A `holds` or `breaks` command that is only file readers is unconfirmed (G6, G7), as is a `holds` whose command another item repeats.
 4. **Reruns.** Each `breaks` command, then each `holds`, then each `EXTRA` command, is rerun with `run_check()` from the project root, within the G10 deadline, after the guard's rule check has been asked about it (the rule check only: it must not write a `guard` note, so `guard()`'s rule match is called without its `add_note`, with a test). A command the guard denies is unconfirmed. A `holds` is confirmed by exit 0, a `breaks` by exit 3. It compares `content_id()` before and after the reruns (`.herd/` is ignored by it); a change is recorded as `none`, so a rerun cannot void a high-risk review.
@@ -167,15 +167,15 @@ Without a Focus list it ends with `HERD-REVIEW: PASS` or `FAIL` as before (G11).
 
 ### F5. General findings
 
-A finding that matches no item is an `EXTRA` line. It appears in the report and the PR and never fails a review without a failing command (exit 3, rerun by the hook). An `EXTRA` break has an id `x<r>.<n>`, `r` the index of the `focus.json` round and `n` its line order, so ids never repeat across reviews and a delta can ask about it. A README that disagrees with the code is such a finding: a `grep` that exits 3 on the stale number would make it count; without one it is shown and the builder decides.
+A finding that matches no item is an `EXTRA` line. It appears in the report and the PR and never fails a review without a failing command (exit 3, rerun by the hook). An `EXTRA` break has an id `x<r>.<n>`, `r` the index of the `focus.json` round and `n` its line order, so ids never repeat across reviews. A README that disagrees with the code is such a finding: a `grep` that exits 3 on the stale number would make it count; without one it is shown and the builder decides.
 
 ### F6. After a break
 
-An *open break* is the latest confirmed break whose item has no later counting review answering `holds` for it. `verify()` and the delta both read it.
+An *open break* is the latest confirmed break whose item has no later counting review answering `holds` for it. `verify()` and the brief both read it.
 
 * `verify()` reruns the `command` of each open break, like an attack check, and stores `focus_breaks` in the evidence (command, exit, output tail). `problems()` adds `focus item <id> still breaks: <command>` while it exits 3, with a `NEXT_STEPS` entry. Any other exit (a fix that changed the command's inputs, 126, 127, a timeout) is shown, not blocking. This is the verify-time feedback `review_state()` does not give. A later review that is `none` does not close an open break.
-* `herd review-brief` builds a delta (`kind: delta`) when there is an open break and the risk is medium. It holds: the open breaks' ids, matched by id and `qhash` (an item whose quote changed is new); the new items, meaning ids absent from the previous round or with a different `qhash`, including notes added since; and the files whose hash differs from that round's `files_sha`, plus the "New files, in no `git diff`" line. The diff command is `git diff <the commit herd init recorded> -- <those files>`, the commit `review_brief()` already prints. The hook counts reads against that file list. At high risk `review_state()` already needs a review of the final content, so the brief is `full`.
-* A delta where every item holds counts and ends the review. A `holds` for an open break's id, with a command the hook reran and saw exit 0, closes it even if its old command still exits 3: the reviewer decided the old command was wrong, and the report says so for the human to read. The builder cannot close it.
+* `herd review-brief` always builds the full list, and the hook requires every open break's id in it.
+* A review where every item holds counts and ends the review. A `holds` for an open break's id, with a command the hook reran and saw exit 0, closes it even if its old command still exits 3: the reviewer decided the old command was wrong, and the report says so for the human to read. The builder cannot close it.
 
 ### F7. Review states, strings and tests
 
@@ -184,29 +184,28 @@ What counts, by review kind and risk:
 | Case | Medium risk | High risk |
 | --- | --- | --- |
 | Full focus review, PASS | counts | counts for that content only (a commit alone does not change it) |
-| FAIL, then a clean `herd verify` | `herd done` still needs a counting review: a delta | needs a full review of the final content |
+| FAIL, then a clean `herd verify` | `herd done` still needs a counting review | needs a full review of the final content |
 | Review `none` | does not count, not a round | same |
-| Task without `focus: true`, or review before 0.13.0 | old rule: `HERD-REVIEW` line | same |
-| Task with `focus: true`, review with a trailing `HERD-REVIEW: PASS` and no focus answers | does not count; the reason says to answer the Focus list | same |
+| Review with a trailing `HERD-REVIEW: PASS` and no focus answers | does not count; the reason says to answer the Focus list | same |
 
-`review_state()` and `_tier_rule()` implement the table. The legacy path stays for tasks started before 0.13.0 and is removed in a later version, noted in the changelog.
+`review_state()` and `_tier_rule()` implement the table. There is no legacy path: the changelog says a task started on 0.12.x must finish on 0.12.x.
 
-* `skills/run/SKILL.md` step 7: pass what `herd review-brief` prints; the reviewer answers each id; fix breaks, run `herd verify`, run `herd review-brief` again for a delta; commit and `herd done` after a PASS that counts. The run skill's word budget is raised in its test by the 30 or so words the step needs, and "decline Nits in one line" goes. The three-round limit lives in code (`ESCALATE_AFTER`, `_escalations()`).
+* `skills/run/SKILL.md` step 7: pass what `herd review-brief` prints; the reviewer answers each id; fix breaks, run `herd verify`, run `herd review-brief` again for a full review; commit and `herd done` after a PASS that counts. The run skill's word budget is raised in its test by the 30 or so words the step needs, and "decline Nits in one line" goes. The three-round limit lives in code (`ESCALATE_AFTER`, `_escalations()`).
 * Strings that say Blocker or Major: `_tier_rule()` (the verdict reason), `pass_hint()`, `final_report()` and `pr_body()`, `README.md` (the review rows), `agents/herd-reviewer.md`.
-* Existing tests that change: `tests/test_herd_review.py`, `tests/test_herd_quality.py` (the `reviewer_saw` callers), `tests/test_harness_rules.py` and `tests/test_herd_cli.py` (hook-review fixtures: fixtures of the old rule start the task without the `focus` key; the others get focus answers), `tests/test_herd_guard.py` (`GUARD_STATE` gains `focus.json`). `herd_arbiter.py` and `herd_escalation.py` read no review field, so their tests stay.
+* Existing tests that change: `tests/test_herd_review.py`, `tests/test_herd_quality.py` (the `reviewer_saw` callers), `tests/test_harness_rules.py` and `tests/test_herd_cli.py` (hook-review fixtures get focus answers), `tests/test_herd_guard.py` (`GUARD_STATE` gains `focus.json`). `herd_arbiter.py` and `herd_escalation.py` read no review field, so their tests stay.
 * `CHANGELOG.md` 0.13.0 and `version` in `.claude-plugin/plugin.json`.
 
 ### F8. Cost and time estimate
 
-From the analysis: a 0.12.1 review round cost Sonnet $0.059 on average ($0.591 over 10 rounds), a 0.12.0 round $0.088 ($1.858 over 21). A focus round runs a command per item. S5(b) measured one round of 14 items at $0.16, so the estimate is about $0.16 per round (the 0.12.1 average was $0.059). Assume 1.2 rounds per run (a delta in about one run in five). That gives about $0.19 per run, against $0.10 on 0.12.1 and $0.31 on 0.12.0: nearly twice 0.12.1 and above the G14 bar of $0.15. The G14 bar is a measurement the leg reports; above $0.15 the owner decides whether the rounds saved are worth it, because Herd does not trade quality for tokens. The hook adds up to two minutes of wall time per round and no model cost. Rounds per run: 1.7 on 0.12.1, 3.5 on 0.12.0, assumed 1.2 here.
+From the analysis: a 0.12.1 review round cost Sonnet $0.059 on average ($0.591 over 10 rounds), a 0.12.0 round $0.088 ($1.858 over 21). A focus round runs a command per item. S5(b) measured one round of 14 items at $0.16, so the estimate is about $0.16 per round (the 0.12.1 average was $0.059). Assume 1.2 rounds per run (a second round in about one run in five). That gives about $0.19 per run, against $0.10 on 0.12.1 and $0.31 on 0.12.0: nearly twice 0.12.1 and above the G14 bar of $0.15. The G14 bar is a measurement the leg reports; above $0.15 the owner decides whether the rounds saved are worth it, because Herd does not trade quality for tokens. The hook adds up to two minutes of wall time per round and no model cost. Rounds per run: 1.7 on 0.12.1, 3.5 on 0.12.0, assumed 1.2 here.
 
 ## Order
 
 1. **Spike S5** (`docs/spikes/s5-focus-answers.md`), done: (a) no command equalled a logged call, so the logged-call rule was dropped; (b) a Sonnet reviewer follows the `BRIEF` and `FOCUS` line shapes, and exit 3, from a brief of 14 items. Result: the format works.
 2. **Replay.** Create `focus_items()` and the fixtures `tests/fixtures/focus-replay/` (cut `task.toml` and `notes.jsonl` of the six 0.12.1 runs, generic benchmark data) and both replay tests. If an expected row is not pointed at, stop and change the categories before any hook change.
 3. Modify `herd.py`: split `guard()`'s rule check from its `add_note` call, `parse_focus()`, the verdict and the reruns (`tests/test_herd_review.py`).
-4. Modify `review_brief()`, `focus.json`, `GUARD_STATE`, `herd init`'s `start.json`, `agents/herd-reviewer.md`.
-5. Modify `verify()`, `problems()`, `review_state()`, `_tier_rule()`, `NEXT_STEPS`, `_escalations()` and the delta (F6, F7 table).
+4. Modify `review_brief()`, `focus.json`, `GUARD_STATE`, `agents/herd-reviewer.md`.
+5. Modify `verify()`, `problems()`, `review_state()`, `_tier_rule()`, `NEXT_STEPS`, `_escalations()` and the open break (F6, F7 table).
 6. Modify the skill, README, strings of F7, `CHANGELOG.md`, `plugin.json`, `hooks/hooks.json`; update the named existing tests.
 7. **Benchmark leg before merge.** Six Haiku runs on the new version (G14). This changes what ships as reviewed: quality comes before tokens. Merge only if G13 and G14 hold.
 
@@ -234,7 +233,7 @@ Use Herd on Herd: each step is a `/herd:run` task whose criteria are the Goals a
 | Ran before the code; it judged words and could not see the real input form | Runs after the code and all checks; D items say to run the program on the request's form |
 | A PASS needed only a model's opinion | A PASS needs a command per item that the hook reruns and sees exit 0; a FAIL needs a command that fails when Herd reruns it |
 | One verdict for the whole file | One id per entry, so the input form is its own item that cannot be skipped |
-| An extra agent, hook entry and round | The same reviewer and hook, one pass; a delta only after a real break |
+| An extra agent, hook entry and round | The same reviewer and hook, one pass |
 
 It does not remove the weakness that a model can agree too easily. It makes agreeing cost a rerun command, and makes the input form a numbered item of the final review. It does not read what a command tests: a `holds` command that tests nothing passes (Risks).
 
@@ -247,8 +246,8 @@ It does not remove the weakness that a model can agree too easily. It makes agre
 | The rerun is as dangerous as the reviewer's own call | It is no safer than that call: the guard is asked first, a denied command is unconfirmed, and the command is the agent's own one-liner |
 | A rerun changes files and voids a high-risk review | Commands are self-contained and idempotent (F3); the hook compares `content_id()` before and after (F4.4) and records a change as `none` |
 | The item list grows with the notes | Cap of 30, decisions kept, the cut printed (G3) |
-| A delta misses a regression at medium risk | Open Question 2; attacks and checks rerun at every verify; the leg counts regressions |
-| The builder trims the brief, shows an old one or deletes `focus.json` | The hook needs the echoed id to be the latest round and recomputes the items (F4.1); `start.json` says a focus round is needed (G11) |
+
+| The builder trims the brief, shows an old one or deletes `focus.json` | The hook needs the echoed id to be the latest round and recomputes the items (F4.1); a review with no focus round does not count (G11) |
 | The reviewer writes prose | G5: the review does not count, and three in a row escalate |
 | Cost per round rises | F8 estimate; G14 measures it |
 | A finding has no field (README drift) | A general finding; a known limit |

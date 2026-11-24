@@ -10,7 +10,7 @@ from pathlib import Path
 
 from scripts import herd
 from tests.test_harness_rules import OK, REQUEST, Base
-from tests.test_herd_cli import hook_review, transcript
+from tests.test_herd_cli import focus_text, hook_review, transcript
 
 ROOT = Path(herd.__file__).resolve().parent.parent
 
@@ -163,24 +163,23 @@ class TestTranscripts(ReviewBase):
 
 class TestVerdict(ReviewBase):
     def test_review_verdict_parsed(self):
+        """0.13.0: the answers decide, the HERD-REVIEW line is only text (design G8, G11)."""
         self.ready()
-        for text, verdict in (("Nothing found.\nHERD-REVIEW: PASS", "PASS"), ("Major: x.py:3\nHERD-REVIEW: FAIL", "FAIL"),
-                              ("No verdict here.", "none"), ("herd-review: pass", "none"), ("HERD-REVIEW: PASS!", "none"),
-                              ("the verdict is HERD-REVIEW: PASS", "none"), ("HERD-REVIEW:PASS", "none"),
-                              ("HERD-REVIEW: FAIL\nfixed\nHERD-REVIEW: PASS", "PASS"), ("  HERD-REVIEW: PASS  ", "PASS"),
-                              ("HERD-REVIEW: PASS\nActually there is a Blocker.", "none"), ("HERD-REVIEW: PASS\n\n", "PASS")):
-            self.review(builder="haiku", reviewer="sonnet", text=text)
+        for text, answers, verdict in (("Nothing found.\nHERD-REVIEW: PASS", True, "PASS"),
+                                       ("Major: x.py:3\nHERD-REVIEW: FAIL", True, "FAIL"),
+                                       ("Blocker, Major.\nHERD-REVIEW: FAIL", False, "none"),
+                                       ("HERD-REVIEW: PASS", False, "none"), ("No verdict here.", False, "none")):
+            self.review(builder="haiku", reviewer="sonnet", text=text, answers=answers)
             self.assertEqual(self.last()["verdict"], verdict, text)
             ok, why = self.state()
             self.assertEqual(ok, verdict == "PASS", text)
-            if not ok:
-                self.assertIn("found Blocker or Major issues, or gave no verdict", why)
         self.review(builder="haiku", reviewer="sonnet", text="Fine.\nHERD-REVIEW: PASS", handback=True)
         self.assertEqual(self.last()["verdict"], "PASS")  # from a SubagentHandback report (spike S3)
-        self.review(builder="haiku", reviewer="sonnet", text=None, last_message="ok\nHERD-REVIEW: PASS")
+        self.review(builder="haiku", reviewer="sonnet", text=None, last_message=focus_text(self.root, "t1", "ok"))
         self.assertEqual(self.last()["verdict"], "PASS")  # from last_assistant_message when the transcript has none
         self.review(builder="haiku", reviewer="sonnet", text="x" * 5000 + "\nHERD-REVIEW: PASS")
         self.assertLessEqual(len(self.last()["text"]), 2000)
+        self.assertEqual(self.last()["verdict"], "PASS")  # the answers are read before the text is clipped
 
     def test_three_failed_reviews_escalate(self):
         self.ready()
@@ -273,7 +272,7 @@ class TestReviewAttacks(ReviewBase):
     def test_review_one_bad_part(self):
         self.ready()
         main = transcript(self.root, ["haiku", "haiku"])
-        rev = transcript(self.root, "sonnet", text="Fine.\nHERD-REVIEW: PASS", reads=[self.root / "app.py"],
+        rev = transcript(self.root, "sonnet", text=focus_text(self.root, "t1", "Fine."), reads=[self.root / "app.py"],
                          path=main.parent / main.stem / "subagents" / "agent-x.jsonl")
         rev.write_text("{broken\n" + rev.read_text() + "[1, 2]\n")  # bad lines around good ones
         main.write_text(main.read_text() + '{"type": "assistant", "message": {"model": "<synthetic>"}}\n{oops\n')
@@ -293,14 +292,15 @@ class TestReviewAttacks(ReviewBase):
             if v == "low":
                 self.review(builder="haiku", reviewer="haiku", text="HERD-REVIEW: FAIL")
             else:
-                self.review(builder="haiku", reviewer="sonnet", text="x" if v == "none" else f"HERD-REVIEW: {v}")
+                self.review(builder="haiku", reviewer="sonnet", text="x" if v == "none" else f"HERD-REVIEW: {v}",
+                            answers=v != "none")
         herd.verify(self.root, "t1")
-        rounds = [v for v in plan if v != "low"]  # separate count: rounds after the last PASS
+        rounds = [v for v in plan if v not in ("low", "none")]  # separate count: a none review is no round (0.13.0)
         tail = len(rounds) - (max((i for i, v in enumerate(rounds) if v == "PASS"), default=-1) + 1)
         with open(self.root / ".herd/tasks/t1/notes.jsonl") as f:
             raw = [json.loads(line) for line in f if line.strip()]
         self.assertEqual([n["verdict"] for n in raw if n["kind"] == "review" and n["tier"] == "sonnet"],
-                         ["none" if v == "none" else v for v in rounds])
+                         [v for v in plan if v != "low"])
         escalated = any("review rounds" in c for c in herd._escalations(self.root, "t1"))
         self.assertEqual(escalated, tail >= herd.ESCALATE_AFTER, (plan, tail))
 

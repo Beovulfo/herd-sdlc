@@ -72,6 +72,7 @@ import shlex
 import shutil
 import subprocess
 import tempfile
+import time
 import tomllib
 import unicodedata
 from datetime import datetime, timezone
@@ -1319,6 +1320,8 @@ def _focus_all(task, notes, files=()):
     items = []
 
     def add(id_, quote, attack_with):
+        if any(i["id"] == id_ for i in items):  # a repeated criterion id: the first one is asked
+            return
         items.append({"id": id_, "cat": id_[0], "quote": str(quote), "qhash": _qhash(quote), "attack_with": attack_with})
     for c in task.get("criteria") or []:  # A: the coverage of each human criterion, against its claim
         if isinstance(c, dict) and c.get("source") == "human" and str(c.get("coverage") or "").strip():
@@ -1364,6 +1367,171 @@ def focus_items(task, notes, files=()):
 def focus_cut(task, notes):
     """How many `open` notes the cap left out of the focus list."""
     return len(_focus_all(task, notes)) - len(focus_items(task, notes))
+
+
+FOCUS_CMD_S, FOCUS_TOTAL_S = 20, 120  # the hook's rerun time per command and in all (design G10)
+FOCUS_READERS = {"cat", "head", "tail", "less", "grep", "rg"}  # commands that only print what a file holds
+FOCUS_ANSWER = re.compile(r"FOCUS (\S+):\s+(holds|breaks):\s+(\S.*)")
+FOCUS_EXTRA = re.compile(r"EXTRA:\s*(\S.*?)(?:\s+::\s+(\S.*))?")
+FOCUS_BAD_ID = re.compile(r"FOCUS (\S+?):?(?:\s|$)")
+NONE_ESCALATE = 3  # review hook runs in a row that do not count (verdict none) before the human is asked
+
+
+def focus_rounds(root, slug):
+    """The rounds of focus.json, oldest first; a missing or unreadable file gives none."""
+    try:
+        data = json.loads((_dir(root, slug) / "focus.json").read_text())
+    except (OSError, ValueError):
+        return []
+    return [r for r in data if isinstance(r, dict)] if isinstance(data, list) else []
+
+
+def _save_focus(root, slug, rounds):
+    (_dir(root, slug) / "focus.json").write_text(json.dumps(rounds) + "\n")
+
+
+def add_focus_round(root, slug, items):
+    """Append a round to focus.json (design F2) and return its brief id: a hash of the items and the time."""
+    rounds, at = focus_rounds(root, slug), now()
+    ids = [[i["id"], i["qhash"]] for i in items]
+    brief = hashlib.sha256((json.dumps(ids) + at + str(len(rounds))).encode()).hexdigest()[:8]
+    rounds.append({"brief": brief, "at": at, "items": [{"id": i, "qhash": h} for i, h in ids]})
+    _save_focus(root, slug, rounds)
+    return brief
+
+
+def _focus_line(line):
+    """A reviewer's report line without its list marker or the Markdown marks around the whole line."""
+    t = LIST_MARK.sub("", line.strip(), count=1)
+    return (t.strip("`*_") if t[:1] in "`*_" else t).strip()
+
+
+def parse_focus(text):
+    """The brief id, the answers and the general findings of a reviewer's report (design F3): {brief, answers
+    {id: {verdict, command}}, bad [ids of FOCUS lines that cannot be used], extra [{text, command}]}. Lines are read
+    by their shape, anywhere in the text."""
+    out = {"brief": None, "answers": {}, "bad": [], "extra": []}
+    for line in (text if isinstance(text, str) else "").splitlines():
+        t = _focus_line(line)
+        if (m := re.fullmatch(r"BRIEF (\S+)", t)) and out["brief"] is None:
+            out["brief"] = m[1]
+        elif t.startswith("FOCUS "):
+            m, ident = FOCUS_ANSWER.fullmatch(t), FOCUS_BAD_ID.match(t)
+            if not m:
+                out["bad"].append(ident[1] if ident else "?")
+            elif m[1] in out["answers"]:
+                out["bad"].append(m[1])
+            else:
+                out["answers"][m[1]] = {"verdict": m[2], "command": m[3].strip().strip("`").strip() if m[3].strip()[:1] == "`"
+                                        else m[3].strip()}
+        elif m := FOCUS_EXTRA.fullmatch(t):
+            out["extra"].append({"text": m[1].strip(), "command": m[2].strip() if m[2] else None})
+    return out
+
+
+def _is_reader(words):
+    name = Path(words[0]).name
+    return (name in FOCUS_READERS or name == "git" and any(_rule_hit(r, words, ".") for r in SHOWS_CHANGE)
+            or name == "sed" and any(w == "-n" or SHORT.fullmatch(w) and "n" in w for w in words[1:]))
+
+
+def focus_reader(command):
+    """The command is made only of file readers (cat, head, tail, less, grep, rg, sed -n, git diff, git show,
+    git log -p): it prints what a file holds and tests nothing. Reads command names, never the agent's prose."""
+    segments = _segments(command)
+    return bool(segments) and all(_is_reader(w) for w in segments)
+
+
+def _rerun(root, command, kind, until):
+    """(exit or None, output tail, why not confirmed or None) for one command the reviewer gave. Run from the project
+    root after the guard's rules; kind is "holds" (confirmed by exit 0), "breaks" or "extra" (exit 3)."""
+    if focus_reader(command):
+        return None, "", "a file reader tests nothing"
+    if guard(root, {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(root)}, record=False):
+        return None, "", "denied by the guard's rules"
+    left = until - time.monotonic()
+    if left <= 0:
+        return None, f"not run: the total of {FOCUS_TOTAL_S} s for reruns was used", "past the total time"
+    code, tail = run_check(root, command, min(FOCUS_CMD_S, left))
+    want = 0 if kind == "holds" else 3
+    return code, tail, None if code == want else (tail if code is None else f"exited {code}, not {want}")
+
+
+def focus_judge(root, slug, text):
+    """(verdict, the note's focus record) for a reviewer's report on a focus task (design F4): checks the brief and
+    the answers, reruns every command, and decides from the answers alone. Appends the full answers to focus.json."""
+    rounds = focus_rounds(root, slug)
+    if not rounds:
+        return "none", {"why": "no focus round: run `herd review-brief` and spawn herd-reviewer with what it prints"}
+    idx, live = len(rounds) - 1, rounds[-1]
+    parsed, held = parse_focus(text), {i["id"]: i["qhash"] for i in live.get("items", [])}
+    ans, ids = parsed["answers"], list(held)
+    rec = {"brief": live.get("brief"), "answered": len([i for i in ids if i in ans]),
+           "unanswered": [i for i in ids if i not in ans], "unconfirmed": [], "holds": [], "breaks": [], "extra": []}
+    task, notes = load_task(root, slug), load_notes(root, slug)
+    files = review_files(root, slug)[0] or ()
+    stale = [i["id"] for i in focus_items(task, notes, files) if held.get(i["id"]) != i["qhash"]]
+    commands = {}
+    for i in ids:
+        if i in ans:
+            commands.setdefault(" ".join(ans[i]["command"].split()), []).append(i)
+    problems_ = []
+    if parsed["brief"] is None:
+        problems_.append("no BRIEF line: put `BRIEF <id>` from the brief in the report")
+    elif parsed["brief"] != live.get("brief"):
+        problems_.append(f"BRIEF {parsed['brief']} is not the latest brief ({live.get('brief')})")
+    if stale:
+        problems_.append(f"items added or changed since the brief: {', '.join(stale)}")
+    if rec["unanswered"]:
+        problems_.append(f"not answered: {', '.join(rec['unanswered'])}")
+    if [i for i in ans if i not in held]:
+        problems_.append(f"unknown ids: {', '.join(i for i in ans if i not in held)}")
+    if parsed["bad"]:
+        problems_.append(f"unusable FOCUS lines (each needs `holds` or `breaks` and a command, once): {', '.join(dict.fromkeys(parsed['bad']))}")
+    repeated = [i for ids_ in commands.values() if len(ids_) > 1 for i in ids_]
+    if repeated:
+        problems_.append(f"the same command answers more than one item: {', '.join(repeated)}")
+    if problems_:
+        rec["why"] = "; ".join(problems_) + ": spawn herd-reviewer again with what `herd review-brief` prints"
+        rec["unanswered"] = rec["unanswered"] or [i for i in parsed["bad"] if i in held]
+        return "none", rec
+    before, until = content_id(root), time.monotonic() + FOCUS_TOTAL_S
+    runs = {}
+    order = ([(i, "breaks") for i in ids if ans[i]["verdict"] == "breaks"] + [(i, "holds") for i in ids if ans[i]["verdict"] == "holds"]
+             + [(f"x{idx}.{n}", "extra") for n, x in enumerate(parsed["extra"], 1) if x["command"]])
+    extras = {f"x{idx}.{n}": x for n, x in enumerate(parsed["extra"], 1)}
+    for i, kind in order:
+        command = ans[i]["command"] if i in ans else extras[i]["command"]
+        code, tail, why = _rerun(root, command, kind, until)
+        runs[i] = {"verdict": kind if i in ans else "extra", "command": command, "exit": code, "tail": tail,
+                   "confirmed": why is None, "why": why}
+    changed = content_id(root) != before
+    rounds[idx].setdefault("reviews", []).append({"at": now(), "answers": runs, "extra": [
+        {"id": f"x{idx}.{n}", **x} for n, x in enumerate(parsed["extra"], 1)]})
+    _save_focus(root, slug, rounds)
+    rec["unconfirmed"] = [i for i, r in runs.items() if not r["confirmed"] and not i.startswith("x")]
+    rec["holds"] = [i for i in ids if ans[i]["verdict"] == "holds"][:FOCUS_MAX]
+    rec["breaks"] = [{"id": i, "command": _clip(r["command"], 300), "exit": r["exit"], "tail": _clip(r["tail"], 300),
+                      "confirmed": r["confirmed"], "why": r["why"]} for i, r in runs.items() if r["verdict"] == "breaks"]
+    rec["extra"] = [{"id": f"x{idx}.{n}", "text": _clip(x["text"], 300), "command": _clip(x["command"] or "", 300),
+                     "exit": runs[f"x{idx}.{n}"]["exit"] if x["command"] else None,
+                     "confirmed": bool(x["command"]) and runs[f"x{idx}.{n}"]["confirmed"]}
+                    for n, x in enumerate(parsed["extra"], 1)]
+    if changed:
+        rec["why"] = "a rerun changed the content of the project: commands must not write files; review again"
+        return "none", rec
+    hit = [i for i, r in runs.items() if r["confirmed"] and r["verdict"] in ("breaks", "extra")]
+    if hit:
+        rec["why"] = "confirmed: " + "; ".join(f"{i}: `{_clip(runs[i]['command'], 80)}`" for i in hit)
+        if rec["unconfirmed"]:
+            rec["why"] += "; unconfirmed: " + ", ".join(rec["unconfirmed"])
+        return "FAIL", rec
+    if rec["unconfirmed"]:
+        rec["why"] = ("unconfirmed on the hook's rerun (a `breaks` must exit 3, a `holds` exit 0, and neither may only "
+                      "read a file): " + ", ".join(f"{i} ({runs[i]['why']})" for i in rec["unconfirmed"]))
+        return "none", rec
+    rec["why"] = ""
+    return "PASS", rec
 
 
 def review_brief(root, slug):
@@ -1418,8 +1586,7 @@ def review_hook(root, hook):
     text = _final_text(_assistant_lines(rev, last_turn=True)) if placed else None
     if text is None and isinstance(hook.get("last_assistant_message"), str):
         text = hook["last_assistant_message"]
-    last = next((line for line in reversed((text or "").splitlines()) if line.strip()), "")
-    found = VERDICT.fullmatch(last.strip().strip("`*_"))  # Markdown around the line is formatting, not a new verdict
+    focused = focus_judge(root, slug, text or "")  # a review is decided by its answers (design F4), never by a verdict line
     tier = tier_of(model, tiers)
     started = _dir(root, slug) / "started"
     since = started.read_text().strip() if started.exists() else None
@@ -1436,7 +1603,7 @@ def review_hook(root, hook):
     code, any_file = review_files(root, slug)
     new = [f for f in code or [] if f in untracked(root) and f not in read]  # in no git diff: must be read
     extra = {"source": "hook", "tier": tier, "builder_tier": btier, "top": tier == tiers[-1],
-             "verdict": found[1] if found else "none", "unread": unread or bwhy,
+             "verdict": focused[0], "unread": unread or bwhy,
              # what the reviewer saw (0.10.0): it counts only if it printed the diff or read every changed code file
              "diff_seen": diff, "code_total": None if code is None else len(code),
              "code_read": None if code is None else sum(f in read for f in code),
@@ -1444,7 +1611,9 @@ def review_hook(root, hook):
              "new_unread": new[:MAX_REFS], "bad_refs": bad_refs(root, text),
              "saw": code is None or all(f in read for f in code) or (diff and not new)}
     # a round, for escalation and the report: after all checks first passed, by a reviewer whose tier would count
-    extra["round"] = (_dir(root, slug) / "green.json").exists() and _tier_rule(root, slug, dict(extra, verdict="PASS"))[0]
+    extra["focus"] = focused[1]
+    extra["round"] = ((_dir(root, slug) / "green.json").exists() and focused[0] != "none"
+                      and _tier_rule(root, slug, dict(extra, verdict="PASS"))[0])
     add_review(root, slug, by=model or "an unknown model", text=_clip((text or "").strip() or "(no report)", REVIEW_CHARS),
                extra=extra)
 
@@ -2302,9 +2471,9 @@ def _protected(root, cwd, path, globs):
     return None
 
 
-def guard(root, hook):
+def guard(root, hook, record=True):
     """PreToolUse hook on Bash and the edit tools. None allows; a dict is the deny output. Only while a task is
-    active; each denial is a `guard` note. It reads command text, so bash -c, scripts and aliases pass (a Non-Goal)."""
+    active; each denial is a `guard` note (not with record=False: the review hook only asks). It reads command text, so bash -c, scripts and aliases pass (a Non-Goal)."""
     if not isinstance(hook, dict):
         return None
     slug = active_slug(root)
@@ -2361,7 +2530,8 @@ def guard(root, hook):
     if not hit:
         return None
     try:
-        add_note(root, slug, "guard", f"{tool}: {hit[0]}")
+        if record:
+            add_note(root, slug, "guard", f"{tool}: {hit[0]}")
     except Exception as e:  # noqa: BLE001 - a log that cannot be written never turns a denial into an allow
         print(f"herd guard: denied, but the guard note could not be written: {e!r}"[:300], file=sys.stderr)
     return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",

@@ -73,6 +73,7 @@ import shutil
 import subprocess
 import tempfile
 import tomllib
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -98,7 +99,12 @@ TEMPLATE = '''goal = {goal}
 # source = "human" for criteria the human wrote, "agent-proposed" for ones you added.
 # An empty check is allowed: the criterion is then `unchecked` and never counts as met.
 # For a `human` criterion add `coverage = "what the check proves and what it does not"`.
-# Optional top level: test_budget = "...", known_limits = "when the claim may fail".
+# Top level, needed at medium and high risk: test_budget = "what is and is not tested",
+# known_limits = "when the claim may fail", and one [[inputs]] table per input (inputs = [] if none):
+#
+# [[inputs]]
+# human = "the input as the human described it"
+# program = "the input as the program receives it"
 #
 # [[criteria]]
 # id = "C1"
@@ -149,6 +155,9 @@ ATTACKS = {"bad-input": "bad input at every entry point ends in a clear message,
 REFUSAL_FIRST = ("no refusal attack yet: before building, list what the program will refuse (cannot be reached, "
                  "not found, invalid) and log `herd note --tried --attack refusal --check \"<command>\"` with "
                  "separate code; it should fail now")
+# at medium and high risk on the standard route `herd done` refuses while one is empty; what to write, for the message
+REQUIRED = {"test_budget": "<what is tested and what is not, at which level>",
+            "known_limits": "<when the claim may fail or has not been shown>"}
 RANDOM = re.compile(r"\b(random\w*|seed(s|ed)?|fuzz\w*|property[- ]based|property tests?|hypothesis)\b", re.I)
 UNIVERSAL = re.compile(r"\b(any|every|all|whatever|whichever|arbitrary)\b", re.I)  # a human claim over all inputs
 # ponytail: a word list, so it misses limits worded otherwise and flags some harmless ones; it never blocks
@@ -447,20 +456,49 @@ def validate_task(task):
     return errs
 
 
-def _squash(s):
-    return re.sub(r"\s+", " ", s.strip().lower())
+QUOTES = str.maketrans({c: None for c in "'\"`\u2018\u2019\u201a\u201b\u201c\u201d\u201e\u00ab\u00bb\u2039\u203a"})
 
 
-def human_unquoted(task, request):
-    """Ids of `human` criteria whose text is not a verbatim quote of the request. None if no request."""
+def _squash(s, markers=True):
+    """Text as a quote compares it: what copying from Markdown, chat or a terminal changes is dropped (Unicode
+    forms, case, spacing and line wraps, quotes, emphasis, code ticks, escapes, link targets, spaced dashes,
+    sentence punctuation and, with markers, line-start list, heading and quote markers). Words, numbers,
+    identifiers (max_len) and operators (<, >=, !=, 2*3) stay."""
+    s = unicodedata.normalize("NFKC", str(s)).casefold()
+    s = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", s)  # [text](url) -> text
+    s = re.sub(r"\\([^\w\s])", r"\1", s)  # Markdown escapes: \* -> *
+    if markers:  # the request's Markdown; a criterion that starts with `> 5` keeps it
+        s = re.sub(r"(?m)^[ \t]*(?:>[ \t]*)*(?:#{1,6}[ \t]+|[-*+][ \t]+|\d+[.)][ \t]+)?", "", s)
+    s = re.sub(r"(?<!\w)[*_~]+|[*_~]+(?!\w)", "", s.translate(QUOTES))  # emphasis at a word's edge, not 2*3 or a_b
+    s = re.sub(r"[\u2010-\u2015\u2212]", "-", s)  # every dash and minus is a hyphen
+    s = re.sub(r"(?:^|(?<=\s))-+(?=\s|$)", " ", s)  # a spaced dash is punctuation
+    s = re.sub(r"[.,;:!?\u2026]+(?=\s|$)", " ", s)  # sentence punctuation, not 20.5, a:b or !=
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _quotes(text, source):
+    """text is a verbatim quote of source, as _squash compares them; an empty quote quotes nothing."""
+    t = _squash(text, markers=False)
+    # whole words and numbers: `return 1` is not in `return 10`, `return 1.5`, `1-2` or `1,000`
+    edge_l, edge_r = r"(?<!\w)(?<!\w[.,/:-])", r"(?!\w)(?![.,/:-]\w)"
+    return bool(t) and re.search(edge_l + re.escape(t) + edge_r, _squash(source)) is not None
+
+
+def human_unquoted(task, request, notes=()):
+    """Ids of `human` criteria whose text is not a verbatim quote of the request, nor of a `human-change` note
+    for that id (the human's own rewording, the note the frozen-criteria rule accepts). None if no request."""
     if request is None:
         return None
-    req = _squash(request)
+    changes = {}
+    for n in notes:
+        if n.get("kind") == "human-change":
+            changes.setdefault(str(n.get("text", "")).split(":", 1)[0].strip(), []).append(str(n.get("text", "")))
     return [c.get("id", "?") for c in task.get("criteria", [])
-            if c.get("source") == "human" and _squash(str(c.get("text", ""))) not in req]
+            if c.get("source") == "human" and not any(_quotes(str(c.get("text", "")), src)
+                                                      for src in [request] + changes.get(c.get("id"), []))]
 
 
-def check_warnings(task, request=None):
+def check_warnings(task, request=None, notes=()):
     """Advisory only: checks that cannot show the criterion holds (a denylist with known gaps),
     and human criteria that are not a verbatim quote of the human's request."""
     out = []
@@ -468,9 +506,9 @@ def check_warnings(task, request=None):
         if any(c.get("source") == "human" for c in task.get("criteria", [])):
             out.append("no request recorded (`herd init ... --request`): cannot confirm human criteria are verbatim")
     else:
-        for cid in human_unquoted(task, request):
-            out.append(f"{cid}: human criterion is not a verbatim quote of the request; quote the human's words and "
-                       "put your own scenario in a separate agent-proposed criterion")
+        for cid in human_unquoted(task, request, notes):
+            out.append(f"{cid}: human criterion is not a verbatim quote of the request, so `herd done` refuses; quote "
+                       "the human's words and put your own scenario in a separate agent-proposed criterion")
     for c in task.get("criteria", []):
         check = c.get("check")
         if isinstance(check, str) and check.strip() and VACUOUS.fullmatch(check.strip()):
@@ -496,20 +534,28 @@ def inputs_line(inputs):
         f"{str(x.get('human', '?')).strip()} -> {str(x.get('program', '?')).strip()}" for x in inputs if isinstance(x, dict))
 
 
+INPUTS_TABLE = ('`[[inputs]]`, `human = "<the input as the human described it>"`, `program = "<the input as the '
+                'program receives it>"`, one line each, one table per input')
+
+
 def input_warnings(task):
-    """Advisory: each input of a standard task as the human described it and as the program receives it."""
+    """Each input of a standard task as the human described it and as the program receives it, by structure only.
+    A warning at low risk; at medium and high risk `herd done` refuses while one is left (problems())."""
     ins = task.get("inputs")
     if task.get("route", "standard") == "quick":
         return []
+    out = [f"{c.get('id', '?')} has an `inputs` key inside its [[criteria]] table: inputs belong at the top level "
+           f"of task.toml as {INPUTS_TABLE}, not inside [[criteria]]: move them there"
+           for c in task.get("criteria", []) if isinstance(c, dict) and "inputs" in c]
     if ins is None:
-        return ["no `inputs`: list each input as the human described it and as the program receives it "
-                "(`inputs = []` if it takes none), so a step the caller must do first is seen before building"]
+        return out + [f"no `inputs`: add to task.toml, at the top level, {INPUTS_TABLE} (or `inputs = []` before "
+                      "the first table if it takes none), so a step the caller must do first is seen before building"]
     if not isinstance(ins, list):
-        return ["`inputs` must be a list of tables, each with `human` and `program`"]
+        return out + [f"`inputs` must be a list of tables: write {INPUTS_TABLE}"]
     bad = [i for i, x in enumerate(ins, 1) if not (isinstance(x, dict) and str(x.get("human", "")).strip()
                                                     and str(x.get("program", "")).strip())]
-    return [f"inputs #{i}: give `human` (the input as the human described it) and `program` (as the program "
-            "receives it)" for i in bad]
+    return out + [f"inputs #{i}: give `human` (the input as the human described it) and `program` (as the program "
+                  "receives it)" for i in bad]
 
 
 def refusal_late(root, slug, red):
@@ -748,6 +794,15 @@ def changed_since(root, head):
     return sorted({x for x in p.stdout.splitlines() + new if x and not x.startswith(".herd/")})
 
 
+def task_changes(root, start, changed):
+    """The changed paths that are the task's: a file already dirty at `herd init` counts once it changes again.
+    None when the changes cannot be told (no commit at init)."""
+    pre = start.get("dirty") or {}
+    pre = pre if isinstance(pre, dict) else {}
+    return None if changed is None else [f for f in changed
+                                         if f not in pre or (pre[f] is not None and pre[f] != _file_sha(root, f))]
+
+
 def risk_of(root, start, changed):
     """Effective risk: the higher of the level stored at init and the level the changed files match."""
     toml_path = Path(root) / "herd.toml"
@@ -825,10 +880,7 @@ def verify(root, slug):
     changed = changed_since(root, start.get("head"))
     red_path, frozen_path = d / "red.json", d / "frozen.json"
     checked = [r for r in results if r["status"] != "unchecked"]
-    pre = start.get("dirty") or {}
-    pre = pre if isinstance(pre, dict) else {}
-    mine = None if changed is None else [f for f in changed  # a file dirty at init is the agent's once it changes
-                                         if f not in pre or (pre[f] is not None and pre[f] != _file_sha(root, f))]
+    mine = task_changes(root, start, changed)
     snapshot = {c["id"]: {"text": c["text"], "source": c["source"], "check": c["check"]} for c in task["criteria"]}
     lost = [f.name for f in (d / "start.json", red_path, frozen_path) if f.exists() and _state(f, None) is None]
     if (d / "evidence.json").exists() and not frozen_path.exists():
@@ -864,8 +916,17 @@ def verify(root, slug):
             del frozen[cid]  # the human dropped it: a note that says so, not one already used for a rewording
             frozen_path.write_text(json.dumps(frozen))
         elif (cid in snapshot and frozen.get(cid) != snapshot[cid] and frozen.get(cid, {}).get("by_note") != n["at"]
-              and _squash(snapshot[cid]["text"]) in _squash(n["text"])):  # the note quotes the new wording
+              and _quotes(snapshot[cid]["text"], n["text"])):  # the note quotes the new wording, as human_unquoted reads it
             frozen[cid] = dict(snapshot[cid], by_note=n["at"])
+            frozen_path.write_text(json.dumps(frozen))
+    req_path = d / "request.md"
+    request_text = req_path.read_text() if req_path.exists() else None
+    for cid, snap in snapshot.items() if request_text is not None and not lost else ():
+        fz = frozen.get(cid)  # a frozen text that did not quote the request, now restored to the request's words
+        if (isinstance(fz, dict) and fz.get("source") == "human" and snap["source"] == "human"
+                and fz.get("text") != snap["text"] and not _quotes(fz.get("text", ""), request_text)
+                and _quotes(snap["text"], request_text)):
+            frozen[cid] = dict(fz, text=snap["text"])
             frozen_path.write_text(json.dumps(frozen))
     frozen = {cid: {k: v for k, v in c.items() if k != "by_note"} for cid, c in frozen.items()}
     now_by_id = {c["id"]: c for c in task["criteria"]}
@@ -875,11 +936,10 @@ def verify(root, slug):
     checks_changed = [cid for cid, c in now_by_id.items() if frozen and cid in frozen and c["check"] != frozen[cid]["check"]]
     human_checks = [cid for cid in checks_changed if frozen[cid]["source"] == "human"]
     added = [cid for cid in now_by_id if frozen and cid not in frozen]
-    req_path = d / "request.md"
-    request_text = req_path.read_text() if req_path.exists() else None
-    human_not_verbatim = human_unquoted(task, request_text)
-    warnings = (check_warnings(task, request_text) + coverage_warnings(task) + length_warnings(task)
-                + input_warnings(task)
+    human_not_verbatim = human_unquoted(task, request_text, load_notes(root, slug))
+    inputs_left = input_warnings(task)
+    warnings = (check_warnings(task, request_text, load_notes(root, slug)) + coverage_warnings(task) + length_warnings(task)
+                + inputs_left
                 + ([REFUSAL_FIRST] if first and not any(a.get("attack") == "refusal" for a in attacks) else [])
                 + refusal_late(root, slug, red))
     fails_path = d / "fails.json"  # consecutive failing verifies per criterion, for the escalation rule
@@ -898,7 +958,7 @@ def verify(root, slug):
     ev = {"task": slug, "goal": task["goal"], "at": now(), "head": head, "dirty": dirty,
           "route": task.get("route", "standard"), "test_budget": task.get("test_budget"),
           "known_limits": task.get("known_limits"), "notes": load_notes(root, slug),
-          "inputs": task.get("inputs"), "red": {"failed": red.get("failed", 0), "total": red.get("total", 0), "code_before": red.get("code_before"),
+          "inputs": task.get("inputs"), "inputs_left": inputs_left, "red": {"failed": red.get("failed", 0), "total": red.get("total", 0), "code_before": red.get("code_before"),
                   "code_hidden": hidden, "stashed": red.get("stashed") or []} if red else None, "red_unreadable": red_unreadable, "timing": timing,
           "human_not_verbatim": human_not_verbatim, "risk": risk_of(root, start, changed if changed is not None else changed_since(root, "HEAD")),
           "legacy": bool(start.get("legacy") or not start), "human_changed": human_changed, "checks_changed": checks_changed, "human_checks_changed": human_checks,
@@ -988,6 +1048,13 @@ def _tier_rule(root, slug, n):
     if t is None or b is None:
         which = "reviewer's" if t is None else "builder's"
         return False, f"the {which} model could not be read: {n.get('unread') or 'its tier is unknown'}"
+    if n.get("saw") is None:
+        return False, "the review was recorded before Herd 0.10.0 checked what the reviewer read: spawn herd-reviewer again"
+    if not n["saw"]:
+        missed = n.get("code_unread") or []
+        more = (n.get("code_total") or 0) - (n.get("code_read") or 0) - len(missed)
+        return False, (f"the reviewer did not read: {', '.join(missed)}{f' and {more} more' if more > 0 else ''}, and "
+                       "ran no `git diff` or `git show`: spawn herd-reviewer again and have it read the diff")
     if n.get("verdict") != "PASS":
         return False, "the review found Blocker or Major issues, or gave no verdict: fix them and review again"
     need = min(b + step, len(tiers) - 1)
@@ -1000,9 +1067,16 @@ def _tier_rule(root, slug, n):
 # ---- review hook ----------------------------------------------------------
 
 REVIEWER = "herd:herd-reviewer"  # the plugin agent's agent_type (spike S3); a project's own copy does not count
-DEFAULT_TIERS, DEFAULT_STEP = ("haiku", "sonnet", "opus"), 0
+DEFAULT_TIERS, DEFAULT_STEP = ("haiku", "sonnet", "opus"), 1  # 0.10.0: one tier above again (0 in 0.8 and 0.9)
 VERDICT = re.compile(r"\s*HERD-REVIEW: (PASS|FAIL)\s*")
 REVIEW_CHARS = 2000
+READERS = {"cat", "nl", "less", "more", "head", "tail", "bat", "sed"}  # Bash commands that print a file's lines
+SHOWS_CHANGE = ("git diff", "git show", "git log -p", "git log --patch")
+SUMMARY_ONLY = {"--stat", "--shortstat", "--numstat", "--dirstat", "--name-only", "--name-status", "--summary",
+                "--compact-summary", "--raw", "--quiet", "--no-patch", "-s", "--check", "--output"}  # no changed lines
+# `path:line` or `path:first-last` in a report: a path with a file extension or a folder; not a URL, time or C1:2
+REF = re.compile(r"(?<![\w/.:-])(/?(?:[\w.-]+/)*[\w-][\w.-]*\.[A-Za-z]\w*|/?(?:[\w.-]+/)+[\w.-]+):(\d+)(?:-(\d+))?(?![\w-])")
+MAX_REFS = 20
 
 
 def review_tiers(root, slug=None):
@@ -1107,6 +1181,75 @@ def review_need(root, slug):
     return (tiers[min(tiers.index(b) + step, len(tiers) - 1)], b) if b else (None, why)
 
 
+def _shows_change(words, cwd):
+    """A git command that prints the changed lines: diff, show, or log with a patch, without a summary-only flag."""
+    if not any(_rule_hit(r, words, cwd) for r in SHOWS_CHANGE):
+        return False
+    if any(REDIRECT.fullmatch(w) for w in words):  # `git diff > d.txt` or `> /dev/null`: the reviewer saw nothing
+        return False
+    return bool({"-p", "-u", "--patch"} & set(words)) or not any(w.split("=", 1)[0] in SUMMARY_ONLY for w in words)
+
+
+def reviewer_saw(root, cwd, lines):
+    """(whether the reviewer ran a git command that prints the change, the files under root it read), from the tool
+    calls in its log: Read, and Bash readers such as cat or sed. Shell text is read as the guard reads it."""
+    base, diff, read = os.path.realpath(root), False, set()
+
+    def rel(path, here):
+        try:
+            full = os.path.realpath(os.path.join(here, os.path.expanduser(path)))
+        except (ValueError, OSError):  # a NUL in the path and the like: not a file it read
+            return None
+        return Path(full).relative_to(base).as_posix() if full.startswith(base + os.sep) else None
+    for line in lines:
+        content = line["message"].get("content")
+        for c in content if isinstance(content, list) else []:
+            inp = c.get("input") if isinstance(c, dict) and c.get("type") == "tool_use" else None
+            if not isinstance(inp, dict):
+                continue
+            if c.get("name") == "Read" and isinstance(inp.get("file_path"), str) and inp["file_path"]:
+                read.add(rel(inp["file_path"], cwd))
+            elif c.get("name") == "Bash" and isinstance(inp.get("command"), str):
+                here = cwd
+                for words in _segments(inp["command"]):
+                    name = Path(words[0]).name
+                    if name in ("cd", "pushd") and len(words) > 1:
+                        here = os.path.normpath(os.path.join(here, os.path.expanduser(words[1])))
+                    elif name == "git":
+                        diff = diff or _shows_change(words, here)
+                    elif name in READERS:
+                        read |= {rel(w, here) for w in words[1:] if not w.startswith("-")}
+    read.discard(None)
+    return diff, read
+
+
+def bad_refs(root, text):
+    """The `path:line` references of a report whose file is not in the repository or whose line is past its end."""
+    tops = list(dict.fromkeys(os.path.realpath(t) for t in (root, toplevel(root))))
+    files = None  # the repository's files, listed once, for a path given without its folders (herd.py:5)
+    out = []
+    for m in REF.finditer(text or ""):
+        path, first, last = m[1], int(m[2]), int(m[3] or m[2])
+        found = [f for t in tops if (f := os.path.realpath(os.path.join(t, path))).startswith(t + os.sep)
+                 and os.path.isfile(f)][:1]
+        if not found and not path.startswith(("/", "../")):
+            if files is None:
+                files = _git(root, "ls-files", "--cached", "--others", "--exclude-standard").decode().splitlines()
+            found = [os.path.join(root, f) for f in files if f == path or f.endswith("/" + path)]
+        sizes = []
+        for f in found:
+            try:
+                sizes.append(len(Path(f).read_bytes().splitlines()))
+            except OSError:
+                pass
+        why = ("no such file in the repository" if not sizes else None if any(1 <= first <= last <= n for n in sizes)
+               else "lines start at 1" if first < 1
+               else f"{path} has {max(sizes)} line{'s' if max(sizes) != 1 else ''}")
+        if why and f"{m[0]} ({why})" not in out:
+            out.append(f"{m[0]} ({why})")
+    return out[:MAX_REFS]
+
+
 def review_hook(root, hook):
     """SubagentStop hook for the herd-reviewer agent: record its review from the session logs, never from what
     an agent writes. Never blocks and prints nothing; other agents and stops with no active task do nothing."""
@@ -1141,8 +1284,20 @@ def review_hook(root, hook):
                              "record sessions)")
     unread = (f"the reviewer's log is not where Claude Code keeps it ({rev})" if not placed
               else None if tier else f"{model} matches no tier" if model else f"no model in the reviewer's log {rev}")
+    diff, read = reviewer_saw(root, str(hook.get("cwd") or root), lines)
+    start = _state(_dir(root, slug) / "start.json", {})
+    mine = task_changes(root, start, changed_since(root, start.get("head")))
+    code = None if mine is None else [f for f in mine if is_code(f, root)]
+    files = [f for f in mine or [] if not (f.lower().endswith(BUILT_EXT) or BUILT_DIRS & set(Path(f).parts))]
+    any_file = code == [] and bool(files)  # no code changed (tests, config, CI): every changed file but build output
+    code = files if any_file else code
     extra = {"source": "hook", "tier": tier, "builder_tier": btier, "top": tier == tiers[-1],
-             "verdict": found[1] if found else "none", "unread": unread or bwhy}
+             "verdict": found[1] if found else "none", "unread": unread or bwhy,
+             # what the reviewer saw (0.10.0): it counts only if it printed the diff or read every changed code file
+             "diff_seen": diff, "code_total": None if code is None else len(code),
+             "code_read": None if code is None else sum(f in read for f in code),
+             "code_unread": [f for f in code or [] if f not in read][:MAX_REFS], "any_file": any_file,
+             "saw": diff or code is None or all(f in read for f in code), "bad_refs": bad_refs(root, text)}
     # a round, for escalation and the report: after all checks first passed, by a reviewer whose tier would count
     extra["round"] = (_dir(root, slug) / "green.json").exists() and _tier_rule(root, slug, dict(extra, verdict="PASS"))[0]
     add_review(root, slug, by=model or "an unknown model", text=_clip((text or "").strip() or "(no report)", REVIEW_CHARS),
@@ -1246,6 +1401,17 @@ def _failed_rounds(notes):
     return len(rv) - next((i + 1 for i in range(len(rv) - 1, -1, -1) if rv[i].get("verdict") == "PASS"), 0)
 
 
+def _seen(n):
+    """How much of the change a hook-recorded reviewer saw, from its log: `ran git diff or git show, read 2 of 3
+    changed code files`; empty for a review recorded before 0.10.0."""
+    if n.get("saw") is None:
+        return ""
+    total = n.get("code_total")
+    return ("; " + ("ran git diff or git show" if n.get("diff_seen") else "no git diff or git show") + ", "
+            + (f"read {n.get('code_read')} of {total} changed {'' if n.get('any_file') else 'code '}file{'s' if total != 1 else ''}"
+               if isinstance(total, int) else "changed files unknown"))
+
+
 def _review(notes):
     """The latest review note as one phrase: "<who>: <what>", "skipped: <why>", or None."""
     rv = [n for n in notes if n["kind"] == "review"]
@@ -1259,7 +1425,7 @@ def _review(notes):
         failed = _failed_rounds(notes)
         after = f", after {failed} round{'s' if failed != 1 else ''} without PASS" if failed else ""
         return (f"{n.get('by', 'reviewer')} ({n.get('tier') or 'unknown tier'}, builder on "
-                f"{n.get('builder_tier') or 'an unknown tier'}{same}; {n.get('verdict', 'none')}{after}): "
+                f"{n.get('builder_tier') or 'an unknown tier'}{same}; {n.get('verdict', 'none')}{after}{_seen(n)}): "
                 f"{_first_line(n['text'])}")
     return f"{n.get('by', 'reviewer')}: {n['text']}"
 
@@ -1297,6 +1463,8 @@ def _rule_lines(ev, notes):
     rv = [n for n in notes if n["kind"] == "review" and not n.get("skipped")]
     if rv and rv[-1].get("content") and rv[-1]["content"] != ev.get("content"):
         out.append("The code changed after the review")
+    if rv and rv[-1].get("bad_refs"):  # recorded, never refused: an old line number can be the diff's left side
+        out.append("The review cites lines not in the repository now: " + "; ".join(rv[-1]["bad_refs"]))
     return out
 
 
@@ -1603,9 +1771,14 @@ NEXT_STEPS = ((re.compile(r"^(.+?) is failing: "), "fix {0}, then run `herd veri
               (re.compile(r"^(?:the check of )?human criterion (\S+)"),
                "restore human criterion {0} as the human wrote it, or record the human's change with "
                "`herd note --human-change`, then run `herd verify`"),
+              (re.compile(r"^(test_budget|known_limits) is empty"), "add `{0}` to task.toml, then run `herd verify`"),
+              (re.compile(r"^(?:no `inputs`|`inputs` must|inputs #\d+|\S+ has an `inputs` key)"),
+               "add top-level `[[inputs]]` tables with `human` and `program` to task.toml, then run `herd verify`"),
+              (re.compile(r"^coverage of human criterion (\S+) is empty"),
+               "add `coverage` to human criterion {0}, then run `herd verify`"),
               (re.compile(r"^review missing.*?Spawn the herd-reviewer subagent with model ([\w.-]+)"),
                "spawn herd-reviewer with model {0}, then run `herd verify`"),
-              (re.compile(r"^review missing"), "spawn herd-reviewer on the builder's model, then run `herd verify`"),
+              (re.compile(r"^review missing"), "spawn herd-reviewer one tier above the builder, then run `herd verify`"),
               (re.compile(r"^adversarial pass incomplete"), "log each missing standard attack with `herd note --tried "
                                                             "--attack <name> --check \"<command>\"`, then run `herd verify`"))
 
@@ -1658,7 +1831,7 @@ def write_stop(root, slug, reason, detail=""):
             if ev:
                 ok, why = review_state(root, slug, ev, notes)
                 latest = _review(notes)
-                review = {"needed": (review_need(root, slug)[0] or "the builder's model")
+                review = {"needed": (review_need(root, slug)[0] or "one tier above the builder")
                           if review_needed(ev) else None,
                           "latest": None if latest is None else _clip(latest, 200) + ("" if ok else f" (does not count: {why})")}
         except STATE_ERRORS as e:  # valid JSON of the wrong shape, a deleted task.toml
@@ -2085,13 +2258,23 @@ def problems(root, slug):
     out += [f"the check of human criterion {cid} changed after the first verify: restore it, or, if the human "
             f"changed it, record their words with `herd note --human-change \"{cid}: <the criterion text>\"`"
             for cid in ev.get("human_checks_changed") or []]
+    out += [f"human criterion {cid} is not a verbatim quote of the request: copy the human's words into its `text` "
+            "and put your own scenario in an agent-proposed criterion; if the human reworded it or wrote it elsewhere "
+            f"(a file they named), record their words with `herd note --human-change \"{cid}: <their words>\"`"
+            for cid in ev.get("human_not_verbatim") or []]  # None: no request recorded, so nothing to quote
+    if review_needed(ev):  # the standard route at medium and high risk: only absence is refused, the words are yours
+        out += [f"{key} is empty: add to task.toml `{key} = \"{what}\"`" for key, what in REQUIRED.items()
+                if not str(ev.get(key) or "").strip()]
+        out += [f"coverage of human criterion {r['id']} is empty: add `coverage = \"<what its check proves and what "
+                "it does not>\"` to it" for r in ev["results"] if r["source"] == "human" and not str(r.get("coverage") or "").strip()]
+        out += ev.get("inputs_left") or []  # structure only: missing, misplaced inside a criterion, or incomplete
     risk = (ev.get("risk") or {}).get("effective")
     ok, why = review_state(root, slug, ev, notes)
     if review_needed(ev) and not ok:
         need, _ = review_need(root, slug)
         model = (re.search(r"Spawn herd-reviewer with model ([\w.-]+)", why or "") or [None, need])[1]
         out.append(f"review missing ({why}): risk is {risk}. Spawn the herd-reviewer subagent "
-                   + (f"with model {model}" if model else "on your own model")
+                   + (f"with model {model}" if model else "one tier above yours")
                    + ", giving it only the goal, criteria, test_budget and the diff; the review hook records it")
     if ev.get("route") != "quick":
         ran = {(a["at"], a["text"], a.get("check")) for a in ev.get("attacks") or []}
@@ -2274,7 +2457,7 @@ def main(argv):
             errs = validate_task(task)
             print("\n".join(errs) if errs else "ok")
             req_path = _dir(root, slug) / "request.md"
-            for w in (check_warnings(task, req_path.read_text() if req_path.exists() else None)
+            for w in (check_warnings(task, req_path.read_text() if req_path.exists() else None, load_notes(root, slug))
                       + coverage_warnings(task) + length_warnings(task)):
                 print(f"warning: {w}")
             return 1 if errs else 0
@@ -2355,7 +2538,7 @@ def main(argv):
             if ev and review_needed(ev):
                 need, builder = review_need(root, slug)
                 print(f"Review: needs {need} or higher (builder on {builder})" if need
-                      else f"Review: needs a reviewer on the builder's model ({builder})")
+                      else f"Review: needs a reviewer one tier above the builder ({builder})")
             probs = problems(root, slug)
             print("not done: " + "; ".join(probs) if probs else "done: evidence is fresh and passing")
         elif cmd == "review":

@@ -169,5 +169,32 @@ class TestAttacks(Base):
             self.assertIn("not isolated", f[0].detail)
 
 
+class TestTask(Base):
+    def test_hidden_file_in_the_work_folder_is_a_finding_for_either_task(self):
+        (self.work / "sub").mkdir()
+        (self.work / "sub" / "bus_verify.py").write_text("x")
+        for task in (None, "bus-transfer"):
+            f = la.audit(self.write(use("Read", {"file_path": "a"})), self.work, task=task)
+            self.assertEqual(len(f), 1, task)
+            self.assertIn("bus_verify.py", f[0].detail)
+            self.assertFalse(f[0].blocked)
+        (self.work / "sub" / "bus_verify.py").unlink()
+        (self.work / "verify_general.py").write_text("x")
+        self.assertEqual(len(la.audit(self.write(), self.work)), 1)
+        self.assertEqual(len(la.audit(self.write(), self.work, task="bus-transfer")), 1)
+
+    def test_cli_task_as_name_or_path_and_clean_bus_run(self):
+        log = self.write(use("Bash", {"command": "python3 plan.py"}, "t1"), result("t1", "ok"))
+        for task in ("bus-transfer", "examples/bus-transfer/"):
+            r = subprocess.run([sys.executable, str(HERE / "leak_audit.py"), str(log), "--work", str(self.work),
+                                "--task", task], capture_output=True, text=True)
+            self.assertEqual((r.returncode, r.stdout.strip()), (0, "leak audit: clean"), (task, r.stderr))
+        r = subprocess.run([sys.executable, str(HERE / "leak_audit.py"), str(log), "--work", str(self.work),
+                            "--task", "nope"], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("unknown task", r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

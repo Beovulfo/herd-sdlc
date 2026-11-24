@@ -1,20 +1,27 @@
 #!/usr/bin/env python3
 """Report what a run's sandbox blocked and prove the run used the isolation settings.
 
-  python3 leak_audit.py RUN_LOG.jsonl --work DIR [--plugin DIR] [--settings FILE]
+  python3 leak_audit.py RUN_LOG.jsonl --work DIR [--plugin DIR] [--settings FILE] [--task TASK]
 
 Exit 0 and "leak audit: clean", or exit 1 with one line per finding. The audit does not read
 paths from commands: shell text cannot be parsed completely. The sandbox is the guard and
 run_leg.py --selftest proves it. The audit reads only structured fields of the log: tool results
 that report a sandbox violation or a denial, WebFetch and WebSearch calls, and the settings file.
---plugin is accepted for older command lines and is not used.
+--plugin is accepted for older command lines and is not used. The work folder must hold no file
+named like a hidden verifier file of any task: a copy there is a finding. --task (a name or a path such
+as examples/bus-transfer/) names the run's task and is refused when unknown; every task's hidden files
+are checked either way, because a leaked verifier of another task is a leak too.
 """
 import argparse
 import json
+import os
 import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import run_leg  # noqa: E402
 
 BLOCK_MARKERS = ("Operation not permitted", "denied by your permission settings")
 VIOLATIONS_RE = re.compile(r"<sandbox_violations>(.*?)</sandbox_violations>", re.S)
@@ -65,9 +72,20 @@ def check_settings(path):  # noqa: C901
     return [Finding("settings", f"not isolated: {m}", False) for m in missing]
 
 
-def audit(log_path, work, plugin=None, settings=None):  # noqa: C901
+def check_work(work, task=None):
+    """Findings for files under work named like the hidden verifier files of any task. A given task must be known."""
+    if task:
+        run_leg.resolve_task(task)
+    names = run_leg.PLANTED_NAMES
+    found = []
+    for cur, _dirs, files in os.walk(work, onerror=lambda e: None):
+        found += [os.path.join(cur, f) for f in files if f in names]
+    return [Finding("work", f"hidden verifier file in the work folder: {p}", False) for p in sorted(found)]
+
+
+def audit(log_path, work, plugin=None, settings=None, task=None):  # noqa: C901
     settings = settings or Path(work).resolve().parent / "settings.json"
-    findings = check_settings(settings)
+    findings = check_settings(settings) + check_work(work, task)
     calls = {}
     with open(log_path, encoding="utf-8", errors="replace") as fh:
         for line in fh:
@@ -105,9 +123,13 @@ def main(argv=None):
     ap.add_argument("--work", required=True)
     ap.add_argument("--plugin")
     ap.add_argument("--settings")
+    ap.add_argument("--task")
     a = ap.parse_args(argv)
     try:
-        found = audit(a.log, a.work, a.plugin, a.settings)
+        found = audit(a.log, a.work, a.plugin, a.settings, a.task)
+    except ValueError as e:
+        print(f"leak audit: {e}", file=sys.stderr)
+        return 2
     except OSError as e:
         print(f"leak audit: cannot read {a.log}: {e.strerror}", file=sys.stderr)
         return 2

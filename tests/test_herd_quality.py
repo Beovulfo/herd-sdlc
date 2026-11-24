@@ -312,6 +312,9 @@ class TestReviewerSaw(ReviewBase):
     def test_a_change_without_code_files_needs_its_files_read(self):
         self.ready()
         (self.root / "app.py").unlink()  # now only tests/test_app.py changed: no code file
+        (self.root / "__pycache__").mkdir(exist_ok=True)  # build output, as CI leaves it with no global gitignore
+        (self.root / "__pycache__/app.cpython-311.pyc").write_bytes(b"x")
+        (self.root / "run.log").write_text("x")
         self.assertFalse(self.check([])[0])
         self.assertIn("the reviewer did not read: tests/test_app.py", self.state()[1])
         self.assertTrue(self.check([("Read", {"file_path": str(self.root / "tests/test_app.py")})])[0])

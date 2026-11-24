@@ -1288,8 +1288,9 @@ def review_hook(root, hook):
     start = _state(_dir(root, slug) / "start.json", {})
     mine = task_changes(root, start, changed_since(root, start.get("head")))
     code = None if mine is None else [f for f in mine if is_code(f, root)]
-    any_file = code == [] and bool(mine)  # no code changed (tests, config, CI): then every changed file counts
-    code = mine if any_file else code
+    files = [f for f in mine or [] if not (f.lower().endswith(BUILT_EXT) or BUILT_DIRS & set(Path(f).parts))]
+    any_file = code == [] and bool(files)  # no code changed (tests, config, CI): every changed file but build output
+    code = files if any_file else code
     extra = {"source": "hook", "tier": tier, "builder_tier": btier, "top": tier == tiers[-1],
              "verdict": found[1] if found else "none", "unread": unread or bwhy,
              # what the reviewer saw (0.10.0): it counts only if it printed the diff or read every changed code file

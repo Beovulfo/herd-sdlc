@@ -276,7 +276,7 @@ class TestHiddenBus(Base):
         self.assertFalse((self.tmpdir / "herd-bench").exists())
 
     def test_Hidden_refusal_of_every_bus_name_matches_a_plain_find(self):
-        names = sorted(rl.HIDDEN["bus-transfer"])
+        names = sorted({"bus_verify.py", "bus_probe.py", "bus_reference.py", "test_bus_verify.py"})
         for name in names:
             (self.tmpdir / "copies" / name.replace(".py", "")).mkdir(parents=True)
             (self.tmpdir / "copies" / name.replace(".py", "") / name).write_text("x")

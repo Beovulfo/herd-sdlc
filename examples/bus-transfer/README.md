@@ -19,7 +19,7 @@ Hard by design:
 
 - Earliest arrival on a timetable. A static graph search (Dijkstra on stops) is wrong: a bus that has left cannot be taken.
 - Waiting at a stop, trips past midnight (up to 30:00), staying on one bus (no change time) against changing (the minimum applies), trips that overtake each other.
-- Scale: networks of up to 6000 stops and about 45000 trips, with a time limit per network.
+- Scale: networks of up to 6000 stops and tens of thousands of trips (from about 24000 to about 90000, depending on the family), with a time limit per network.
 - A refusal is a claim: "not possible" is accepted only when the oracle finds no journey.
 
 The verifier makes networks from six families (small hand cases, random, grid, radial, clusters with few links, overnight) at sizes S, M, L and XL, with `--seeds` seeds per family and size (default 2). Each network has several queries. A case is valid when it finishes in time and every query is right:

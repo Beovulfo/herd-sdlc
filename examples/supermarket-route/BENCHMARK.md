@@ -131,9 +131,9 @@ Cost is the session's own `total_cost_usd`. Minutes are active API-session time,
 Checked for both real-session versions by inspecting the stream logs of all 12 runs, builder and reviewer calls included.
 
 - No tool call touched the hidden verifier, the probe, the adapters, the published solutions or another run.
-- No web fetch, web search or message to another session.
-- All six 0.12.1 runs got the same first prompt (one hash).
-- The closest match between any 0.12.1 source file and the 60 published solution files is 0.46 (difflib ratio).
+- No web fetch, web search or message to another session. One tool did reach beyond the run: `ListAgents` was called 6 times in three 0.12.1 runs (2, 3 and 6) and twice in two 0.12.0 runs (2 and 3). Its result lists the other Claude sessions open on the machine by name. It gave no benchmark data, and no run opened or messaged any of them, but it is a view outside the run that a sandbox would have blocked.
+- The six 0.12.1 runs recorded the same request: their `request.md` files have one hash.
+- Compared with the 36 published solution source files (the non-test `.py` files under `runs/`, adapters excluded), the 38 non-test source files of the six 0.12.1 runs match at most 0.46 (difflib ratio, 2025 against 2088 characters). Only boilerplate matches higher: a 52-character `__main__.py` at 0.92 and `__init__.py` files of 81 to 116 characters at 0.49 to 0.59.
 - **Weakness.** The installed plugin ships `examples/` (the verifier and old runs), and the runs were not sandboxed. One 0.12.1 run listed that folder's name and did not open it. A sandboxed launcher and a log audit are on branch `herd/bench-isolation`; they were not used for these numbers.
 
 ## What this does not show

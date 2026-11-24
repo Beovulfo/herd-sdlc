@@ -584,7 +584,7 @@ class TestNotes(Base):
         self.assertNotIn("not recorded", text)
         self.attacks()
         text = herd.report(herd.verify(self.root, "t1"))
-        self.assertIn("Adversarial pass: 5 attempts recorded; bad-input passing (`", text)
+        self.assertIn("Adversarial pass: 6 attempts recorded; bad-input passing (`", text)
         self.assertIn("; collision passing (`", text)
         self.assertNotIn("missing", text)
 
@@ -1060,7 +1060,7 @@ class TestAttacks(Base):
         probs = " ".join(herd.problems(self.root, "t1"))
         self.assertNotIn("bad-input", probs)
         self.assertIn("collision", probs)
-        for a in ("collision", "one-bad-part", "recount"):
+        for a in ("collision", "one-bad-part", "recount", "refusal"):
             self.assertEqual(self.run_cli("note", "--tried", "--attack", a, f"n/a: {a} explained").returncode, 0)
         hook_review(self.root)
         herd.verify(self.root, "t1")
@@ -1099,8 +1099,8 @@ class TestSimplifiedAdversarial(Base):
         s = self.step6()
         self.assertIn("[adversarial.md](adversarial.md)", s)
         self.assertIn("herd done", s)
-        self.assertIn("four standard attacks", s)
-        for inline in ("bad input at every entry point", "collision", "one bad part", "recount"):
+        self.assertIn("five standard attacks", s)
+        for inline in ("bad input at every entry point", "collision", "one bad part", "recount", "refusal"):
             self.assertNotIn(inline, s.lower())
         self.assertNotIn("regression test", s)  # written once, in adversarial.md step 5
         self.assertIn("regression test", self.adv)
@@ -1244,7 +1244,7 @@ class TestAttackChecks(Base):
         self.ready()
         fixed = "python3 -c \"import os, sys; sys.exit(not os.path.exists('fixed.txt'))\""
         herd.add_note(self.root, "t1", "tried", "a", attack="bad-input", check=fixed)
-        for a in ("collision", "one-bad-part"):
+        for a in ("collision", "one-bad-part", "refusal"):
             herd.add_note(self.root, "t1", "tried", a, attack=a, check=OK)
         herd.add_note(self.root, "t1", "tried", "zero", attack="recount", check="python3 -c \"print('Ran 0 tests')\"")
         herd.verify(self.root, "t1")
@@ -1266,7 +1266,7 @@ class TestAttackChecks(Base):
     def test_a_later_note_replaces_a_wrong_command_but_it_stays_visible(self):
         self.ready()
         herd.add_note(self.root, "t1", "tried", "typo", attack="bad-input", check="python3 -m unittest tests.test_nope")
-        for a in ("collision", "one-bad-part", "recount"):
+        for a in ("collision", "one-bad-part", "recount", "refusal"):
             herd.add_note(self.root, "t1", "tried", a, attack=a, check=OK)
         herd.verify(self.root, "t1")
         self.assertIn("bad-input", " ".join(herd.problems(self.root, "t1")))
@@ -1306,7 +1306,8 @@ class TestAttackChecks(Base):
 
     def test_report_matches_an_independent_recount(self):
         self.ready()
-        cmds = {"bad-input": [OK, "false"], "collision": [OK], "recount": ["python3 -c \"print('Ran 0 tests')\""]}
+        cmds = {"bad-input": [OK, "false"], "collision": [OK], "refusal": [OK],
+                "recount": ["python3 -c \"print('Ran 0 tests')\""]}
         for a, cs in cmds.items():
             for c in cs:
                 herd.add_note(self.root, "t1", "tried", f"{a} {c}", attack=a, check=c)
@@ -1364,12 +1365,12 @@ class TestAttackChecks(Base):
         herd.verify(self.root, "t1")
         visible = re.sub(r"<details>.*?</details>", "", herd.pr_body(self.root, "t1"), flags=re.S)
         self.assertIn("Attack collision marked n/a: one value only", visible)
-        self.assertIn("Standard attacks without a passing command: bad-input (command fails), one-bad-part, recount",
+        self.assertIn("Standard attacks without a passing command: bad-input (command fails), one-bad-part, recount, refusal",
                       visible)
 
     def test_na_attack_counts_and_is_labelled(self):
         self.ready()
-        for a in ("bad-input", "collision", "one-bad-part"):
+        for a in ("bad-input", "collision", "one-bad-part", "refusal"):
             herd.add_note(self.root, "t1", "tried", a, attack=a, check=OK)
         herd.add_note(self.root, "t1", "tried", "n/a: the tool takes one value", attack="recount")
         with self.assertRaises(ValueError):
@@ -1387,7 +1388,7 @@ class TestAttackChecks(Base):
         self.assertIn("bad-input failing", text)
         self.assertIn("collision failing", text)
         self.assertIn("`python3 -m unittest tests.test_bad`", text)
-        self.assertIn("missing: one-bad-part, recount", text)
+        self.assertIn("missing: one-bad-part, recount, refusal", text)
         body = herd.pr_body(self.root, "t1")
         self.assertIn("bad-input failing", body)
 

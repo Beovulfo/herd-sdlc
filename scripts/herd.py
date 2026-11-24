@@ -143,7 +143,11 @@ ATTACKS = {"bad-input": "bad input at every entry point ends in a clear message,
            "collision": "two inputs on the same key or position each still count",
            "one-bad-part": "one broken entry the request does not ask for does not reject the whole input, while a broken requested one still fails clearly",
            "recount": "every reported number recomputed from the output with separate code, on the generated and "
-                      "collision inputs too"}
+                      "collision inputs too",
+           "refusal": "every kind of input the program refuses (cannot be reached, not found, invalid) is confirmed "
+                      "refusable by separate, simpler code on generated inputs, so nothing it could serve is refused"}
+# ponytail: a word list over raise lines; it never blocks, it only questions an `n/a:` refusal attack
+REFUSES = re.compile(r"raise\s+\w[\w.]*\(.*(unreach|cannot|can't|not found|no path|no route|no walkable|invalid)", re.I)
 RANDOM = re.compile(r"\b(random\w*|seed(s|ed)?|fuzz\w*|property[- ]based|property tests?|hypothesis)\b", re.I)
 UNIVERSAL = re.compile(r"\b(any|every|all|whatever|whichever|arbitrary)\b", re.I)  # a human claim over all inputs
 # ponytail: a word list, so it misses limits worded otherwise and flags some harmless ones; it never blocks
@@ -483,6 +487,24 @@ def length_warnings(task):
         if len(str(c.get("coverage", "")).split()) > MAX_COVERAGE_WORDS:
             out.append(f"{cid}: coverage over {MAX_COVERAGE_WORDS} words; name what the check proves and misses, briefly")
     return out
+
+
+def refusal_warnings(root, attacks, changed):
+    """The refusal attack marked n/a although the changed code raises a refusal: the claim is open, so say so."""
+    latest = [a for a in attacks or [] if a.get("attack") == "refusal"][-1:]  # a later note replaces an earlier
+    if not latest or _attack_state(latest[0]) != "na":
+        return []
+    for f in changed or []:
+        if is_code(f, root):
+            try:
+                text = (Path(root) / f).read_text(errors="replace")
+            except OSError:
+                continue
+            m = REFUSES.search(text)
+            if m:
+                return [f"refusal attack is n/a but {f} refuses input (`{m.group(0).strip()[:80]}`): "
+                        "confirm each refusal is true on generated inputs, or say why it cannot be"]
+    return []
 
 
 def coverage_warnings(task):
@@ -842,7 +864,8 @@ def verify(root, slug):
     req_path = d / "request.md"
     request_text = req_path.read_text() if req_path.exists() else None
     human_not_verbatim = human_unquoted(task, request_text)
-    warnings = check_warnings(task, request_text) + coverage_warnings(task) + length_warnings(task)
+    warnings = (check_warnings(task, request_text) + coverage_warnings(task) + length_warnings(task)
+                + refusal_warnings(root, attacks, changed))
     fails_path = d / "fails.json"  # consecutive failing verifies per criterion, for the escalation rule
     fails = _state(fails_path, {})
     fails = {r["id"]: fails.get(r["id"], 0) + 1 if r["status"] == "failing" and not first else 0 for r in results}
@@ -961,7 +984,7 @@ def _tier_rule(root, slug, n):
 # ---- review hook ----------------------------------------------------------
 
 REVIEWER = "herd:herd-reviewer"  # the plugin agent's agent_type (spike S3); a project's own copy does not count
-DEFAULT_TIERS, DEFAULT_STEP = ("haiku", "sonnet", "opus"), 1
+DEFAULT_TIERS, DEFAULT_STEP = ("haiku", "sonnet", "opus"), 0
 VERDICT = re.compile(r"\s*HERD-REVIEW: (PASS|FAIL)\s*")
 REVIEW_CHARS = 2000
 
@@ -1562,7 +1585,7 @@ NEXT_STEPS = ((re.compile(r"^(.+?) is failing: "), "fix {0}, then run `herd veri
                "`herd note --human-change`, then run `herd verify`"),
               (re.compile(r"^review missing.*?Spawn the herd-reviewer subagent with model ([\w.-]+)"),
                "spawn herd-reviewer with model {0}, then run `herd verify`"),
-              (re.compile(r"^review missing"), "spawn herd-reviewer one tier above the builder, then run `herd verify`"),
+              (re.compile(r"^review missing"), "spawn herd-reviewer on the builder's model, then run `herd verify`"),
               (re.compile(r"^adversarial pass incomplete"), "log each missing standard attack with `herd note --tried "
                                                             "--attack <name> --check \"<command>\"`, then run `herd verify`"))
 
@@ -1615,7 +1638,7 @@ def write_stop(root, slug, reason, detail=""):
             if ev:
                 ok, why = review_state(root, slug, ev, notes)
                 latest = _review(notes)
-                review = {"needed": (review_need(root, slug)[0] or "one tier above the builder")
+                review = {"needed": (review_need(root, slug)[0] or "the builder's model")
                           if review_needed(ev) else None,
                           "latest": None if latest is None else _clip(latest, 200) + ("" if ok else f" (does not count: {why})")}
         except STATE_ERRORS as e:  # valid JSON of the wrong shape, a deleted task.toml
@@ -2048,7 +2071,7 @@ def problems(root, slug):
         need, _ = review_need(root, slug)
         model = (re.search(r"Spawn herd-reviewer with model ([\w.-]+)", why or "") or [None, need])[1]
         out.append(f"review missing ({why}): risk is {risk}. Spawn the herd-reviewer subagent "
-                   + (f"with model {model}" if model else "one tier above yours")
+                   + (f"with model {model}" if model else "on your own model")
                    + ", giving it only the goal, criteria, test_budget and the diff; the review hook records it")
     if ev.get("route") != "quick":
         ran = {(a["at"], a["text"], a.get("check")) for a in ev.get("attacks") or []}
@@ -2312,7 +2335,7 @@ def main(argv):
             if ev and review_needed(ev):
                 need, builder = review_need(root, slug)
                 print(f"Review: needs {need} or higher (builder on {builder})" if need
-                      else f"Review: needs a reviewer one tier above the builder ({builder})")
+                      else f"Review: needs a reviewer on the builder's model ({builder})")
             probs = problems(root, slug)
             print("not done: " + "; ".join(probs) if probs else "done: evidence is fresh and passing")
         elif cmd == "review":

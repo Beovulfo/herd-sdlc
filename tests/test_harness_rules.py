@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 
 from scripts import herd
-from tests.test_herd_cli import hook_review, late_review, run_herd
+from tests.test_herd_cli import PROGRAMS, hook_review, late_review, run_herd
 
 OK = "python3 -c \"import json\""  # an attack command that passes and is not vacuous
 REQUEST = "Add f() to app.py. It must return 1 for any call."
@@ -85,7 +85,7 @@ class Base(unittest.TestCase):
 
     def attacks_and_review(self):
         for a in herd.ATTACKS:
-            herd.add_note(self.root, "t1", "tried", f"{a} attack", attack=a, check=OK)
+            herd.add_note(self.root, "t1", "tried", f"{a} attack", attack=a, check=OK, **PROGRAMS.get(a, {}))
         late_review(self.root)
 
 
@@ -162,7 +162,7 @@ class TestRiskAndReview(Base):
         self.start()
         self.red_then_build()
         for a in herd.ATTACKS:
-            herd.add_note(self.root, "t1", "tried", a, attack=a, check=OK)
+            herd.add_note(self.root, "t1", "tried", a, attack=a, check=OK, **PROGRAMS.get(a, {}))
         herd.verify(self.root, "t1")
         self.assertIn("review", " ".join(herd.problems(self.root, "t1")))
         self.assertEqual(self.cli("review", "a fresh subagent").returncode, 1)  # --by names who reviewed
@@ -355,7 +355,7 @@ class TestReviewFindings(Base):
         self.start()
         self.red_then_build()
         for a in herd.ATTACKS:
-            herd.add_note(self.root, "t1", "tried", f"{a} attack", attack=a, check=OK)
+            herd.add_note(self.root, "t1", "tried", f"{a} attack", attack=a, check=OK, **PROGRAMS.get(a, {}))
         hook_review(self.root, text="Looked at the plan.\nHERD-REVIEW: PASS")
         herd.verify(self.root, "t1")  # all checks pass for the first time, after the review
         self.assertIn("recorded before all checks first passed", " ".join(herd.problems(self.root, "t1")))
@@ -366,7 +366,7 @@ class TestReviewFindings(Base):
         self.start()
         self.red_then_build()
         for a in herd.ATTACKS:
-            herd.add_note(self.root, "t1", "tried", f"{a} attack", attack=a, check=OK)
+            herd.add_note(self.root, "t1", "tried", f"{a} attack", attack=a, check=OK, **PROGRAMS.get(a, {}))
         herd.verify(self.root, "t1")
         hook_review(self.root)
         self.assertEqual(herd.problems(self.root, "t1"), [])
@@ -507,7 +507,7 @@ class TestSecondReview(Base):
         self.red_then_build()
         (self.root / "auth/session.py").write_text("x = 1\n")
         for a in herd.ATTACKS:
-            herd.add_note(self.root, "t1", "tried", f"{a} attack", attack=a, check=OK)
+            herd.add_note(self.root, "t1", "tried", f"{a} attack", attack=a, check=OK, **PROGRAMS.get(a, {}))
         herd.verify(self.root, "t1")
         hook_review(self.root)
         self.assertEqual(herd.problems(self.root, "t1"), [])
@@ -562,7 +562,7 @@ class TestThirdReview(Base):
         self.red_then_build()
         (self.root / "auth/session.py").write_text("x = 1\n")
         for a in herd.ATTACKS:
-            herd.add_note(self.root, "t1", "tried", f"{a} attack", attack=a, check=OK)
+            herd.add_note(self.root, "t1", "tried", f"{a} attack", attack=a, check=OK, **PROGRAMS.get(a, {}))
         herd.verify(self.root, "t1")
         hook_review(self.root)
         git(self.root, "add", "-A", "--", ".", ":!.herd")
@@ -1171,7 +1171,7 @@ class TestRefusalAttack(Base):
     def attacks(self, refusal_note="refusal attack", check=OK):
         for a in herd.ATTACKS:
             if a != "refusal":
-                herd.add_note(self.root, "t1", "tried", f"{a} attack", attack=a, check=OK)
+                herd.add_note(self.root, "t1", "tried", f"{a} attack", attack=a, check=OK, **PROGRAMS.get(a, {}))
         herd.add_note(self.root, "t1", "tried", refusal_note, attack="refusal", check=check)
 
     def test_the_refusal_attack_is_one_of_the_standard_attacks(self):
@@ -1179,7 +1179,7 @@ class TestRefusalAttack(Base):
         self.built()
         for a in herd.ATTACKS:
             if a != "refusal":
-                herd.add_note(self.root, "t1", "tried", f"{a} attack", attack=a, check=OK)
+                herd.add_note(self.root, "t1", "tried", f"{a} attack", attack=a, check=OK, **PROGRAMS.get(a, {}))
         late_review(self.root)
         herd.verify(self.root, "t1")
         self.assertIn("refusal (no passing command)", " ".join(herd.problems(self.root, "t1")))

@@ -95,7 +95,7 @@ All settings: [Settings](https://github.com/Beovulfo/herd-sdlc/wiki/Settings).
 
 ## Status
 
-Version 0.12.11 (see the [changelog](CHANGELOG.md)). The local autopilot works and has unit tests that CI runs on Python 3.13. Not yet done: many live runs across project types, and issue-to-pull-request automation on GitHub. Checks run as shell commands with your permissions: read a task file as you read code.
+Version 0.12.12 (see the [changelog](CHANGELOG.md)). The local autopilot works and has unit tests that CI runs on Python 3.13. Not yet done: many live runs across project types, and issue-to-pull-request automation on GitHub. Checks run as shell commands with your permissions: read a task file as you read code.
 
 ## License
 

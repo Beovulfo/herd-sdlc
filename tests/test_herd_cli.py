@@ -39,6 +39,9 @@ BARE = "\n".join(line for line in TASK.splitlines() if not line.startswith(("tes
 
 
 OK = "python3 -c \"import json\""  # an attack command that passes and is not vacuous
+# what one-bad-part and other-reading also need at medium and high risk (0.12.12)
+PROGRAMS = {"one-bad-part": {"refuses": "python3 -c \"import sys; sys.exit('no such item')\""},
+            "other-reading": {"example": OK}}
 
 
 def git(root, *args):
@@ -190,7 +193,7 @@ class Base(unittest.TestCase):
     def attacks(self, slug="t1", root=None):
         """Record the standard attacks and a review, which `herd done` needs on the standard route."""
         for a in herd.ATTACKS:
-            herd.add_note(root or self.root, slug, "tried", f"{a} attack", attack=a, check=OK)
+            herd.add_note(root or self.root, slug, "tried", f"{a} attack", attack=a, check=OK, **PROGRAMS.get(a, {}))
         late_review(root or self.root, slug)
 
 
@@ -908,7 +911,8 @@ class TestCli(Base):
         (self.root / ".herd/tasks/t1/task.toml").write_text(TASK)
         self.assertEqual(self.run_cli("check")[0], 0)
         for a in herd.ATTACKS:
-            self.assertEqual(self.run_cli("note", "--tried", "--attack", a, "--check", OK, f"{a} attack")[0], 0)
+            programs = [x for k, v in PROGRAMS.get(a, {}).items() for x in (f"--{k}", v)]
+            self.assertEqual(self.run_cli("note", "--tried", "--attack", a, "--check", OK, *programs, f"{a} attack")[0], 0)
         self.assertEqual(self.run_cli("verify")[0], 1)  # C1 failing
         (self.root / "greet.txt").write_text("hello")
         rc, out, _ = self.run_cli("verify")
@@ -1282,7 +1286,7 @@ class TestAttackChecks(Base):
         fixed = "python3 -c \"import os, sys; sys.exit(not os.path.exists('fixed.txt'))\""
         herd.add_note(self.root, "t1", "tried", "a", attack="bad-input", check=fixed)
         for a in ("collision", "one-bad-part", "refusal", "other-reading"):
-            herd.add_note(self.root, "t1", "tried", a, attack=a, check=OK)
+            herd.add_note(self.root, "t1", "tried", a, attack=a, check=OK, **PROGRAMS.get(a, {}))
         herd.add_note(self.root, "t1", "tried", "zero", attack="recount", check="python3 -c \"print('Ran 0 tests')\"")
         herd.verify(self.root, "t1")
         probs = " ".join(herd.problems(self.root, "t1"))
@@ -1304,7 +1308,7 @@ class TestAttackChecks(Base):
         self.ready()
         herd.add_note(self.root, "t1", "tried", "typo", attack="bad-input", check="python3 -m unittest tests.test_nope")
         for a in ("collision", "one-bad-part", "recount", "refusal", "other-reading"):
-            herd.add_note(self.root, "t1", "tried", a, attack=a, check=OK)
+            herd.add_note(self.root, "t1", "tried", a, attack=a, check=OK, **PROGRAMS.get(a, {}))
         herd.verify(self.root, "t1")
         self.assertIn("bad-input", " ".join(herd.problems(self.root, "t1")))
         herd.add_note(self.root, "t1", "tried", "right test", attack="bad-input", check=OK)
@@ -1408,7 +1412,7 @@ class TestAttackChecks(Base):
     def test_na_attack_counts_and_is_labelled(self):
         self.ready()
         for a in ("bad-input", "collision", "one-bad-part", "refusal", "other-reading"):
-            herd.add_note(self.root, "t1", "tried", a, attack=a, check=OK)
+            herd.add_note(self.root, "t1", "tried", a, attack=a, check=OK, **PROGRAMS.get(a, {}))
         herd.add_note(self.root, "t1", "tried", "n/a: the tool takes one value", attack="recount")
         with self.assertRaises(ValueError):
             herd.add_note(self.root, "t1", "tried", "skipped it", attack="recount")
@@ -2102,7 +2106,7 @@ class TestVerifyOnly(Base):
         herd.verify(self.root, "t1")
         a = FIRST_ATTACK
         herd.add_note(self.root, "t1", "tried", "old", attack=a, check="false")
-        herd.add_note(self.root, "t1", "tried", "new", attack=a, check=OK)
+        herd.add_note(self.root, "t1", "tried", "new", attack=a, check=OK, **PROGRAMS.get(a, {}))
         self.assertEqual(self.run_cli("verify", "--only", a)[0], 0)
 
     def test_only_timeout_prints_as_failing(self):

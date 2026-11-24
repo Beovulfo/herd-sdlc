@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 
 from scripts import herd
-from tests.test_herd_cli import hook_review, late_review
+from tests.test_herd_cli import hook_review, intake_review, late_review
 
 OK = "python3 -c \"import json\""  # an attack command that passes and is not vacuous
 REQUEST = "Add f() to app.py. It must return 1 for any call."
@@ -61,6 +61,10 @@ class Base(unittest.TestCase):
     def start(self, text=TASK, goal="Add f() to app.py"):
         herd.init_task(self.root, "t1", goal, request=REQUEST)
         (self.root / ".herd/tasks/t1/task.toml").write_text(text)
+        try:  # most tests are not about the intake review (0.11.0): it passed before the code
+            intake_review(self.root)
+        except (OSError, ValueError):  # a test of a broken task.toml
+            pass
 
     def red_then_build(self):
         """Red first done right: a test file, the failing verify, then the code."""
@@ -212,6 +216,7 @@ class TestFrozenHumanCriteria(Base):
         changed = TASK.replace("app.f\\\"", "app.f()\\\"")
         self.assertNotEqual(changed, TASK)
         (self.root / ".herd/tasks/t1/task.toml").write_text(changed)
+        intake_review(self.root)  # the criteria changed: the intake review is needed again (0.11.0)
         ev = herd.verify(self.root, "t1")
         self.assertEqual(herd.problems(self.root, "t1"), [])
         self.assertIn("C2: check changed after the first verify", herd.report(ev))
@@ -380,6 +385,7 @@ class TestReviewFindings(Base):
         herd.verify(self.root, "t1")
         self.assertIn("--human-change", " ".join(herd.problems(self.root, "t1")))
         self.assertEqual(self.cli("note", "--human-change", "C1: the human said: It must return 1 for one call").returncode, 0)
+        intake_review(self.root)  # the criteria changed: the intake review is needed again (0.11.0)
         ev = herd.verify(self.root, "t1")
         self.assertEqual(herd.problems(self.root, "t1"), [])
         self.assertIn("the human said: It must return 1 for one call", herd.report(ev))
@@ -444,6 +450,7 @@ class TestSecondReview(Base):
         herd.verify(self.root, "t1")
         self.assertIn("C1 was removed", " ".join(herd.problems(self.root, "t1")))
         herd.add_note(self.root, "t1", "human-change", "C1: drop it, said the human")
+        intake_review(self.root)  # the criteria changed: the intake review is needed again (0.11.0)
         herd.verify(self.root, "t1")
         self.assertEqual(herd.problems(self.root, "t1"), [])
 
@@ -455,6 +462,7 @@ class TestSecondReview(Base):
         herd.verify(self.root, "t1")
         self.assertIn("the check of human criterion C1 changed", " ".join(herd.problems(self.root, "t1")))
         herd.add_note(self.root, "t1", "human-change", "C1: It must return 1 for any call; any call is fine")
+        intake_review(self.root)  # the criteria changed: the intake review is needed again (0.11.0)
         herd.verify(self.root, "t1")
         self.assertEqual(herd.problems(self.root, "t1"), [])
 
@@ -565,6 +573,7 @@ class TestThirdReview(Base):
         narrowed = TASK.replace('text = "It must return 1 for any call"', 'text = "It must return 1 for one call"')
         (self.root / ".herd/tasks/t1/task.toml").write_text(narrowed)
         herd.add_note(self.root, "t1", "human-change", "C1: the human said: It must return 1 for one call")
+        intake_review(self.root)  # the criteria changed: the intake review is needed again (0.11.0)
         herd.verify(self.root, "t1")
         self.assertEqual(herd.problems(self.root, "t1"), [])
         removed = TASK.split("[[criteria]]")[0] + "[[criteria]]" + TASK.split("[[criteria]]")[2]

@@ -42,6 +42,16 @@ def git(root, *args):
 
 
 
+def intake_review(root, slug="t1"):
+    """A passing intake review of the task as it is now, as the review hook records it (0.11.0): for tests that
+    are not about the intake review."""
+    sha = herd.criteria_sha(herd.load_task(root, slug))
+    with (herd._dir(root, slug) / "notes.jsonl").open("a") as f:
+        f.write(json.dumps({"at": herd.now(), "kind": "intake", "text": "no Blocker or Major", "by": "a fresh subagent",
+                            "source": "hook", "tier": "opus", "builder_tier": "opus", "top": True, "verdict": "PASS",
+                            "saw": True, "code_unread": [], "criteria_sha": sha, "round": True}) + "\n")
+
+
 def late_review(root, slug="t1"):
     """A review that counts whatever comes next: for tests that are not about when the review happens.
 
@@ -49,7 +59,9 @@ def late_review(root, slug="t1"):
     this one is placed as if the checks had passed before it, at the highest risk, as the review hook records
     it (0.7.0): a top-tier reviewer for a top-tier builder."""
     d = herd._dir(root, slug)
-    (d / "green.json").write_text(json.dumps({"at": herd.now(), "notes": 0}))
+    if not any(n["kind"] == "intake" for n in herd.load_notes(root, slug)):
+        intake_review(root, slug)
+    (d / "green.json").write_text(json.dumps({"at": herd.now(), "notes": len(herd.load_notes(root, slug))}))
     with (d / "notes.jsonl").open("a") as f:
         f.write(json.dumps({"at": herd.now(), "kind": "review", "text": "no Blocker or Major",
                             "by": "a fresh subagent", "risk": "high", "source": "hook", "tier": "opus",
@@ -875,6 +887,7 @@ class TestCli(Base):
         self.assertEqual(rc, 0)
         (self.root / ".herd/tasks/t1/task.toml").write_text(TASK)
         self.assertEqual(self.run_cli("check")[0], 0)
+        intake_review(self.root)  # the review hook records the herd-intake-reviewer subagent's review (0.11.0)
         for a in herd.ATTACKS:
             self.assertEqual(self.run_cli("note", "--tried", "--attack", a, "--check", OK, f"{a} attack")[0], 0)
         self.assertEqual(self.run_cli("verify")[0], 1)  # C1 failing
@@ -1056,6 +1069,7 @@ class TestAttacks(Base):
 
     def test_done_and_gate_refuse_until_every_attack_is_recorded(self):
         self.task()
+        intake_review(self.root)  # before the code (0.11.0)
         (self.root / "greet.txt").write_text("hello")
         herd.verify(self.root, "t1")
         probs = " ".join(herd.problems(self.root, "t1"))
@@ -1230,7 +1244,7 @@ class TestAttackChecks(Base):
             p = self.cli("note", "--tried", "--attack", a, "tried it")
             self.assertEqual(p.returncode, 1, a)
             self.assertIn("--check", p.stderr)
-        self.assertEqual([n for n in herd.load_notes(self.root, "t1") if n["kind"] != "review"], [])
+        self.assertEqual([n for n in herd.load_notes(self.root, "t1") if n["kind"] not in ("review", "intake")], [])
         p = self.cli("note", "--tried", "--attack", "bad-input", "--check", "test -f greet.txt", "malformed map")
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(herd.load_notes(self.root, "t1")[-1]["check"], "test -f greet.txt")
@@ -1942,9 +1956,10 @@ class TestBudgets(Base):
     # (3) short skills, rare parts in reference files read only when needed
     def test_skill_word_budgets(self):
         # quality first: 0.3.1 raised run from 800 when the break-it attacks moved back into it
-        budget = {"run": 845, "criteria": 490, "evidence": 450}  # 0.4.0: rules the CLI enforces left the skill;
+        budget = {"run": 875, "criteria": 490, "evidence": 450}  # 0.4.0: rules the CLI enforces left the skill;
         # 0.5.0: +10 for resuming from the stop record; 0.6.0: +15 for the guard rule; 0.9.0: criteria +30 for `inputs`;
         # 0.10.0: criteria +20 for the top-level [[inputs]] example (a Haiku run put `inputs` inside [[criteria]])
+        # 0.11.0: run +30 for the intake review step
         for name, limit in budget.items():
             self.assertLessEqual(words((SKILLS / name / "SKILL.md").read_text()), limit, name)
 

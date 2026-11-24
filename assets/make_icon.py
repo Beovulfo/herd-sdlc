@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render assets/icon.png (512x512) with the standard library only: a green rounded square with the Herd mark."""
+"""Render plugin/assets/icon.png (512x512) with the standard library only: a green rounded square with the Herd mark."""
 import math
 import struct
 import zlib
@@ -60,7 +60,7 @@ def main():
 
     png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", N, N, 8, 6, 0, 0, 0)) \
         + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b"")
-    (Path(__file__).parent / "icon.png").write_bytes(png)
+    (Path(__file__).parent.parent / "plugin" / "assets" / "icon.png").write_bytes(png)
 
 
 if __name__ == "__main__":

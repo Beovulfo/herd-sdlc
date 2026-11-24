@@ -122,8 +122,13 @@ def create_run(root, n_runs, i, ns, env):
         subprocess.run(["git", *args], cwd=run_dir / "work", env=genv, check=True, capture_output=True)
     if ns.herd_tag:
         (run_dir / "plugin").mkdir()
-        tar = subprocess.run(["git", "-C", _repo_root(), "archive", "--format=tar", ns.herd_tag, "--", ".",
-                              ":!examples", ":!tests", ":!docs"], capture_output=True, check=True).stdout
+        # From 0.12.2 the plugin is the plugin/ folder; older tags kept it at the repository root.
+        has_plugin_dir = subprocess.run(["git", "-C", _repo_root(), "cat-file", "-e",
+                                         f"{ns.herd_tag}:plugin/.claude-plugin/plugin.json"],
+                                        capture_output=True).returncode == 0
+        spec = [f"{ns.herd_tag}:plugin"] if has_plugin_dir else [ns.herd_tag, "--", ".", ":!examples", ":!tests", ":!docs"]
+        tar = subprocess.run(["git", "-C", _repo_root(), "archive", "--format=tar", *spec],
+                             capture_output=True, check=True).stdout
         subprocess.run(["tar", "-xf", "-", "-C", str(run_dir / "plugin")], input=tar, check=True)
     (run_dir / "settings.json").write_text(json.dumps(build_settings(root, n_runs, i, outside_home_repo(env)), indent=2) + "\n")
     return run_dir

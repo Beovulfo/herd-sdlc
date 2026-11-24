@@ -22,7 +22,7 @@ The Herd plugin is installed from this repository, so it ships this folder, incl
 - every other run of the same leg, including its log and error files;
 - the network (`WebFetch`, `WebSearch`, and outbound connections from Bash).
 
-It refuses to start if the root is inside your home folder, if the root exists, or if a copy of the hidden verifier or a probe (`verify_general.py`, `robustness_probe.py`, `probe6.py`) sits under `/tmp`, `/private/tmp` or `$TMPDIR` where a run could read it. Each run gets its own empty git repository, git config and plugin copy. The plugin copy is built with `git archive` and leaves out `examples/`, `tests/` and `docs/`.
+It refuses to start if the root is inside your home folder, if the root exists, or if a copy of the hidden verifier or a probe (`verify_general.py`, `robustness_probe.py`, `probe6.py`) sits under `/tmp`, `/private/tmp` or `$TMPDIR` where a run could read it. Each run gets its own empty git repository, git config and plugin copy. The plugin copy is built with `git archive` of the tag's `plugin/` folder (0.12.2 and later), or, for older tags, of the whole tree without `examples/`, `tests/` and `docs/`.
 
 ```
 python3 examples/supermarket-route/verifier/run_leg.py --name haiku-herd-v0.12.1 --runs 6 \

@@ -942,7 +942,7 @@ def is_code(path, root=None):
     if not parts or parts[0] == ".herd" or path.lower().endswith(DOC_EXT + BUILT_EXT) or BUILT_DIRS & set(parts):
         return False  # Herd's state, docs, config, and what running the code leaves behind
     name = parts[-1]
-    if name.startswith(".") or TEST_DIRS & {s.lower() for s in parts[:-1]}:  # .gitignore; anything under tests/
+    if name.startswith(".") or TEST_DIRS & {s.lower() for s in parts[:-1]}:  # .gitignore; anything under a tests directory
         return False
     if "." not in name:  # README, LICENSE, Makefile are not code; an executable script with a shebang is
         try:

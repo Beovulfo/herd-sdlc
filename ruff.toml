@@ -10,4 +10,4 @@ ignore = ["E731"]  # small lambdas in tests read fine
 max-complexity = 10  # new functions stay under 10 branches; older ones carry `# noqa: C901` until they are split
 
 [lint.per-file-ignores]
-"scripts/herd.py" = ["E402"]  # the hooks' fast paths run before the imports, so a hook with nothing to do stays cheap
+"plugin/scripts/herd.py" = ["E402"]  # the hooks' fast paths run before the imports, so a hook with nothing to do stays cheap

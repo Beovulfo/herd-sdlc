@@ -7,6 +7,12 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
+
+# The plugin lives in plugin/; put it on the import path so tests can `from scripts import herd`.
+PLUGIN_DIR = Path(__file__).resolve().parent.parent / "plugin"
+if str(PLUGIN_DIR) not in sys.path:
+    sys.path.insert(0, str(PLUGIN_DIR))
 
 if sys.platform == "darwin" and shutil.which("git") == "/usr/bin/git":
     try:

@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-HERD = str(Path(__file__).resolve().parent.parent / "scripts" / "herd.py")
+HERD = str(Path(__file__).resolve().parent.parent / "plugin" / "scripts" / "herd.py")
 TASK = '''goal = "Add a greeting"
 test_budget = "One file check"
 known_limits = "Only the file is checked"

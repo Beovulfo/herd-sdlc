@@ -143,7 +143,7 @@ flowchart LR
         H["Hooks<br/>Stop gate, pre-init, guard, review, lint"]
         A["Agent<br/>herd-reviewer"]
     end
-    CLI["herd CLI<br/>scripts/herd.py"]
+    CLI["herd CLI<br/>plugin/scripts/herd.py"]
     T["herd_triage<br/>risk floor"]
     D["herd_detect<br/>test command"]
     G["git and gh<br/>task branch, worktrees, herd pr"]
@@ -347,7 +347,7 @@ sh examples/supermarket-route/verifier/score_run.sh sonnet-herd-1
 | `herd guard` | The PreToolUse hook on Bash, Edit, Write, MultiEdit and NotebookEdit: while a task is active, denies edits to secrets and Herd's state files and irreversible git and GitHub commands, and logs each denial as a `guard` note. Allows everything when no task is active, on a Python older than 3.11, or when it fails (one stderr line) |
 | `herd lint` | The optional PostToolUse lint hook; `herd lint --suggest` prints a `[lint]` block for `herd.toml` |
 
-`herd` is `python3 scripts/herd.py`. Inside the plugin it is `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/herd.py"`.
+`herd` is `python3 plugin/scripts/herd.py`. Inside the plugin it is `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/herd.py"`.
 
 ### Project settings (`herd.toml`)
 
@@ -384,14 +384,14 @@ While a Herd task is active, each `Edit` or `Write` runs the command on that fil
 
 ## Status
 
-Version 0.12.1 (see the [changelog](CHANGELOG.md)). Working and covered by 463 unit tests on Python 3.11 to 3.13: the evidence harness (`scripts/herd.py`), the Stop gate, the run rules (red first, risk and review, frozen and verbatim human criteria, required fields at medium and high risk, the final report, commit before done), the quick route, project-type detection, the lint hook, the caveat log, zero-test flagging, the stop record, the guard hook, the review hook (one tier above the builder unless `[review] step` says otherwise, counted only when the reviewer saw the change), the refusal attack, the `inputs` list, the opt-in `herd pr` step, the opt-in worktree start for parallel tasks, short output by default, and the risk-floor module. Releases 0.2.7 to 0.3.0 were each built with Herd itself; 0.2.8 to 0.3.0 were opened as pull requests by `herd pr`. Benchmarked on one task (above): Sonnet and Haiku with 0.3.1, and Haiku with 0.12.0 and 0.12.1. Not yet done: many live runs through the installed plugin across different project types, and issue-to-pull-request automation on GitHub (labelled issue to reviewed spec), which is still design work. `herd pr` covers only the last step: a finished local task opens a pull request with its evidence.
+Version 0.12.2 (see the [changelog](CHANGELOG.md)). Working and covered by 467 unit tests on Python 3.11 to 3.13: the evidence harness (`plugin/scripts/herd.py`), the Stop gate, the run rules (red first, risk and review, frozen and verbatim human criteria, required fields at medium and high risk, the final report, commit before done), the quick route, project-type detection, the lint hook, the caveat log, zero-test flagging, the stop record, the guard hook, the review hook (one tier above the builder unless `[review] step` says otherwise, counted only when the reviewer saw the change), the refusal attack, the `inputs` list, the opt-in `herd pr` step, the opt-in worktree start for parallel tasks, short output by default, and the risk-floor module. Releases 0.2.7 to 0.3.0 were each built with Herd itself; 0.2.8 to 0.3.0 were opened as pull requests by `herd pr`. Benchmarked on one task (above): Sonnet and Haiku with 0.3.1, and Haiku with 0.12.0 and 0.12.1. Not yet done: many live runs through the installed plugin across different project types, and issue-to-pull-request automation on GitHub (labelled issue to reviewed spec), which is still design work. `herd pr` covers only the last step: a finished local task opens a pull request with its evidence.
 
 ## The design behind it
 
 Herd is built with its own method, using the [Elephant-Goldfish Model](https://github.com/google/elephant-goldfish-model): an Elephant agent with full context drafts, and Goldfish reviewers with no context check. The requirements and decisions are in the open:
 
 - [`docs/PRD.md`](docs/PRD.md): the product requirements, principles and roadmap.
-- [`docs/designs/`](docs/designs): specs for Triage, the Arbiter (an agent that rules on review findings) and Escalation (one issue to pause and ask a human), each with a tested module in `scripts/` that will power the GitHub automation phase, plus the [v0.2 plan](docs/designs/herd-coco-ideas.md).
+- [`docs/designs/`](docs/designs): specs for Triage, the Arbiter (an agent that rules on review findings) and Escalation (one issue to pause and ask a human), each with a tested module in `plugin/scripts/` that will power the GitHub automation phase, plus the [v0.2 plan](docs/designs/herd-coco-ideas.md).
 - [`docs/spikes/`](docs/spikes): spike S1 ran EGM unattended on these features; the run logs say what each review found and what broke.
 - [`docs/backlog.md`](docs/backlog.md): ideas not yet planned, such as an optional Trail Code integration.
 
@@ -406,10 +406,11 @@ Herd is built with its own method, using the [Elephant-Goldfish Model](https://g
 ```bash
 python3 -m unittest discover -s tests -t .
 ruff check .
-claude plugin validate ./
+claude plugin validate ./plugin
+claude plugin validate .
 ```
 
-Python standard library only, no dependencies. Try the plugin from a clone with `claude --plugin-dir /path/to/herd-sdlc`. When plugin files change, bump `version` in `.claude-plugin/plugin.json` and add a [changelog](CHANGELOG.md) entry, because `claude plugin update` compares version numbers only.
+Python standard library only, no dependencies. Try the plugin from a clone with `claude --plugin-dir /path/to/herd-sdlc/plugin`. When plugin files change, bump `version` in `plugin/.claude-plugin/plugin.json` and add a [changelog](CHANGELOG.md) entry, because `claude plugin update` compares version numbers only.
 
 ## License
 

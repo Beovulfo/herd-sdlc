@@ -1,6 +1,14 @@
 # Changelog
 
-All notable changes to Herd. Versions follow `.claude-plugin/plugin.json`.
+All notable changes to Herd. Versions follow `plugin/.claude-plugin/plugin.json`.
+
+## 0.12.2
+
+Installs no longer ship `examples/`. `.claude-plugin/marketplace.json` had `"source": "./"`, so an install copied the whole repository into the plugin cache, including `examples/` (the hidden benchmark verifier and old solutions). The 0.12.1 leak audit found this as a weakness of benchmark runs. Verified live: a fresh install into a temporary `CLAUDE_CONFIG_DIR` before the move held `examples/`, `tests/` and `docs/`; after it holds only `hooks`, `agents`, `skills`, `scripts`, `assets`, `LICENSE` and `NOTICE`, and `tests.test_layout` checks that.
+
+- **Changed:** the plugin moved into `plugin/` (`git mv`, so history follows): `plugin/.claude-plugin/plugin.json`, `plugin/hooks/`, `plugin/agents/`, `plugin/skills/`, `plugin/scripts/`. The marketplace stays at the repository root with `"source": "./plugin"`. `plugin/assets/icon.png` moved with it, because the manifest's `icon` is relative to the plugin; `assets/make_icon.py` writes it there. `LICENSE` and `NOTICE` are copied into `plugin/`, so an install carries them.
+- **Changed:** `tests/__init__.py` puts `plugin/` on the import path, so tests still `from scripts import herd`. Added `tests/test_layout.py`: marketplace source, no `examples/` in a live install, no `examples/` or `tests/` path named under `plugin/`, version and changelog. CI is unchanged. `ruff.toml`, the README, CLAUDE.md and `assets/demo/start.sh` use the new paths. Run `claude plugin validate ./plugin` for the plugin and `claude plugin validate .` for the marketplace.
+- **Known limits:** the open branches `herd/focus-review-impl`, `herd/focus-proof` and `herd/speed` must merge `main`; git carries their edits across the move, and `tests/test_herd_focus.py` on those branches needs the new path (`from scripts import herd` works through `tests/__init__.py`, but paths built as `ROOT / "scripts"` do not). `LICENSE` and `NOTICE` now exist twice, at the root and in `plugin/`. The old paths in earlier changelog entries and designs are left as they were.
 
 ## 0.12.1
 

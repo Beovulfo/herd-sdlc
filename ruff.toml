@@ -7,4 +7,4 @@ select = ["E4", "E7", "E9", "F"]  # pyflakes and syntax-level pycodestyle, fixed
 ignore = ["E731"]  # small lambdas in tests read fine
 
 [lint.per-file-ignores]
-"scripts/herd.py" = ["E402"]  # the hooks' fast paths run before the imports, so a hook with nothing to do stays cheap
+"plugin/scripts/herd.py" = ["E402"]  # the hooks' fast paths run before the imports, so a hook with nothing to do stays cheap

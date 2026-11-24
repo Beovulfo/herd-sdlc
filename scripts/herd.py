@@ -9,7 +9,7 @@ red first, the standard attacks, frozen human criteria and, at medium and high r
 import sys
 
 if sys.version_info < (3, 11):  # keep this block parseable by old Pythons: it runs before tomllib is imported
-    if sys.argv[1:2] in (["gate"], ["lint"], ["preinit"]):
+    if sys.argv[1:2] in (["gate"], ["lint"], ["preinit"], ["guard"]):
         sys.exit(0)  # a hook must never break the session; the CLI says why below
     sys.exit("herd needs Python 3.11 or newer, found " + sys.version.split()[0])
 if sys.argv[1:2] == ["preinit"]:  # the PreToolUse hook runs before every Bash command: leave before the imports
@@ -17,6 +17,53 @@ if sys.argv[1:2] == ["preinit"]:  # the PreToolUse hook runs before every Bash c
     if "herd.py" not in PREINIT_RAW or "init" not in PREINIT_RAW:
         sys.exit(0)
 
+
+def _active_root(hook):
+    """The nearest folder, above the hook's cwd, CLAUDE_PROJECT_DIR, the edited file or a `cd` target, that has an
+    active task (`.herd/active`), or None. The session's cwd moves with `cd`, and a nested git repository has no
+    `.herd`, so the cwd alone can miss the task. Standard library only, before the imports: the guard's fast path."""
+    import os
+    import re
+    hook = hook if isinstance(hook, dict) else {}
+    inp = hook.get("tool_input") if isinstance(hook.get("tool_input"), dict) else {}
+    cwd = hook.get("cwd") if isinstance(hook.get("cwd"), str) and hook.get("cwd") else os.getcwd()
+    starts = [cwd, os.environ.get("CLAUDE_PROJECT_DIR") or ""]
+    starts += [os.path.dirname(os.path.join(cwd, inp[k])) for k in ("file_path", "notebook_path")
+               if isinstance(inp.get(k), str) and inp[k]]
+    if isinstance(inp.get("command"), str):
+        starts += [os.path.join(cwd, os.path.expanduser(m.strip("'\""))) for m in re.findall(r"\bcd\s+(\S+)", inp["command"])]
+    for start in filter(None, starts):
+        d = os.path.realpath(start)
+        while not os.path.isfile(os.path.join(d, ".herd", "active")):
+            try:  # a git worktree has its own tasks: never reach the checkout that holds it
+                with open(os.path.join(d, ".git")) as f:
+                    if "/worktrees/" in f.read(500):
+                        break
+            except OSError:
+                pass
+            if os.path.dirname(d) == d:
+                break
+            d = os.path.dirname(d)
+        else:
+            return d
+    return None
+
+
+if sys.argv[1:2] == ["guard"]:  # the PreToolUse guard runs before every Bash command and edit: with no active
+    import json  # task, leave before the other imports
+    GUARD_RAW = sys.stdin.read() if not sys.stdin.isatty() else ""
+    try:
+        _hook = json.loads(GUARD_RAW)
+    except Exception:  # noqa: BLE001 - bad input (even nested too deep): the CLI path below reports it
+        _hook = {}
+    try:
+        _found = _active_root(_hook)
+    except Exception:  # noqa: BLE001 - a deleted cwd and the like: the CLI path below reports it in one line
+        _found = ""
+    if _found is None:
+        sys.exit(0)
+
+import fnmatch
 import hashlib
 import json
 import os
@@ -35,8 +82,8 @@ except ImportError:  # ponytail: Windows has no flock; parallel inits there can 
     fcntl = None
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import herd_detect  # noqa: E402
-import herd_triage  # noqa: E402
+import herd_detect
+import herd_triage
 
 SELF = os.path.abspath(__file__)
 SLUG = re.compile(r"[a-z0-9][a-z0-9-]{0,40}")
@@ -83,7 +130,7 @@ VARIES = re.compile(r"\b(vary|varies|varied|varying|variation|generated?|random\
                     r"parametri[sz]ed|families|several|multiple|across|sizes?)\b", re.I)
 SCALED = re.compile(r"\b(scales?|sizes?|largest?|big|biggest|huge|time limit|timed|timing|seconds|performance|"
                     r"runtime|latency|up to \d+)\b", re.I)
-NOTE_KINDS = ("found", "fixed", "open", "tried", "decision", "late-red", "review", "human-change")
+NOTE_KINDS = ("found", "fixed", "open", "tried", "decision", "late-red", "review", "human-change", "guard")
 # red first: files that do not count as code written before the first verify
 DOC_EXT = (".md", ".rst", ".txt",  # docs, and setup and config files
            ".toml", ".json", ".yaml", ".yml", ".cfg", ".ini", ".lock")
@@ -906,7 +953,8 @@ def final_report(root, slug, ev, notes):
     caveats = [f"{n['kind']}" + (f" at {fmt_duration(n['elapsed_s'])}" if n.get("elapsed_s") is not None else "")
                + f": {n['text']}" for n in notes if n["kind"] in ("found", "fixed")]
     stop = load_stop(root, slug)
-    caveats = ([stop_line(stop)] if stop else []) + caveats
+    guarded = guard_line(notes)
+    caveats = ([stop_line(stop)] if stop else []) + ([guarded] if guarded else []) + caveats
     decisions = [n["text"] for n in notes if n["kind"] == "decision"]
     return [f"Done: {done}.",
             f"Proven: {len(proven)} of {len(results)} criteria; evidence in {where}.",
@@ -933,7 +981,7 @@ MAX_PR_NOTES = 60  # keeps the PR description well under GitHub's 65,536-charact
 
 def _largest_batch(notes):
     """Most notes whose timestamps fall inside one BATCH_S window (a sign they were logged together)."""
-    times = sorted(_secs("2000-01-01T00:00:00Z", n["at"]) for n in notes if n.get("at"))
+    times = sorted(_secs("2000-01-01T00:00:00Z", n["at"]) for n in notes if n.get("at") and n.get("kind") != "guard")
     best = 0
     for i, t in enumerate(times):
         best = max(best, sum(1 for u in times[i:] if u - t <= BATCH_S))
@@ -1159,6 +1207,9 @@ def pr_body(root, slug):
         if bad:
             gaps.append("- Standard attacks without a passing command: " + ", ".join(bad))
     gaps += [f"- {line}" for line in _rule_lines(ev, notes)]
+    guarded = guard_line(notes)
+    if guarded:
+        gaps.append(f"- {guarded}: the agent tried these; check that nothing was done another way")
     review = _review(notes)
     if ev.get("route") != "quick" and (review is None or review.startswith("skipped:")):
         gaps.append(f"- The change is unreviewed: {review[len('skipped: '):] if review else 'no review recorded'}")
@@ -1183,12 +1234,13 @@ def pr_body(root, slug):
     lines += [f"- {d}" for d in details]
     # ponytail: output tails stay out of the PR (they can hold secrets); the reviewer re-runs the check instead
     if notes:
-        shown = notes[:MAX_PR_NOTES]
+        shown = [n for n in notes if n["kind"] != "guard"][:MAX_PR_NOTES]  # the Guard line above sums them
         lines += ["", "Caveats logged during the run:", ""]
         lines += [f"- {fmt_duration(n['elapsed_s']) + ' ' if n.get('elapsed_s') is not None else ''}"
                   f"{n['kind']}: {n['text']}" for n in shown]
-        if len(notes) > len(shown):
-            lines.append(f"- and {len(notes) - len(shown)} more: run `herd status {slug}`")
+        rest = len([n for n in notes if n["kind"] != "guard"]) - len(shown)
+        if rest > 0:
+            lines.append(f"- and {rest} more: run `herd status {slug}`")
     lines += ["", "</details>"]
     checks = [r["check"] for r in results if r["check"].strip()]
     fence = _ticks("\n".join(checks), least=3)
@@ -1411,6 +1463,320 @@ def stop_line(rec):
             + (f", resolved at {rec['resolved_at']}" if rec.get("resolved_at") else ""))
 
 
+# ---- guard hook -----------------------------------------------------------
+
+# Herd's state files, written only by the herd CLI: the design's list (G3), plus `started` (the review window),
+# `request.md` (the human's words) and `.herd/active` (removing it switches the gate off). task.toml is the agent's.
+GUARD_STATE = ("evidence.json", "notes.jsonl", "start.json", "red.json", "frozen.json", "green.json", "fails.json",
+               "stopped.json", "gate_blocks", "done_blocks", "cancelled", "started", "request.md", "base", "pr")
+# the design's list, with .env and .env.* in every folder (a monorepo keeps apps/web/.env) and .git itself
+GUARD_PATHS = ("**/.env", "**/.env.*", "**/*.pem", "**/*.key", "**/id_rsa*", ".git", ".git/**")  # herd.toml only adds
+ENV_TEMPLATES = ("**/.env.example", "**/.env.sample", "**/.env.template", "**/.env.dist")  # committed, no secrets
+# the design's list (A3), plus `git branch -d -f` (the same as -D), and other ways to discard work: `git checkout .`
+# and `-f`, `git stash drop` and `clear`, `git switch -f` and `--discard-changes`
+GUARD_COMMANDS = ("git push", "git reset --hard", "git clean -f", "git branch -D", "git branch -d -f",
+                  "git checkout -- .", "git checkout .", "git checkout -f", "git restore .", "git commit --no-verify",
+                  "git stash drop", "git stash clear", "git switch -f", "git switch --discard-changes",
+                  "gh pr merge", "gh repo delete", "rm -rf /", "rm -rf ~", "rm -rf .")
+UNSTAGE = ({"--staged", "-S"}, {"--worktree", "-W"})  # `git restore --staged .` only unstages: allowed
+GUARD_WHY = {"git push": "Use `herd pr` to publish, or ask the human one question and stop.",
+             "gh pr merge": "Herd never merges: a human merges after reading the evidence."}
+GLOBAL_OPTS = {"git": ("-C", "-c", "--git-dir", "--work-tree", "--namespace"),  # options before the subcommand
+               "gh": ("-R", "--repo", "--hostname")}                         # that take a value
+FLAG_ALIAS = {"f": ("--force",), "r": ("--recursive",), "n": ("--no-verify",), "d": ("--delete",)}
+SHORT = re.compile(r"-[A-Za-z]+")
+# commands that run the command after them, with their options that take a value
+WRAPPERS = {"env": ("-u", "-C", "-S", "--unset", "--chdir", "--split-string"),
+            "sudo": ("-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-U", "--user", "--group", "--chdir"),
+            "command": (), "time": (), "nohup": (), "exec": ("-a",), "nice": ("-n",),
+            "timeout": ("-s", "-k", "--signal", "--kill-after"),  # then a duration
+            "xargs": ("-n", "-I", "-P", "-L", "-d", "-s", "-E", "-a")}
+SUBST = re.compile(r"\$\(([^()]*)\)|`([^`]*)`")  # command substitution, which runs inside double quotes too
+KEYWORDS = ("if", "then", "do", "else", "elif", "while", "until", "!", "{", "}")
+SEPARATORS = {"&&", "||", ";", ";;", "|", "|&", "&", "(", ")"}
+REDIRECT = re.compile(r"\d*(?:>|>>|>\||&>|&>>)")
+INPUT = ("<", "<<", "<<<")  # the word after one of these is read, not written
+VALUE_FLAGS = ("-m", "-F", "-C", "-c", "--message", "--file", "--author", "--date")  # their value is not a flag
+DRY_RUN = {"--help", "-h", "--dry-run"}
+HEREDOC = re.compile(r"(?<!<)<<-?\s*\\?(['\"]?)([A-Za-z_][\w.-]*)\1")
+
+
+def guard_root(hook):
+    """The folder of the active task the hook belongs to, as a Path, or None (see _active_root)."""
+    found = _active_root(hook)
+    return Path(found) if found else None
+
+
+def guard_config(root):
+    """(protected path globs, denied commands): the built-in ones plus herd.toml's `[guard]` additions."""
+    try:
+        cfg = tomllib.loads((Path(root) / "herd.toml").read_text()).get("guard")
+    except (OSError, tomllib.TOMLDecodeError):
+        cfg = None
+    cfg = cfg if isinstance(cfg, dict) else {}
+
+    def extra(key):
+        v = cfg.get(key)
+        return [x.strip() for x in v if isinstance(x, str) and x.strip()] if isinstance(v, list) else []
+    return list(GUARD_PATHS) + extra("protected_paths"), list(GUARD_COMMANDS) + extra("deny_commands")
+
+
+def _shell_text(command):
+    """The command without what the shell never runs: `#` comments (a `#` that starts a word outside quotes and
+    substitutions, to the end of its line) and heredoc bodies (text such as a commit message). One pass that keeps
+    a stack of quotes, `$(...)` and parentheses, so quotes nested in "$(...)" and `<<` in arithmetic are not
+    misread. It fails closed: a heredoc whose closing line never comes keeps its body, so the body is checked."""
+    out, stack, pending, i, n, escaped = [], [], [], 0, len(command), -1
+    while i < n:
+        c, top = command[i], stack[-1] if stack else None
+        if c == "\n" and top in (None, "$(") and pending:  # a line that started heredocs ends: skip their bodies
+            out.append(c)
+            i += 1
+            for word in pending:
+                end = re.search(r"^[ \t]*" + re.escape(word) + r"[ \t]*$", command[i:], re.M)
+                if not end:  # never closed: keep the rest as commands
+                    break
+                i += end.end() + 1
+            pending = []
+            continue
+        if c == "\\" and top != "'" and i + 1 < n:  # an escaped character is part of a word
+            out.append(command[i:i + 2])
+            i += 2
+            escaped = i
+            continue
+        two = command[i:i + 2]
+        if top in ("'", "$'"):
+            if c == "'":
+                stack.pop()
+        elif top == '"':
+            if c == '"':
+                stack.pop()
+            elif two == "$(":
+                stack.append("$(")
+                out.append(two)
+                i += 2
+                continue
+        elif two in ("$(", "$'"):
+            stack.append(two)
+            out.append(two)
+            i += 2
+            continue
+        elif c in "('\"":
+            stack.append(c)
+        elif c == ")" and top in ("(", "$("):
+            stack.pop()
+        elif c == "#" and top is None and (i == 0 or command[i - 1] in " \t\n;&|()") and escaped != i:
+            end = command.find("\n", i)
+            i = n if end < 0 else end
+            continue
+        elif c == "<" and top in (None, "$(") and (m := HEREDOC.match(command, i)):
+            pending.append(m.group(2))
+            out.append(m.group(0))
+            i = m.end()
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def _segments(command):
+    """The simple commands of a shell line, as word lists: split at && || ; | & ( ) ` and newlines, outside quotes.
+    Heredoc bodies are dropped; leading keywords (if, then, do, !, {), `VAR=x` and wrappers (env, sudo, command,
+    time, nohup, exec, with their options) are seen through."""
+    plain = _shell_text(command)
+    text = plain.replace("\\\n", " ").replace("\n", " ; ").replace("`", " ; ")
+    try:
+        lex = shlex.shlex(text, posix=True, punctuation_chars=True)
+        lex.whitespace_split = True
+        lex.commenters = ""  # _shell_text took the comments out: a # left is inside a word or quotes
+        words = list(lex)
+    except ValueError:  # an unbalanced quote: split the raw text, best effort
+        words = [w.strip("\"'") for w in re.sub(r"(&&|\|\||[;|&()])", r" \1 ", text).split()]
+    out, cur = [], []
+    for w in words + [";"]:
+        if w not in SEPARATORS:
+            cur.append(w)
+            continue
+        while cur:
+            if cur[0] in KEYWORDS or re.fullmatch(r"[A-Za-z_]\w*=.*", cur[0]):
+                cur = cur[1:]
+            elif cur[0] in WRAPPERS:
+                wrapper, takes = cur[0], WRAPPERS[cur[0]]
+                cur = cur[1:]
+                while cur and cur[0].startswith("-"):
+                    cur = cur[2:] if cur[0] in takes else cur[1:]
+                cur = cur[1:] if wrapper == "timeout" else cur
+            else:
+                break
+        if cur:
+            out.append(cur)
+        cur = []
+    return out + [seg for m in SUBST.finditer(plain) for seg in _segments(m.group(1) or m.group(2) or "")]
+
+
+def _target_hit(token, arg, cwd):
+    """An rm or git argument names / (token "/"), the home folder ("~"), or the folder the command runs in or one
+    above it ("."), in any spelling: `/.`, `$HOME`, `~/`, `*`, `.*`, `..`, an absolute path."""
+    if not arg:  # rm -rf '' removes nothing
+        return False
+    arg = re.sub(r"^\$\{?HOME\}?", "~", arg)
+    arg = re.sub(r"(^|/)\.?\*/?$", r"\1", arg) or "."
+    path = os.path.normpath(os.path.join(cwd, os.path.expanduser(arg)))
+    if token == "/":
+        return path == "/"
+    if token == "~":
+        return path == os.path.normpath(os.path.expanduser("~"))
+    here = os.path.normpath(cwd)
+    return path != "/" and (here == path or here.startswith(path.rstrip("/") + "/"))
+
+
+def _has(token, args, cwd):
+    """The rule token is among the arguments: exactly; as a short flag in any cluster (-xfd has f) or its long
+    spelling (--force), including a unique prefix git accepts (--forc); for / ~ and ., in any spelling."""
+    if token in (args[:args.index("--")] if "--" in args and token.startswith("-") and token != "--" else args):
+        return True
+    if token in ("/", "~", "."):
+        return any(_target_hit(token, a, cwd) for a in args if not a.startswith("-"))
+    if not token.startswith("-"):
+        return False
+    flags = args[:args.index("--")] if "--" in args else args  # after `--` come paths, not flags
+    clusters = [a for a in flags if SHORT.fullmatch(a)]
+    longs = [a.split("=", 1)[0] for a in flags if a.startswith("--") and len(a) > 4]
+
+    def long_hit(name):
+        return any(a == name or name.startswith(a) for a in longs)
+    if SHORT.fullmatch(token) and len(token) <= 3:
+        return all(any(c in a or (c == "r" and "R" in a) for a in clusters)
+                   or any(long_hit(n) for n in FLAG_ALIAS.get(c, ())) for c in token[1:])
+    letter = next((c for c, names in FLAG_ALIAS.items() if token in names), None)
+    return long_hit(token) or bool(letter and any(letter in a for a in clusters))
+
+
+def _rule_hit(rule, words, cwd):
+    """A denied command (`git clean -f`) matches a simple command: same program, the same subcommands first
+    (after git's or gh's global options), then each other rule token anywhere after them."""
+    r = rule.split()
+    if not r or not words:
+        return False
+    same = os.path.normpath(words[0]) == os.path.normpath(r[0]) if "/" in r[0] else Path(words[0]).name == r[0]
+    if not same:
+        return False
+    args = [a for i, a in enumerate(words[1:]) if not (i and words[i] in VALUE_FLAGS + GLOBAL_OPTS.get(r[0], ()))]
+    n = next((i for i, t in enumerate(r[1:]) if not re.fullmatch(r"[a-z][\w-]*", t)), len(r) - 1)
+    places = [i for i, a in enumerate(args) if not a.startswith("-")][:n]  # the subcommands, between options
+    if [args[i] for i in places] != r[1:1 + n]:
+        return False
+    rest = [a for i, a in enumerate(args) if i not in places]
+    return all(_has(t, rest, cwd) for t in r[1 + n:])
+
+
+def _written(words):
+    """Paths a simple command writes, moves, deletes or makes read-only: redirection targets, the arguments of tee,
+    mv, rm, touch, truncate, chmod, chown, chgrp, sed -i and git rm, the last argument of cp, ln, install and rsync,
+    and dd of=. Words read from (< << <<<) are not written."""
+    targets = {i + 1 for i, w in enumerate(words) if REDIRECT.fullmatch(w)}
+    read = {i + 1 for i, w in enumerate(words) if w in INPUT}
+    out = [words[i] for i in sorted(targets) if i < len(words)]
+    args = [w for i, w in enumerate(words) if i and i not in targets | read and not w.startswith("-")
+            and not REDIRECT.fullmatch(w) and w not in INPUT]
+    name = Path(words[0]).name
+    out += [w[3:] for w in words[1:] if w.startswith("of=")]  # dd
+    if name in ("chmod", "chown", "chgrp"):  # a read-only state file would stop the CLI writing it
+        out += args[1:]
+    elif name in ("ln", "install", "rsync") and len(args) > 1:
+        out.append(args[-1])
+    elif name == "git" and args[:1] == ["rm"] and "--cached" not in words:  # --cached only untracks
+        out += args[1:]
+    in_place = any(w.startswith(("-i", "--in-place")) or SHORT.fullmatch(w) and "i" in w for w in words[1:])
+    if name in ("tee", "mv", "rm", "touch", "truncate") or (name == "sed" and in_place):
+        out += args
+    elif name == "cp" and args:
+        out.append(args[-1])
+    return out
+
+
+def _protected(root, cwd, path, globs):
+    """(rule, reason) when path is one of Herd's state files or folders, or matches a protected glob. Symlinks are
+    followed and case is ignored, since a case-insensitive disk writes `.ENV` to `.env`."""
+    full = Path(os.path.realpath(os.path.join(cwd, os.path.expanduser(path))))
+    parts = [p.lower() for p in full.parts]
+    if ".herd" in parts:
+        rest = full.parts[len(parts) - parts[::-1].index(".herd"):]
+        low = [p.lower() for p in rest]
+        state = (len(low) < 2 and (not low or fnmatch.fnmatchcase("active", low[0]) or low[0] == "tasks")
+                 or low[0] == "tasks" and (len(low) == 2 or len(low) == 3 and any(
+                     fnmatch.fnmatchcase(n.lower(), low[2]) for n in GUARD_STATE)))
+        if state:
+            name = "/".join((".herd",) + tuple(rest))
+            return (rest[-1] if len(rest) == 3 else name,
+                    f"Herd guard: `{name}` is Herd's own state, written only by the herd CLI: run `herd verify` or "
+                    "`herd note`.")
+    try:
+        rel = full.relative_to(os.path.realpath(root)).as_posix()
+    except ValueError:  # outside the project
+        return None
+    def match(g):
+        try:
+            return herd_triage.glob_match(rel, g) or herd_triage.glob_match(rel.lower(), g.lower())
+        except (ValueError, re.error):  # a broken glob in herd.toml protects nothing and stops nothing
+            return False
+    template = any(match(t) for t in ENV_TEMPLATES)
+    for g in globs:
+        if match(g) and not (template and g in GUARD_PATHS):
+            return g.removeprefix("**/"), (f"Herd guard: `{rel}` is protected (`{g}`, a Herd default or `[guard] protected_paths`). "
+                       "Ask the human one question and stop.")
+    return None
+
+
+def guard(root, hook):
+    """PreToolUse hook on Bash and the edit tools. None allows; a dict is the deny output. Only while a task is
+    active; each denial is a `guard` note. It reads command text, so bash -c, scripts and aliases pass (a Non-Goal)."""
+    if not isinstance(hook, dict):
+        return None
+    slug = active_slug(root)
+    if not slug or not _dir(root, slug).exists() or cancelled(root, slug):
+        return None
+    tool, inp = hook.get("tool_name"), hook.get("tool_input")
+    inp, cwd = inp if isinstance(inp, dict) else {}, str(hook.get("cwd") or root)
+    globs, commands = guard_config(root)
+    hit = None
+    if tool in EDIT_TOOLS:
+        path = inp.get("file_path") or inp.get("notebook_path")
+        hit = _protected(root, cwd, path, globs) if isinstance(path, str) and path else None
+    elif tool == "Bash" and isinstance(inp.get("command"), str):
+        here = cwd  # follows `cd` and `pushd` along the chain, for relative paths
+        for words in _segments(inp["command"]):
+            if Path(words[0]).name in ("cd", "pushd") and len(words) > 1:
+                here = os.path.normpath(os.path.join(here, os.path.expanduser(words[1])))
+                continue
+            unstage = UNSTAGE[0] & set(words) and not UNSTAGE[1] & set(words)
+            dry = DRY_RUN & set(words[1:]) or ("clean" in words and any(SHORT.fullmatch(w) and "n" in w for w in words))
+            rule = None if dry else next((r for r in commands if _rule_hit(r, words, here)
+                                          and not (r == "git restore ." and unstage)), None)
+            if rule:
+                hit = rule, (f"Herd guard: `{rule}` is not allowed during a task. "
+                             + GUARD_WHY.get(rule, "It is irreversible: ask the human one question and stop."))
+                break
+            hit = next((h for p in _written(words) if (h := _protected(root, here, p, globs))), None)
+            if hit:
+                break
+    if not hit:
+        return None
+    try:
+        add_note(root, slug, "guard", f"{tool}: {hit[0]}")
+    except Exception as e:  # noqa: BLE001 - a log that cannot be written never turns a denial into an allow
+        print(f"herd guard: denied, but the guard note could not be written: {e!r}"[:300], file=sys.stderr)
+    return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                   "permissionDecisionReason": hit[1]}}
+
+
+def guard_line(notes):
+    """`Guard: N denied (git push x2, .env x1)`, or None when nothing was denied."""
+    rules = [str(n.get("text") or "?").split(": ", 1)[-1] for n in notes if n.get("kind") == "guard"]
+    return (f"Guard: {len(rules)} denied (" + ", ".join(f"{r} x{rules.count(r)}" for r in dict.fromkeys(rules)) + ")"
+            if rules else None)
+
+
 # ---- gate -----------------------------------------------------------------
 
 def problems(root, slug):
@@ -1554,6 +1920,7 @@ USAGE = {
     "pr": "herd pr [slug] [--yes]   (push the herd/* branch, open or update its PR with the evidence)",
     "gate": "herd gate   (the Stop hook, reads hook JSON on stdin)",
     "preinit": "herd preinit   (PreToolUse hook on Bash: before `herd init`, records files the session already edited)",
+    "guard": "herd guard   (PreToolUse hook: denies edits to secrets and Herd's state, and irreversible commands)",
     "triage": 'herd triage "<text>" [--json]',
 }
 
@@ -1573,7 +1940,10 @@ def _opt(args, flag):
 
 
 def main(argv):
-    root = find_root(Path.cwd())
+    try:
+        root = find_root(Path.cwd())
+    except FileNotFoundError:  # the folder was deleted under the process: a hook must still exit 0
+        return 0 if argv[:1] in (["gate"], ["lint"], ["preinit"], ["guard"]) else 1
     cmd, args = (argv[0], argv[1:]) if argv else ("status", [])
     if cmd in ("help", "-h", "--help"):
         print(__doc__ + "\nCommands:\n" + "\n".join(f"  {u}" for u in USAGE.values()))
@@ -1755,6 +2125,17 @@ def main(argv):
                 preinit(json.loads(raw) if raw.strip() else {})
             except Exception:  # noqa: BLE001 - a hook that fails must not stop the agent's command
                 pass
+        elif cmd == "guard":  # PreToolUse hook: an error allows the action, with one stderr line
+            try:
+                raw = globals().get("GUARD_RAW")
+                raw = raw if raw is not None else (sys.stdin.read() if not sys.stdin.isatty() else "")
+                hook = json.loads(raw) if raw.strip() else {}
+                found = guard_root(hook)
+                out = guard(found, hook) if found else None
+                if out:
+                    print(json.dumps(out))
+            except Exception as e:  # noqa: BLE001 - a hook must never break the session
+                print(f"herd guard: allowed after an error: {e!r}"[:300].replace("\n", " "), file=sys.stderr)
         elif cmd == "gate":
             raw = sys.stdin.read() if not sys.stdin.isatty() else ""
             hook = json.loads(raw) if raw.strip() else {}

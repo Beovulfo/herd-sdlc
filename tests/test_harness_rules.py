@@ -815,7 +815,7 @@ class TestPreInitEdits(Base):
         self.assertEqual(len(pre), 1)
         self.assertIn('herd.py\" preinit', pre[0]["command"])
         src = Path(herd.__file__).read_text()
-        self.assertIn('sys.argv[1:2] in (["gate"], ["lint"], ["preinit"])', src)  # exits 0 before 3.11 code runs
+        self.assertIn('sys.argv[1:2] in (["gate"], ["lint"], ["preinit"], ["guard"])', src)  # exits 0 before 3.11 code runs
 
 
 class TestStopRecord(Base):

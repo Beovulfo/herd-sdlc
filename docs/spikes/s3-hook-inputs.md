@@ -55,6 +55,8 @@ Live input, with paths shortened:
 - The deny output works as the design expects. The hook printed `{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "PROBE-DENY: not allowed"}}`, the command did not run (the folder was still there), and the agent saw `PreToolUse:Bash hook error: PROBE-DENY: not allowed`.
 - The docs: "When multiple PreToolUse hooks return different decisions, precedence is `deny` > `defer` > `ask` > `allow`." So the guard's deny wins over another hook's allow.
 
+- Hook commands get `CLAUDE_PROJECT_DIR` (the project folder) and `CLAUDE_PLUGIN_ROOT` in their environment, seen live in a third run. The hook input's `cwd` is the session's current folder, which moves with `cd`, so the guard also looks for the active task from `CLAUDE_PROJECT_DIR`.
+
 ### Side observation
 
 In both runs the main agent, in auto mode, said the subagent's report was flagged "Undermining Oversight" and that it would not rely on it. The probe agent's prompt only said to end with `HERD-REVIEW: PASS`, with no review. The hook still received the event and the transcript, so recording does not depend on the main agent trusting the report. A real reviewer that reads the diff may not be flagged; this was not tested.

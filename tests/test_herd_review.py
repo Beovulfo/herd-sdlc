@@ -36,7 +36,11 @@ class ReviewBase(Base):
         ev = herd.verify(self.root, "t1")
         return herd.review_state(self.root, "t1", ev, herd.load_notes(self.root, "t1"))
 
+    lift = False  # a test that records many reviews in one task lifts the review limit before each, as a human would
+
     def review(self, **kw):
+        if self.lift:
+            herd.add_note(self.root, "t1", "decision", "Review limit: the test lifts it")
         return hook_review(self.root, **kw)
 
     def last(self):
@@ -81,6 +85,7 @@ class TestHookOnly(ReviewBase):
 
 class TestTierRule(ReviewBase):
     def test_review_tier_rule(self):
+        self.lift = True
         tiers = ["haiku", "sonnet", "opus"]
         for step in (1, 2):
             self.fresh(f"[review]\nstep = {step}\n")
@@ -122,6 +127,7 @@ class TestTierRule(ReviewBase):
 
 class TestTranscripts(ReviewBase):
     def test_unreadable_model_does_not_count(self):
+        self.lift = True
         self.ready()
         cases = [({"reviewer_path": "missing"}, "the reviewer's model could not be read"),
                  ({"reviewer_lines": []}, "the reviewer's model could not be read"),
@@ -163,6 +169,7 @@ class TestTranscripts(ReviewBase):
 
 class TestVerdict(ReviewBase):
     def test_review_verdict_parsed(self):
+        self.lift = True
         self.ready()
         for text, verdict in (("Nothing found.\nHERD-REVIEW: PASS", "PASS"), ("Major: x.py:3\nHERD-REVIEW: FAIL", "FAIL"),
                               ("No verdict here.", "none"), ("herd-review: pass", "none"), ("HERD-REVIEW: PASS!", "none"),

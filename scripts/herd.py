@@ -1912,7 +1912,7 @@ def _escalations(root, slug):
         limit = review_limit(load_notes(root, slug))
     except STATE_ERRORS:
         return []
-    return out + ([f"review limit reached: {MAX_REVIEW_ROUNDS} reviews since the last PASS"] if limit else [])
+    return out + ([f"review limit reached (limit {MAX_REVIEW_ROUNDS} reviews since the last PASS)"] if limit else [])
 
 
 def next_step(probs):

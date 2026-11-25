@@ -248,7 +248,7 @@ class TestWarningsAndEscalation(Base):
     def test_three_failures_in_a_row_say_escalate(self):
         self.start()
         for i in range(4):  # the first is the red run, which is not a failed attempt
-            out = self.cli("verify").stdout
+            out = self.cli("verify", "--fresh").stdout  # a skipped run is not another attempt
         self.assertIn("C1 failed 3 times in a row: ask the human one question", out)
         (self.root / "app.py").write_text("def f():\n    return 1\n")
         self.assertNotIn("in a row", self.cli("verify").stdout)

@@ -2,6 +2,18 @@
 
 All notable changes to Herd. Versions follow `plugin/.claude-plugin/plugin.json`.
 
+## 0.13.4
+
+`herd verify` skips an unchanged tree, and attack notes go in one call (issue #100). On Haiku, 0.13.3 cost $0.28 per supermarket run against $0.10 with no plugin. In three runs, `herd verify` ran 5 to 7 times each, 7 to 46 s a time (7 to 22% of wall time). Logging attack notes took 3 to 4 turns per run, with retries after a flag error. The owner asked: "make Herd a new approach to shift to the left: lean, robust, accurate".
+
+- **Changed:** `herd verify` runs no check when the work (the content fingerprint `herd done` uses), `task.toml` and the attack notes match the last run that ran every check. It names that run's time, keeps the evidence and exits as that run did. A new `--human-change` note, a new `herd pr` pull request, or a missing or edited `start.json`, `red.json` or `frozen.json` also runs the checks again.
+- **Measured:** once, on this task (7 criteria and 6 attacks): a full `herd verify` took 75.7 s, the next one on the same tree 0.13 s.
+- **Added:** `herd verify --fresh` always runs every check. A run after a change now reads git state twice, not once.
+- **Changed:** attack notes no longer count toward the "logged together" flag. It stays for the other notes.
+- **Changed:** a rejected `herd note` prints the full usage line and what it did not accept.
+- **Changed:** the run skill logs all six attack notes in one Bash call, and finishes docs and commit before the final `herd verify` and `herd done`.
+- **Known limits:** a test that is flaky on an unchanged tree is not rerun; use `--fresh`. The same holds for changes the fingerprint does not see: ignored files, submodule and nested repository contents, installed dependencies, services. A skipped run does not count toward the escalation after 3 failing verifies. A file edited while checks run counts as verified, as `herd done` already treats it. Outside git every verify runs. No model leg has measured the cost of 0.13.4.
+
 ## 0.13.3
 
 The example is run for real, against an answer written before the code (issue #93). `--example` passed on exit 0 alone, even when the program printed nothing or a wrong answer, and was required only at medium and high risk. The design review: "the freeze is what makes it real: the builder must hand-solve a tiny case first and cannot paste the program's own output". The owner asked: "let's implement Features 1 and 2".

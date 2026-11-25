@@ -34,7 +34,7 @@ Most agent workflows ask people to write long requirement lists, then trust the 
 
 ## Quickstart
 
-You need Claude Code, Python 3.11 or newer as `python3`, and a git repository. CI tests Python 3.13 only.
+You need Claude Code, Python 3.11 or newer as `python3`, and a git repository; `herd pr` also needs `gh`. CI tests Python 3.13 only.
 
 By default Sonnet designs and Haiku builds: see [Models](#models).
 
@@ -98,6 +98,28 @@ All optional, in `herd.toml` at the project root. Without it, Herd uses these de
 
 All settings: [Settings](https://github.com/Beovulfo/herd-sdlc/wiki/Settings).
 
+## Benchmark
+
+The task is a route optimizer for picking a shopping list in a supermarket, run with Claude Sonnet 5.5 and Claude Haiku 5.5, 6 runs each. Cells are mean ± sd.
+
+| Measure | Sonnet + Herd 0.3.1 | Sonnet, no plugin | Haiku + Herd 0.12.1 (real hooks) | Haiku, no plugin |
+| --- | --- | --- | --- | --- |
+| Valid stores, of 48 | 48.0 ± 0.0 | 45.2 ± 4.8 | 47.3 ± 1.6 | 41.7 ± 2.7 |
+| Bad inputs handled, of 6 | 6.0 ± 0.0 | 3.5 ± 0.5 | 6.0 ± 0.0 | 4.3 ± 2.0 |
+| Cost per run (USD) | 0.61 ± 0.09 | 0.29 ± 0.03 | 0.35 ± 0.13 | 0.04 ± 0.02 |
+
+The 0.3.1 round, including both no plugin columns, used emulated sessions; the 0.12.1 arm used real headless sessions, so the two differ in method.
+
+In 0.14.0 (see [changelog](CHANGELOG.md)), end to end, a Sonnet design with a Haiku build scored 39.3 of 40 stores on tiers S, M, L, against 38.0 for Haiku alone; the changelog does not state the run count for this.
+
+Full results and limits: [BENCHMARK.md](examples/supermarket-route/BENCHMARK.md). The [bus-transfer](examples/bus-transfer) task and its hidden verifier exist, but there are no recorded legs in the repository yet.
+
+## Use cases
+
+- [supermarket-route](examples/supermarket-route): the best route through a supermarket for a shopping list.
+- [bus-transfer](examples/bus-transfer): an earliest-arrival bus transfer planner.
+- poi_entry_point: a private research project built with Herd that finds where cars enter fuel stations, from open map data (Overture Maps, OpenStreetMap).
+
 ## Learn more
 
 - [How Herd works](https://github.com/Beovulfo/herd-sdlc/wiki/How-Herd-works): the steps, parallel tasks, architecture, autonomy rules
@@ -107,6 +129,10 @@ All settings: [Settings](https://github.com/Beovulfo/herd-sdlc/wiki/Settings).
 - [Benchmark](https://github.com/Beovulfo/herd-sdlc/wiki/Benchmark): one task, with and without Herd, with its limits
 - [Design eval](examples/design-eval/README.md): do a challenger's questions fix design mistakes before the build?
 - [Design and roadmap](https://github.com/Beovulfo/herd-sdlc/wiki/Design-and-roadmap), [requirements](docs/PRD.md), [changelog](CHANGELOG.md)
+
+## Contributing
+
+Questions go to [GitHub Discussions](https://github.com/Beovulfo/herd-sdlc/discussions). See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, checks and rules. New contributors can start with the [good first issue](https://github.com/Beovulfo/herd-sdlc/labels/good%20first%20issue) label.
 
 ## Status
 

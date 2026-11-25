@@ -28,7 +28,7 @@ class Attacks(Base):
             if a in na:
                 herd.add_note(self.root, "t1", "tried", "n/a: cannot apply here", attack=a)
                 continue
-            extra = {"one-bad-part": {"refuses": refuses}, "other-reading": {"example": example}}.get(a, {})
+            extra = {"collision": {"refuses": refuses}, "one-bad-part": {"refuses": refuses}, "other-reading": {"example": example}}.get(a, {})
             herd.add_note(self.root, "t1", "tried", f"{a} attack", attack=a, check=OK, **extra)
 
     def run_all(self):
@@ -94,7 +94,7 @@ class TestRefuses(Attacks):
 
     def test_wrong_attack_no_check_or_empty_is_refused(self):
         self.built()
-        for kw in ({"attack": "collision", "check": OK, "refuses": REFUSES},
+        for kw in ({"attack": "recount", "check": OK, "refuses": REFUSES},
                    {"attack": "other-reading", "check": OK, "refuses": REFUSES},
                    {"attack": "bad-input", "refuses": REFUSES},
                    {"attack": "bad-input", "check": OK, "refuses": "  "},

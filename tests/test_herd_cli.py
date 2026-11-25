@@ -40,7 +40,8 @@ BARE = "\n".join(line for line in TASK.splitlines() if not line.startswith(("tes
 
 OK = "python3 -c \"import json\""  # an attack command that passes and is not vacuous
 # what one-bad-part and other-reading also need at medium and high risk (0.12.12)
-PROGRAMS = {"one-bad-part": {"refuses": "python3 -c \"import sys; sys.exit('no such item')\""},
+PROGRAMS = {"collision": {"refuses": "python3 -c \"import sys; sys.exit('repeated id')\""},
+            "one-bad-part": {"refuses": "python3 -c \"import sys; sys.exit('no such item')\""},
             "other-reading": {"example": OK}}
 
 
@@ -1172,8 +1173,8 @@ class TestSimplifiedAdversarial(Base):
     def test_one_bad_part_names_both_cases(self):
         # a benchmark run applied it to a requested product and silently skipped it
         rule = self.adv.split("--attack one-bad-part", 1)[1].split("\n", 1)[0]
-        self.assertIn("does not ask for must not reject the whole input", rule)
-        self.assertIn("a requested entry that is broken or unreachable must still fail with a clear message", rule)
+        self.assertIn("cannot change a requested answer", rule)
+        self.assertIn("a requested entry that is broken or unreachable always fails", rule)
 
     def test_existing_test_counts_only_if_it_meets_the_attack_rule(self):
         self.assertIn("counts for an attack only if it meets that attack's rule above", self.adv)

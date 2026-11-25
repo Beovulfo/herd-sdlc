@@ -71,7 +71,7 @@ flowchart LR
     G -->|opt-in| P[herd pr<br/>PR with the evidence]
 ```
 
-Every criterion has a `check`, a shell command where exit 0 means pass. The checks run once before any work and should fail. The agent then builds, tries to break the result with six standard attacks, verifies, and at medium and high risk gets a fresh-context review. `herd done` writes the evidence report. With `herd pr` (opt-in) that report is the pull request description; Herd never merges.
+Every criterion has a `check`, a shell command where exit 0 means pass. Before any code, the agent also logs six standard attacks, so they shape the design. The checks run once before any work and should fail. Untrusted input is refused, not tolerated: contradictory entries, or a broken entry that could change a requested answer, end in an error, not a warning with exit 0. The agent then builds, tries to break the result, verifies, and at medium and high risk gets a fresh-context review. `herd done` writes the evidence report. With `herd pr` (opt-in) that report is the pull request description; Herd never merges.
 
 ## Settings
 
@@ -97,7 +97,7 @@ All settings: [Settings](https://github.com/Beovulfo/herd-sdlc/wiki/Settings).
 
 ## Status
 
-Version 0.12.13 (see the [changelog](CHANGELOG.md)). The local autopilot works and has unit tests that CI runs on Python 3.13. Not yet done: many live runs across project types, and issue-to-pull-request automation on GitHub. Checks run as shell commands with your permissions: read a task file as you read code.
+Version 0.12.14 (see the [changelog](CHANGELOG.md)). The local autopilot works and has unit tests that CI runs on Python 3.13. Not yet done: many live runs across project types, and issue-to-pull-request automation on GitHub. Checks run as shell commands with your permissions: read a task file as you read code.
 
 ## License
 

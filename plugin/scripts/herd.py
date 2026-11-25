@@ -147,8 +147,11 @@ LEVELS = ("low", "medium", "high")
 ESCALATE_AFTER = 3  # consecutive failing verifies of one criterion before the agent must ask the human
 # the standard attacks of the adversarial pass (skills/run/adversarial.md): `herd done` needs a passing command or an n/a for each
 ATTACKS = {"bad-input": "bad input at every entry point ends in a clear message, never a traceback",
-           "collision": "two inputs on the same key or position each still count",
-           "one-bad-part": "one broken entry the request does not ask for does not reject the whole input, while a broken requested one still fails clearly",
+           "collision": "two distinct entries that share a name, value or position both count, while input that "
+                        "contradicts itself (one identity given twice with different data) is refused, unless the "
+                        "request says which one wins",
+           "one-bad-part": "an entry is skipped only when that cannot change a requested answer, while a broken requested "
+                           "one fails clearly; a warning with exit 0 is not a refusal",
            "recount": "every reported number recomputed from the output with separate code, on the generated and "
                       "collision inputs too",
            "refusal": "every kind of input the program refuses (cannot be reached, not found, invalid) is confirmed "
@@ -161,11 +164,24 @@ REFUSAL_FIRST = ("no refusal attack yet: before building, list what the program 
 OTHER_READING_FIRST = ("no other-reading attack yet: before building, name at least two readings of the human's words "
                        "for each input and log `herd note --tried --attack other-reading --check \"<command>\"` with "
                        "code that calls no project code; it should fail now (`n/a:` only when the task has no inputs)")
-FIRST_VERIFY_ATTACKS = (("refusal", REFUSAL_FIRST), ("other-reading", OTHER_READING_FIRST))
+def _first(name, what):
+    return (f"no {name} attack yet: before building, {what} and log `herd note --tried --attack {name} --check "
+            "\"<command>\"`; it should fail now (`n/a:` with the reason when it cannot apply)")
+
+
+# every standard attack is logged before building, so that it shapes the design
+FIRST_VERIFY_ATTACKS = (
+    ("bad-input", _first("bad-input", "list every entry point")),
+    ("collision", _first("collision", "decide what counts twice and what contradicts itself")),
+    ("one-bad-part", _first("one-bad-part", "decide which broken entries can change a requested answer")),
+    ("recount", _first("recount", "list every number the program will report")),
+    ("refusal", REFUSAL_FIRST), ("other-reading", OTHER_READING_FIRST))
 # flags with a command that runs the program itself, and the attacks each goes with
-PROGRAM_FLAGS = {"refuses": ("bad-input", "one-bad-part"), "example": ("other-reading",)}
+PROGRAM_FLAGS = {"refuses": ("bad-input", "collision", "one-bad-part"), "example": ("other-reading",)}
 # at medium and high risk the attacks that need one, unless n/a
-REQUIRED_PROGRAMS = (("one-bad-part", "refuses", "a broken requested entry, which the program must refuse"),
+REQUIRED_PROGRAMS = (("collision", "refuses", "input that contradicts itself, which the program must refuse; "
+                      "`--refuses \"n/a: <reason>\"` when none can, or the request says which entry wins"),
+                     ("one-bad-part", "refuses", "a broken requested entry, which the program must refuse"),
                      ("other-reading", "example", "the input written as the human described it"))
 # at medium and high risk on the standard route `herd done` refuses while one is empty; what to write, for the message
 REQUIRED = {"test_budget": "<what is tested and what is not, at which level>",
@@ -643,9 +659,8 @@ def _check_command(root, slug):
     return 1 if errs or refused else 0
 
 
-def refusal_late(root, slug, red):
-    """The refusal and other-reading attacks first logged after the first verify (by note order, not by time):
-    they did not shape the design."""
+def late_attacks(root, slug, red):
+    """Attacks first logged after the first verify (by note order, not by time): they did not shape the design."""
     if not red or not isinstance(red.get("notes"), int):
         return []
     notes = load_notes(root, slug)
@@ -1064,11 +1079,19 @@ def run_program(root, kind, cmd, timeout):
     return _program_fault(kind, p), (p.stdout + p.stderr)[-TAIL_CHARS:]
 
 
+def _na_program(kind, attack, cmd):
+    """`--refuses "n/a: <reason>"` on collision: no input can contradict itself, or the request says which wins."""
+    return kind == "refuses" and attack == "collision" and cmd.strip().lower().startswith("n/a:")
+
+
 def _run_programs(root, note, a, ran):
     """Run the note's --refuses or --example command and mark the attack entry `a` with the result."""
     for kind in PROGRAM_FLAGS:
         cmd = note.get(kind)
         if not cmd:
+            continue
+        if _na_program(kind, note.get("attack"), cmd):
+            a[kind] = cmd  # stated, not run; the report shows it
             continue
         key = (kind, cmd, note.get("timeout_s", DEFAULT_TIMEOUT))
         if key not in ran:
@@ -1227,11 +1250,12 @@ def verify(root, slug):  # noqa: C901
     added = [cid for cid in now_by_id if frozen and cid not in frozen]
     human_not_verbatim = human_unquoted(task, request_text, load_notes(root, slug))
     inputs_left = input_warnings(task) + reading_quote_warnings(task, request_text)
+    standard = task.get("route", "standard") == "standard"  # the quick route has no attacks
     warnings = (check_warnings(task, request_text, load_notes(root, slug)) + coverage_warnings(task) + length_warnings(task)
                 + inputs_left
                 + [msg for name, msg in FIRST_VERIFY_ATTACKS
-                   if first and not any(a.get("attack") == name for a in attacks)]
-                + refusal_late(root, slug, red))
+                   if standard and first and not any(a.get("attack") == name for a in attacks)]
+                + (late_attacks(root, slug, red) if standard else []))
     fails_path = d / "fails.json"  # consecutive failing verifies per criterion, for the escalation rule
     fails = _state(fails_path, {})
     fails = {r["id"]: fails.get(r["id"], 0) + 1 if r["status"] == "failing" and not first else 0 for r in results}
@@ -1268,6 +1292,8 @@ def _check_programs(attack, check, programs):
         if attack not in PROGRAM_FLAGS[kind] or check is None or not cmd.strip():
             raise ValueError(f"--{kind} goes with --attack {' or '.join(PROGRAM_FLAGS[kind])} and --check, "
                              "and needs a command")
+        if _na_program(kind, attack, cmd) and not cmd.split(":", 1)[1].strip():
+            raise ValueError(f'--{kind} "n/a:" needs a reason')
 
 
 def add_note(root, slug, kind, text, attack=None, check=None, timeout=None, extra=None, refuses=None,
@@ -1683,6 +1709,13 @@ def review_hook(root, hook):
                extra=extra)
 
 
+def _refusals_not_run(ev):
+    """Attacks whose latest note states `n/a:` instead of a --refuses command: never shown as proven."""
+    latest = {a["attack"]: a for a in ev.get("attacks") or []}
+    return [f"{name} refusal not run: {a['refuses']}" for name, a in latest.items()
+            if _na_program("refuses", name, a.get("refuses") or "")]
+
+
 def final_report(root, slug, ev, notes):
     """The run skill's seven-line final report, filled from the evidence and the notes."""
     results = ev["results"]
@@ -1694,7 +1727,7 @@ def final_report(root, slug, ev, notes):
     where = str((_dir(root, slug) / "evidence.md").relative_to(root)) + (f" and {pr.read_text().strip()}" if pr.exists() else "")
     gaps = [f"{r['id']} {r['status']}" for r in results if r["status"] != "passing"]
     gaps += [f"{r['id']} ran zero tests" for r in results if r.get("zero_tests")]
-    gaps += [n["text"] for n in notes if n["kind"] == "open"] + _rule_lines(ev, notes)
+    gaps += [n["text"] for n in notes if n["kind"] == "open"] + _refusals_not_run(ev) + _rule_lines(ev, notes)
     review = _review(notes)
     if ev.get("route") != "quick" and (review is None or review.startswith("skipped:")):
         gaps.append("unreviewed")
@@ -2043,6 +2076,7 @@ def pr_body(root, slug):  # noqa: C901
     elif ev.get("route") != "quick":
         best = _attack_states(ev.get("attacks"))
         gaps += [f"- Attack {a} marked {best[a][1]}" for a in ATTACKS if best.get(a, ("",))[0] == "na"]
+        gaps += [f"- {line}" for line in _refusals_not_run(ev)]
         gaps += [f"- Earlier {s['attack']} command now fails: `{_attack_what(s)}`" for s in _superseded_failing(ev.get("attacks"))]
         bad = [a + ("" if a not in best else {"failing": " (command fails)", "zero": " (command ran zero tests)",
                                               "nocheck": " (no command)", "vacuous": " (command runs no project code)"}

@@ -34,6 +34,8 @@ Most agent workflows ask people to write long requirement lists, then trust the 
 
 You need Claude Code, Python 3.11 or newer as `python3`, and a git repository. CI tests Python 3.13 only.
 
+The builder model, the one that runs `/herd:run`, must be Sonnet or stronger. Haiku is not supported for reliable results.
+
 ```text
 /plugin marketplace add Beovulfo/herd-sdlc
 /plugin install herd@herd-sdlc

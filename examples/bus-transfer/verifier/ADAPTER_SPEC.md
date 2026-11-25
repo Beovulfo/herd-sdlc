@@ -5,6 +5,17 @@ You write one Python file, `adapter.py`, that lets a fixed scorer drive one bus 
 around bugs in the project: call its own public functions and CLI as a user would. If the project crashes
 or returns something wrong, let that show.
 
+## Time format
+
+- Scorer times are whole minutes since midnight, as Python `int`s: `540` is 09:00. A time past midnight is above
+  1440 (`1510` is 01:10 the next day). Never write or return a float such as `560.0`, a string, a bool or a rounded
+  value. A journey with a non-integer minute fails its case.
+- The adapter may convert the project's own time format (such as `HH:MM`, or a count of seconds) to and from whole
+  minutes, in both directions, with integer arithmetic. It must not edit or patch the project, its files or its
+  output, and must not compute a journey time itself: converting the text of a time is allowed, inventing one is not.
+- Write each departure and each network time in the format the project reads, and read each arrival and leg time
+  from the project's output in the same format, converted to minutes.
+
 ## 1. `worker(project: Path, canon: dict) -> dict`
 
 Called in a fresh process. `sys.path.insert(0, str(project))` and import the project's module.

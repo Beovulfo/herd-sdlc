@@ -257,7 +257,14 @@ def merge_legs(legs):
     return out
 
 
+def _whole_minutes(value, what):
+    """A time must be a whole number of minutes: an int, never a float (560.0) or a bool."""
+    assert type(value) is int, f"{what} is {value!r}, not a whole number of minutes"
+
+
 def _check_leg(trips, leg):
+    _whole_minutes(leg.get("dep"), "leg departure")
+    _whole_minutes(leg.get("arr"), "leg arrival")
     t = trips.get(leg.get("trip"))
     assert t is not None, f"leg uses unknown trip {leg.get('trip')!r}"
     stops = [x[0] for x in t["times"]]
@@ -296,6 +303,7 @@ def validate_answer(canon, query, answer, expected):
     else:
         _check_chain(canon, query, legs)
         arrival = legs[-1]["arr"]
+    _whole_minutes(answer.get("arrival"), "reported arrival")
     assert answer.get("arrival") == arrival, f"reported arrival {answer.get('arrival')} but the legs arrive at {arrival}"
     assert arrival == expected, f"arrives at {arrival}, the earliest is {expected}"
 

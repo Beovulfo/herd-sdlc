@@ -10,7 +10,7 @@ from pathlib import Path
 
 from scripts import herd
 from tests.test_harness_rules import OK, REQUEST, Base
-from tests.test_herd_cli import hook_review, transcript
+from tests.test_herd_cli import PROGRAMS, hook_review, transcript
 
 ROOT = Path(herd.__file__).resolve().parent.parent
 
@@ -21,7 +21,7 @@ class ReviewBase(Base):
         self.start()
         self.red_then_build()
         for a in herd.ATTACKS:
-            herd.add_note(self.root, "t1", "tried", f"{a} attack", attack=a, check=OK)
+            herd.add_note(self.root, "t1", "tried", f"{a} attack", attack=a, check=OK, **PROGRAMS.get(a, {}))
         herd.verify(self.root, "t1")
 
     def fresh(self, cfg):

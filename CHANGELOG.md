@@ -21,6 +21,7 @@ No plugin file changed, so no version bump. Benchmark 2, a bus transfer planner 
 - **Fixed before any leg:** the verifier exits 2 with "no cases ran" on an empty selection instead of printing PASS; L and XL run `--seeds` seeds like S and M; program output that is not UTF-8 is a failed case or probe scenario instead of aborting the run.
 - **Faster verifier tests:** each generated network is built once per test process and XL runs only with `BUS_FULL=1`, which CI sets. `test_bus_verify` on one machine, one run each: 101.0 s for 37 tests before, 50.9 s for 42 tests (XL skipped) after.
 - **Known limits:** the verifier judges one service day with one global change time; L and XL are generated and solved by the oracle in tests but not run through a full solver.
+- **Fixed:** `leak_audit.py` exits 2 with "work folder not found" when `--work` does not exist or is not a folder, instead of walking nothing and printing "leak audit: clean" (issue #68, part of #57).
 
 ## 0.12.11
 

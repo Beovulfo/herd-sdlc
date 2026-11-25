@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -167,6 +168,50 @@ class TestAttacks(Base):
             f = self.audit()
             self.assertEqual(len(f), 1, text)
             self.assertIn("not isolated", f[0].detail)
+
+
+class TestMissingWork(Base):
+    def test_missing_work_folder_exits_2_with_one_message_and_no_clean_verdict(self):
+        gone = self.dir / "no-such-dir"
+        log = self.write(use("Read", {"file_path": "a"}))
+        r = subprocess.run([sys.executable, str(HERE / "leak_audit.py"), str(log), "--work", str(gone)],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("work folder not found", r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertNotIn("clean", r.stdout + r.stderr)
+        self.assertEqual(len(r.stderr.strip().splitlines()), 1)
+
+    def test_missing_work_folder_raises_in_the_api(self):
+        with self.assertRaises(ValueError) as cm:
+            la.audit(self.write(use("Read", {"file_path": "a"})), self.dir / "no-such-dir")
+        self.assertIn("work folder not found", str(cm.exception))
+
+    def test_work_path_that_is_a_file_is_refused(self):
+        f = self.dir / "a-file"
+        f.write_text("x")
+        with self.assertRaises(ValueError):
+            la.audit(self.write(), f)
+
+    def test_refusal_matches_plain_directory_check(self):
+        # Separate code decides what should be refused: pathlib, not the code under test.
+        file_path = self.dir / "a-file"
+        file_path.write_text("x")
+        paths = [self.work, self.dir / "no-such-dir", file_path, self.dir / "no-such" / "deeper", self.dir / ""]
+        for p in paths:
+            should_refuse = not Path(p).is_dir()
+            try:
+                la.audit(self.write(), p, settings=self.settings)
+                refused = False
+            except ValueError:
+                refused = True
+            self.assertEqual(refused, should_refuse, str(p))
+
+    def test_other_readings_of_an_existing_folder_are_served(self):
+        # Readings of "the work folder": absolute or relative, with or without a trailing slash.
+        relative = os.path.relpath(self.work, os.getcwd())
+        for variant in (str(self.work), str(self.work) + os.sep, relative, relative + os.sep):
+            self.assertEqual(la.audit(self.write(), variant, settings=self.settings), [], variant)
 
 
 class TestTask(Base):

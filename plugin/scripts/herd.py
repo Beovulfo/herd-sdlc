@@ -187,6 +187,7 @@ REQUIRED_PROGRAMS = (("collision", "refuses", "input that contradicts itself, wh
                       "`--refuses \"n/a: <reason>\"` when none can, or the request says which entry wins"),
                      ("one-bad-part", "refuses", "a broken requested entry, which the program must refuse"),
                      ("other-reading", "example", "the input written as the human described it"))
+EXPECT_HINT = ('--expect "<text>": the output of a tiny case you solve by hand, never the program\'s own output')
 # at medium and high risk on the standard route `herd done` refuses while one is empty; what to write, for the message
 REQUIRED = {"test_budget": "<what is tested and what is not, at which level>",
             "known_limits": "<when the claim may fail or has not been shown>"}
@@ -1047,11 +1048,17 @@ def run_check(root, check, timeout, full=False):
         return None, f"timeout after {timeout}s"
 
 
-def _program_fault(kind, p):
-    """Why a finished --refuses or --example run does not count, or None."""
+def _program_fault(kind, p, expect=None):
+    """Why a finished --refuses or --example run does not count, or None. expect is the --expect text."""
     code = p.returncode
     if kind == "example":
-        return None if code == 0 else f"exit {code}, needs 0"
+        if code != 0:
+            return f"exit {code}, needs 0"
+        if not p.stdout.strip():
+            return "printed nothing on stdout"
+        if not (expect or "").strip():
+            return "no --expect text to compare stdout with"
+        return None if expect.strip() in p.stdout else "stdout does not contain the expected text"
     if not 0 < code < 126:  # 126 and 127: the shell could not run it; above, or negative: a crash or a signal
         return f"exit {code}, needs 1 to 125"
     if not p.stderr.strip():
@@ -1070,14 +1077,14 @@ def vacuous_program(cmd):
         return True
 
 
-def run_program(root, kind, cmd, timeout):
+def run_program(root, kind, cmd, timeout, expect=None):
     """Run a --refuses or --example command: (why it does not count or None, output tail)."""
     try:
         p = subprocess.run(cmd, shell=True, cwd=root, capture_output=True, text=True, errors="replace",
                            timeout=timeout)
     except subprocess.TimeoutExpired:
         return f"timeout after {timeout}s", ""
-    return _program_fault(kind, p), (p.stdout + p.stderr)[-TAIL_CHARS:]
+    return _program_fault(kind, p, expect), (p.stdout + p.stderr)[-TAIL_CHARS:]
 
 
 def _na_program(kind, attack, cmd):
@@ -1094,11 +1101,14 @@ def _run_programs(root, note, a, ran):
         if _na_program(kind, note.get("attack"), cmd):
             a[kind] = cmd  # stated, not run; the report shows it
             continue
-        key = (kind, cmd, note.get("timeout_s", DEFAULT_TIMEOUT))
+        expect = note.get("expect") if kind == "example" else None
+        key = (kind, cmd, note.get("timeout_s", DEFAULT_TIMEOUT), expect)
         if key not in ran:
-            ran[key] = run_program(root, kind, cmd, key[2])
+            ran[key] = run_program(root, kind, cmd, key[2], expect)
         why, out = ran[key]
         a[kind] = cmd
+        if kind == "example":
+            a["expect"], a["example_output"] = expect, out
         a["vacuous"] = a.get("vacuous") or vacuous_program(cmd)
         if why:
             a["status"], a["output_tail"], a["zero_tests"] = "failing", out, False
@@ -1324,14 +1334,41 @@ def _check_covered_by(root, slug, attack, check, cid):
     return cid.strip()
 
 
+def _check_expect(root, slug, example, expect, changed):
+    """The note fields for --expect and --expect-changed, or ValueError. From the first verify on, the expected
+    text is frozen: a different one (or the first one) needs a reason, which the report lists."""
+    if expect is None and changed is None:
+        return {}
+    if expect is None or example is None or not expect.strip():
+        raise ValueError(f"--expect goes with --example and needs a text (--expect-changed goes with --expect); {EXPECT_HINT}")
+    try:
+        expect.encode()
+    except UnicodeEncodeError:  # raw bytes from the shell: no output could match, and no report could show them
+        raise ValueError("--expect is not valid UTF-8 text") from None
+    was = next((n["expect"] for n in reversed(load_notes(root, slug)) if n.get("expect")), None)
+    d = _dir(root, slug)  # any state of a verify: deleting one file does not unfreeze
+    frozen = any((d / f).exists() for f in ("frozen.json", "red.json", "evidence.json"))
+    if not (frozen and expect.strip() != was):
+        if changed is not None:
+            raise ValueError("--expect-changed goes only with an --expect that differs from the frozen one, "
+                             "after the first herd verify")
+        return {"expect": expect.strip()}
+    if not (changed or "").strip():
+        raise ValueError(("the expected text is frozen since the first herd verify" if was else
+                          "no expected text was logged before the first herd verify") +
+                         ': give --expect-changed "<reason>"; the final report lists it')
+    return {"expect": expect.strip(), "expect_was": was, "expect_changed": changed.strip()}
+
+
 def add_note(root, slug, kind, text, attack=None, check=None, timeout=None, extra=None, refuses=None,
-             example=None, covered_by=None):
+             example=None, covered_by=None, expect=None, expect_changed=None):
     """Append a note to the task's log: one of NOTE_KINDS (found, fixed, open for a known limit, tried for an
     adversarial attempt, decision, late-red, human-change).
 
     attack names which standard attack a tried note covers (one of ATTACKS); check is the command that
     shows it, run by `herd verify`. An attack that cannot apply has no check and text starting `n/a:`.
-    refuses and example are commands that run the program itself (PROGRAM_FLAGS). covered_by is a criterion id
+    refuses and example are commands that run the program itself (PROGRAM_FLAGS). expect is the text the
+    example's stdout must contain; expect_changed is why it differs after the first verify. covered_by is a criterion id
     whose check stands for the attack's command, for the attacks in COVERABLE."""
     if kind not in NOTE_KINDS:
         raise ValueError(f"note kind must be one of {NOTE_KINDS}")
@@ -1347,6 +1384,9 @@ def add_note(root, slug, kind, text, attack=None, check=None, timeout=None, extr
     _check_programs(attack, check or covered_by, programs)
     if not text.strip():
         raise ValueError("note text is empty")
+    if attack == "other-reading" and text.strip().lower() == "n/a:":
+        raise ValueError('--attack other-reading "n/a:" needs a reason')
+    expected = _check_expect(root, slug, example, expect, expect_changed)
     if attack and check is None and covered_by is None and not text.strip().lower().startswith("n/a:"):
         raise ValueError(f'--attack {attack} needs --check "<command that shows the attack>", run by herd verify; '
                          'an attack that cannot apply needs text starting "n/a:" with the reason')
@@ -1356,6 +1396,7 @@ def add_note(root, slug, kind, text, attack=None, check=None, timeout=None, extr
            "elapsed_s": _secs(started.read_text().strip(), t) if started.exists() else None}
     given = {"attack": attack or None, "check": check, "covered_by": covered_by, **programs}
     rec.update({k: v.strip() for k, v in given.items() if v is not None})
+    rec.update(expected)
     if timeout is not None:
         rec["timeout_s"] = timeout
     rec.update(extra or {})
@@ -1393,12 +1434,15 @@ def final_report(root, slug, ev, notes):
     guarded = guard_line(notes)
     caveats = ([stop_line(stop)] if stop else []) + ([guarded] if guarded else []) + caveats
     decisions = [n["text"] for n in notes if n["kind"] == "decision"]
+    run = _example_run(ev)
+    example = [f"Example: {_tick_span(run[0])}; expected {run[1]}; output tail: "
+               f"{' / '.join(run[2].splitlines())[-200:] or '(none)'}"] if run else []
     return [f"Done: {done}.",
             f"Proven: {len(proven)} of {len(results)} criteria; evidence in {where}.",
             f"Not proven: {'; '.join(gaps) if gaps else 'nothing open'}.",
             f"Caveats: {'; '.join(caveats) if caveats else 'none'}.",
             f"Decisions: {' | '.join(decisions) if decisions else 'none recorded'}.",
-            f"Limits: {(ev.get('known_limits') or 'none stated').rstrip('.')}."]
+            f"Limits: {(ev.get('known_limits') or 'none stated').rstrip('.')}.", *example]
 
 
 def load_notes(root, slug):
@@ -1476,6 +1520,23 @@ def _early_code(ev):
     return sorted(set(red.get("code_before") or []) | set(red.get("code_hidden") or []))
 
 
+def _quoted(text):
+    """An expected text on one line, newlines shown; "none" when there was none."""
+    return "none" if text is None else json.dumps(text, ensure_ascii=False)
+
+
+def _tick_span(command):
+    """A command as a one-line code span outside a table, so its pipes stay as typed."""
+    line, t = " ".join(command.splitlines()), _ticks(command)
+    return f"{t}{line}{t}"
+
+
+def _example_run(ev):
+    """The latest other-reading example, as (command, expected text, output tail), or None."""
+    a = {x["attack"]: x for x in ev.get("attacks") or []}.get("other-reading") or {}
+    return (a["example"], _quoted(a.get("expect")), (a.get("example_output") or "").strip()) if a.get("example") else None
+
+
 def _rule_lines(ev, notes):
     """What the run-rule checks found, one line each: red first, criteria changes, warnings."""
     out = []
@@ -1502,6 +1563,8 @@ def _rule_lines(ev, notes):
     out += narrowed_claims(ev)
     if (ev.get("red") or {}).get("stashed"):
         out.append("Red first not proven: a git stash was made on this branch before the first verify")
+    out += [f"Expected text changed after the first verify: {_quoted(n.get('expect_was'))} to "
+            f"{_quoted(n.get('expect'))}. Reason: {n['expect_changed']}" for n in notes if n.get("expect_changed")]
     out += [f"Human criterion changed with the human's words, for you to confirm: {n['text']}"
             for n in notes if n["kind"] == "human-change"]
     return out
@@ -1566,6 +1629,10 @@ def report(ev, notes=None):  # noqa: C901
     for r in ev["results"]:
         if r["status"] == "failing":
             lines += ["", f"Failing {r['id']} (exit {r['exit_code']}), output tail:", "```", r["output_tail"].strip(), "```"]
+    run = _example_run(ev)
+    if run:
+        fence = _ticks(run[2], least=3)
+        lines += ["", f"Example: {_tick_span(run[0])}; expected {run[1]}; output tail:", fence, run[2], fence]
     if s["unchecked"]:
         lines += ["", "Unchecked criteria have no runnable check and are never counted as met."]
     return "\n".join(lines) + "\n"
@@ -2270,23 +2337,31 @@ def guard_line(notes):
 # ---- gate -----------------------------------------------------------------
 
 def missing_programs(ev):
-    """At medium and high risk, the attacks whose latest note lacks its --refuses or --example (n/a needs none)."""
-    if not full_rules(ev):
+    """The attacks whose latest note lacks its program run (n/a needs none): --example with --expect on the
+    standard route at every risk, --refuses at medium and high risk."""
+    if ev.get("route") == "quick":
         return []
     latest = {a["attack"]: a for a in ev.get("attacks") or []}
     def proof(a):
         return f"--covered-by {a['covered_by']}" if a.get("covered_by") else '--check "<tests>"'
 
-    return [f"{name} has no --{flag}: log it again with `herd note --tried --attack {name} {proof(latest[name])} "
-            f"--{flag} \"<cmd>\" \"what it shows\"` ({what}), then run `herd verify`"
-            for name, flag, what in REQUIRED_PROGRAMS
-            if name in latest and latest[name]["status"] != "na" and not latest[name].get(flag)]
+    out = []
+    for name, flag, what in REQUIRED_PROGRAMS:
+        a = latest.get(name)
+        if a is None or a["status"] == "na" or not (flag == "example" or full_rules(ev)):
+            continue
+        lacks = flag if not a.get(flag) else "expect" if flag == "example" and not a.get("expect") else None
+        if lacks:
+            flags = f'--{flag} "<cmd>"' + (' --expect "<text>"' if flag == "example" else "")
+            out.append(f"{name} has no --{lacks}: log it again with `herd note --tried --attack {name} {proof(a)} "
+                       f'{flags} "what it shows"` ({what}), then run `herd verify`')
+    return out
 
 
 def attack_problems(root, slug, ev):
     """The standard-route attack rules: each attack passing or n/a, and n/a for other-reading only without inputs."""
     out = []
-    keys = ("at", "text", "check", "covered_by", *PROGRAM_FLAGS)
+    keys = ("at", "text", "check", "covered_by", "expect", *PROGRAM_FLAGS)
     ran = {tuple(a.get(k) for k in keys) for a in ev.get("attacks") or []}
     if any(n["kind"] == "tried" and n.get("attack") and tuple(n.get(k) for k in keys) not in ran
            for n in load_notes(root, slug)):
@@ -2429,7 +2504,7 @@ def _slug_arg(root, args):
 USAGE = {
     "init": 'herd init <slug> "<goal>" [--request "<message>"] [--quick "<check>"] [--worktree]',
     "check": "herd check [slug]",
-    "note": 'herd note --found|--fixed|--open|--decision|--late-red|--human-change|--tried [--attack bad-input|collision|one-bad-part|recount|refusal|other-reading --check "<command>" [--timeout S] | --covered-by <criterion id> (recount, refusal, other-reading) [--refuses|--example "<command>"]] "text"',
+    "note": 'herd note --found|--fixed|--open|--decision|--late-red|--human-change|--tried [--attack bad-input|collision|one-bad-part|recount|refusal|other-reading --check "<command>" [--timeout S] | --covered-by <criterion id> (recount, refusal, other-reading) [--refuses "<command>"] [--example "<command>" --expect "<text>" [--expect-changed "<reason>"]]] "text"',
     "detect": "herd detect",
     "lint": "herd lint [--suggest]   (without --suggest: the PostToolUse hook, reads hook JSON on stdin)",
     "verify": "herd verify [slug] [--verbose] [--only <id>]   (--only: run one criterion or attack, write nothing)",
@@ -2462,7 +2537,7 @@ def _note_command(root, args):
     kinds = {"--found": "found", "--fixed": "fixed", "--open": "open", "--tried": "tried",
              "--decision": "decision", "--late-red": "late-red", "--human-change": "human-change"}
     opts = {}
-    for name in ("attack", "check", "timeout", "covered_by", *PROGRAM_FLAGS):
+    for name in ("attack", "check", "timeout", "covered_by", "expect", "expect_changed", *PROGRAM_FLAGS):
         opts[name], args = _opt(args, f"--{name.replace('_', '-')}")
     try:
         opts["timeout"] = None if opts["timeout"] is None else float(opts["timeout"])

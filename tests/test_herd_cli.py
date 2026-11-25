@@ -42,7 +42,8 @@ OK = "python3 -c \"import json\""  # an attack command that passes and is not va
 # what one-bad-part and other-reading also need at medium and high risk (0.12.12)
 PROGRAMS = {"collision": {"refuses": "python3 -c \"import sys; sys.exit('repeated id')\""},
             "one-bad-part": {"refuses": "python3 -c \"import sys; sys.exit('no such item')\""},
-            "other-reading": {"example": OK}}
+            "other-reading": {"example": "python3 -c \"print('hello')\"",
+                              "extra": {"expect": "hello"}}}  # extra: as if logged before red
 
 
 def git(root, *args):
@@ -825,7 +826,9 @@ class TestCli(Base):
         (self.root / ".herd/tasks/t1/task.toml").write_text(TASK)
         self.assertEqual(self.run_cli("check")[0], 0)
         for a in herd.ATTACKS:
-            programs = [x for k, v in PROGRAMS.get(a, {}).items() for x in (f"--{k}", v)]
+            flags = dict(PROGRAMS.get(a, {}))
+            flags.update(flags.pop("extra", {}))
+            programs = [x for k, v in flags.items() for x in (f"--{k}", v)]
             self.assertEqual(self.run_cli("note", "--tried", "--attack", a, "--check", OK, *programs, f"{a} attack")[0], 0)
         self.assertEqual(self.run_cli("verify")[0], 1)  # C1 failing
         (self.root / "greet.txt").write_text("hello")
@@ -2164,7 +2167,7 @@ class TestCoveredBy(Base):
         for a in ("bad-input", "collision", "one-bad-part"):
             herd.add_note(self.root, "t1", "tried", f"n/a: {a}", attack=a)
         herd.add_note(self.root, "t1", "tried", "with its example", attack="other-reading", covered_by="C1",
-                      example=OK)
+                      **PROGRAMS["other-reading"])
         herd.verify(self.root, "t1")
         self.assertNotIn("attack", " ".join(herd.problems(self.root, "t1")))
         (self.root / "greet.txt").unlink()
@@ -2225,7 +2228,8 @@ class TestCoveredBy(Base):
         herd.add_note(self.root, "t2", "tried", "broken", attack="other-reading", covered_by="C1", example="exit 3")
         ev = herd.verify(self.root, "t2")
         self.assertEqual(self.states(herd.verify(self.root, "t2"))["other-reading"], "failing")
-        herd.add_note(self.root, "t2", "tried", "ok", attack="other-reading", covered_by="C1", example=OK)
+        herd.add_note(self.root, "t2", "tried", "ok", attack="other-reading", covered_by="C1",
+                      **PROGRAMS["other-reading"])
         ev = herd.verify(self.root, "t2")
         self.assertEqual(ev["attacks"][-1]["status"], "passing")
         self.assertEqual(herd.missing_programs(ev), [])

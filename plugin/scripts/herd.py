@@ -177,6 +177,9 @@ FIRST_VERIFY_ATTACKS = (
     ("one-bad-part", _first("one-bad-part", "decide which broken entries can change a requested answer")),
     ("recount", _first("recount", "list every number the program will report")),
     ("refusal", REFUSAL_FIRST), ("other-reading", OTHER_READING_FIRST))
+# the attacks that may reuse a criterion's check (--covered-by) instead of their own command: those whose job a
+# criterion test can already do, comparing the program with separate code
+COVERABLE = ("recount", "refusal", "other-reading")
 # flags with a command that runs the program itself, and the attacks each goes with
 PROGRAM_FLAGS = {"refuses": ("bad-input", "collision", "one-bad-part"), "example": ("other-reading",)}
 # at medium and high risk the attacks that need one, unless n/a
@@ -1102,14 +1105,26 @@ def _run_programs(root, note, a, ran):
             a["program_fault"] = f"--{kind} {cmd}: {why}"
 
 
-def run_attacks(root, notes):
-    """Each standard-attack note's commands, run like criterion checks, once per verify."""
+def _covered(a, cid, results):
+    """Give the attack entry `a` the result of criterion `cid` from this verify: its check is not run again."""
+    r = results.get(cid)
+    if r is None:
+        a["status"], a["program_fault"] = "failing", f"--covered-by {cid}: no such criterion in task.toml"
+        return
+    a["status"] = "nocheck" if r["status"] == "unchecked" else r["status"]
+    a["exit_code"], a["output_tail"], a["zero_tests"] = r["exit_code"], r["output_tail"], r["zero_tests"]
+    a["vacuous"] = a["status"] == "passing" and bool(VACUOUS.fullmatch(r["check"].strip()))
+
+
+def run_attacks(root, notes, results):
+    """Each standard-attack note's commands, run like criterion checks, once per verify. results is this verify's
+    criterion results by id, for the notes with --covered-by."""
     attacks, ran = [], {}
     for n in notes:
         if n["kind"] != "tried" or not n.get("attack"):
             continue
         a = {"attack": n["attack"], "text": n["text"], "at": n["at"], "check": n.get("check"), "exit_code": None,
-             "output_tail": "", "zero_tests": False,
+             "covered_by": n.get("covered_by"), "output_tail": "", "zero_tests": False,
              # no command counts only as a stated n/a, never by default (old notes, hand-edited logs)
              "status": "na" if n["text"].strip().lower().startswith("n/a:") else "nocheck"}
         if a["check"]:
@@ -1121,6 +1136,9 @@ def run_attacks(root, notes):
             a["status"] = "passing" if a["exit_code"] == 0 else "failing"
             a["zero_tests"] = a["status"] == "passing" and ran_zero_tests(out)
             a["vacuous"] = bool(VACUOUS.fullmatch(a["check"]))  # runs no project code: proves nothing
+            _run_programs(root, n, a, ran)
+        elif a["covered_by"] and a["attack"] in COVERABLE:
+            _covered(a, a["covered_by"], results)
             _run_programs(root, n, a, ran)
         attacks.append(a)
     return attacks
@@ -1136,12 +1154,15 @@ def verify_only(root, slug, only):
     if not (_dir(root, slug) / "red.json").exists():
         return False, [f"no red run yet: run `herd verify` once first, then `herd verify --only {only}`"]
     crit = {c["id"]: c for c in task["criteria"]}
-    tried = {n["attack"]: n for n in load_notes(root, slug) if n["kind"] == "tried" and n.get("attack") and n.get("check")}
+    tried = {n["attack"]: n for n in load_notes(root, slug) if n["kind"] == "tried" and n.get("attack") and (n.get("check") or n.get("covered_by"))}
     note = crit.get(only) or tried.get(only)  # for an attack, the latest note: a later one replaces an earlier one
     if note is None:
         return False, [f"no criterion or attack `{only}`: criteria {', '.join(crit) or 'none'}; "
                        f"attacks with a command {', '.join(tried) or 'none'}"]
-    check, timeout = note["check"], note.get("timeout_s", DEFAULT_TIMEOUT)
+    source = note
+    if only not in crit and note.get("covered_by"):
+        source = crit.get(note["covered_by"], {"check": ""})
+    check, timeout = source["check"], source.get("timeout_s", DEFAULT_TIMEOUT)
     if not check.strip():
         return False, [f"{only} unchecked: it has no command"]
     began = time.monotonic()
@@ -1173,7 +1194,7 @@ def verify(root, slug):  # noqa: C901
             r["zero_tests"] = r["status"] == "passing" and ran_zero_tests(out)  # advisory, the gate ignores it
         results.append(r)
     summary = {s: sum(r["status"] == s for r in results) for s in ("passing", "failing", "unchecked")}
-    attacks = run_attacks(root, load_notes(root, slug))
+    attacks = run_attacks(root, load_notes(root, slug), {r["id"]: r for r in results})
     snap = git_state(root, fresh=True)  # the one git read of this verify, after the checks changed files
     head = (snap or {}).get("oid") or "none"
     dirty = bool(snap and snap["entries"])
@@ -1285,20 +1306,33 @@ def _check_programs(attack, check, programs):
         if cmd is None:
             continue
         if attack not in PROGRAM_FLAGS[kind] or check is None or not cmd.strip():
-            raise ValueError(f"--{kind} goes with --attack {' or '.join(PROGRAM_FLAGS[kind])} and --check, "
+            raise ValueError(f"--{kind} goes with --attack {' or '.join(PROGRAM_FLAGS[kind])} and --check (or --covered-by), "
                              "and needs a command")
         if _na_program(kind, attack, cmd) and not cmd.split(":", 1)[1].strip():
             raise ValueError(f'--{kind} "n/a:" needs a reason')
 
 
+def _check_covered_by(root, slug, attack, check, cid):
+    """The criterion id of --covered-by, or ValueError."""
+    if attack not in COVERABLE or check is not None:
+        raise ValueError(f"--covered-by goes with --attack {' or '.join(COVERABLE)}, in place of --check")
+    crit = load_task(root, slug).get("criteria")
+    ids = [c["id"] for c in crit if isinstance(c, dict) and isinstance(c.get("id"), str)] if isinstance(crit, list) else []
+    if cid.strip() not in ids:
+        raise ValueError(f"--covered-by {cid.strip() or '(empty)'}: no such criterion in task.toml; "
+                         f"criteria: {', '.join(ids) or 'none'}")
+    return cid.strip()
+
+
 def add_note(root, slug, kind, text, attack=None, check=None, timeout=None, extra=None, refuses=None,
-             example=None):
+             example=None, covered_by=None):
     """Append a note to the task's log: one of NOTE_KINDS (found, fixed, open for a known limit, tried for an
     adversarial attempt, decision, late-red, human-change).
 
     attack names which standard attack a tried note covers (one of ATTACKS); check is the command that
     shows it, run by `herd verify`. An attack that cannot apply has no check and text starting `n/a:`.
-    refuses and example are commands that run the program itself (PROGRAM_FLAGS)."""
+    refuses and example are commands that run the program itself (PROGRAM_FLAGS). covered_by is a criterion id
+    whose check stands for the attack's command, for the attacks in COVERABLE."""
     if kind not in NOTE_KINDS:
         raise ValueError(f"note kind must be one of {NOTE_KINDS}")
     if attack is not None and (kind != "tried" or attack not in ATTACKS):
@@ -1307,18 +1341,20 @@ def add_note(root, slug, kind, text, attack=None, check=None, timeout=None, extr
         raise ValueError("--check goes with --attack and needs a command")
     if timeout is not None and (check is None or timeout <= 0):
         raise ValueError("--timeout goes with --check and is a positive number of seconds")
+    if covered_by is not None:
+        covered_by = _check_covered_by(root, slug, attack, check, covered_by)
     programs = {"refuses": refuses, "example": example}
-    _check_programs(attack, check, programs)
+    _check_programs(attack, check or covered_by, programs)
     if not text.strip():
         raise ValueError("note text is empty")
-    if attack and check is None and not text.strip().lower().startswith("n/a:"):
+    if attack and check is None and covered_by is None and not text.strip().lower().startswith("n/a:"):
         raise ValueError(f'--attack {attack} needs --check "<command that shows the attack>", run by herd verify; '
                          'an attack that cannot apply needs text starting "n/a:" with the reason')
     d, started = _dir(root, slug), _dir(root, slug) / "started"
     t = now()
     rec = {"at": t, "kind": kind, "text": text.strip(),
            "elapsed_s": _secs(started.read_text().strip(), t) if started.exists() else None}
-    given = {"attack": attack or None, "check": check, **programs}
+    given = {"attack": attack or None, "check": check, "covered_by": covered_by, **programs}
     rec.update({k: v.strip() for k, v in given.items() if v is not None})
     if timeout is not None:
         rec["timeout_s"] = timeout
@@ -1395,7 +1431,8 @@ def _attack_state(a):
 def _attack_what(a):
     """The attack's commands, or the one that failed and why; the text of an attack without a command."""
     programs = [f"--{k} {a[k]}" for k in PROGRAM_FLAGS if a.get(k)]
-    return a.get("program_fault") or " ".join([a.get("check") or a["text"], *programs])
+    covered = a.get("covered_by") and f"--covered-by {a['covered_by']}"
+    return a.get("program_fault") or " ".join([a.get("check") or covered or a["text"], *programs])
 
 
 def _attack_states(attacks):
@@ -2237,7 +2274,10 @@ def missing_programs(ev):
     if not full_rules(ev):
         return []
     latest = {a["attack"]: a for a in ev.get("attacks") or []}
-    return [f"{name} has no --{flag}: log it again with `herd note --tried --attack {name} --check \"<tests>\" "
+    def proof(a):
+        return f"--covered-by {a['covered_by']}" if a.get("covered_by") else '--check "<tests>"'
+
+    return [f"{name} has no --{flag}: log it again with `herd note --tried --attack {name} {proof(latest[name])} "
             f"--{flag} \"<cmd>\" \"what it shows\"` ({what}), then run `herd verify`"
             for name, flag, what in REQUIRED_PROGRAMS
             if name in latest and latest[name]["status"] != "na" and not latest[name].get(flag)]
@@ -2246,7 +2286,7 @@ def missing_programs(ev):
 def attack_problems(root, slug, ev):
     """The standard-route attack rules: each attack passing or n/a, and n/a for other-reading only without inputs."""
     out = []
-    keys = ("at", "text", "check", *PROGRAM_FLAGS)
+    keys = ("at", "text", "check", "covered_by", *PROGRAM_FLAGS)
     ran = {tuple(a.get(k) for k in keys) for a in ev.get("attacks") or []}
     if any(n["kind"] == "tried" and n.get("attack") and tuple(n.get(k) for k in keys) not in ran
            for n in load_notes(root, slug)):
@@ -2389,7 +2429,7 @@ def _slug_arg(root, args):
 USAGE = {
     "init": 'herd init <slug> "<goal>" [--request "<message>"] [--quick "<check>"] [--worktree]',
     "check": "herd check [slug]",
-    "note": 'herd note --found|--fixed|--open|--decision|--late-red|--human-change|--tried [--attack bad-input|collision|one-bad-part|recount|refusal|other-reading --check "<command>" [--refuses|--example "<command>"] [--timeout S]] "text"',
+    "note": 'herd note --found|--fixed|--open|--decision|--late-red|--human-change|--tried [--attack bad-input|collision|one-bad-part|recount|refusal|other-reading --check "<command>" [--timeout S] | --covered-by <criterion id> (recount, refusal, other-reading) [--refuses|--example "<command>"]] "text"',
     "detect": "herd detect",
     "lint": "herd lint [--suggest]   (without --suggest: the PostToolUse hook, reads hook JSON on stdin)",
     "verify": "herd verify [slug] [--verbose] [--only <id>]   (--only: run one criterion or attack, write nothing)",
@@ -2422,8 +2462,8 @@ def _note_command(root, args):
     kinds = {"--found": "found", "--fixed": "fixed", "--open": "open", "--tried": "tried",
              "--decision": "decision", "--late-red": "late-red", "--human-change": "human-change"}
     opts = {}
-    for name in ("attack", "check", "timeout", *PROGRAM_FLAGS):
-        opts[name], args = _opt(args, f"--{name}")
+    for name in ("attack", "check", "timeout", "covered_by", *PROGRAM_FLAGS):
+        opts[name], args = _opt(args, f"--{name.replace('_', '-')}")
     try:
         opts["timeout"] = None if opts["timeout"] is None else float(opts["timeout"])
     except ValueError:

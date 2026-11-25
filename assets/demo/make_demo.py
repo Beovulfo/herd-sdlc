@@ -3,8 +3,7 @@
 
 Inputs: the vhs recording (demo.mp4, made with demo.tape) and phases.json, written by hand from
 the session transcript: `phases` is a list of [video_seconds, step, caption] whose last entry marks
-the end, and `masks` hides Claude Code's grey prompt suggestions in the input line, which a viewer
-could mistake for messages from the human. Needs rsvg-convert and ffmpeg.
+the end, and `masks` hides terminal lines that must not be published (such as the local user name). Needs rsvg-convert and ffmpeg.
 
   python3 assets/demo/make_demo.py demo.mp4 assets/demo/phases.json assets/demo.gif
 """
@@ -15,10 +14,10 @@ import tempfile
 from html import escape
 from pathlib import Path
 
-STEPS = [("intake", "Intake"), ("criteria", "Criteria"), ("red", "Red first"), ("build", "Build"),
-         ("break", "Break it"), ("review", "Review"), ("verify", "Verify"), ("evidence", "Evidence")]
+STEPS = [("intake", "Intake"), ("criteria", "Criteria"), ("second", "Second look"), ("red", "Red first"),
+         ("build", "Build"), ("break", "Break it"), ("verify", "Verify"), ("evidence", "Evidence")]
 W, H = 1200, 170
-SPEED, MIN_SHOW, FPS, SRC_FPS, HOLD = 4, 2.5, 8, 10, 5  # each caption stays at least MIN_SHOW s; HOLD s on the last frame
+SPEED, MIN_SHOW, FPS, SRC_FPS, HOLD = 6, 2.5, 8, 10, 5  # each caption stays at least MIN_SHOW s; HOLD s on the last frame
 BG, IDLE, DONE, NOW, TEXT, DIM = "#171717", "#3a3a3a", "#2e7d32", "#4caf50", "#e5e7eb", "#9ca3af"
 FONT = 'font-family="Helvetica, Arial, sans-serif"'
 
@@ -41,7 +40,7 @@ def panel(step, caption, t):
                          f'<path d="M{ax + gap - 6} {y + 21}l5 4l-5 4z" fill="{DIM}"/>')
     m, s = divmod(int(t), 60)
     parts.append(f'<text x="{x0}" y="{y + 92}" {FONT} font-size="22" fill="{TEXT}">{escape(caption)}</text>'
-                 f'<text x="{x0}" y="{y + 130}" {FONT} font-size="16" fill="{DIM}">Real /herd:run session, Claude Sonnet 5.5 and Herd 0.3.2, '
+                 f'<text x="{x0}" y="{y + 130}" {FONT} font-size="16" fill="{DIM}">Real /herd:run session, Herd 0.14.0, Claude Sonnet 5.5 with a Haiku 5.5 builder, '
                  f'sped up. Elapsed {m}m {s:02d}s</text></svg>')
     return "".join(parts)
 
@@ -67,10 +66,10 @@ def main(video, phases_path, out):
             term.append(tmp / f"s{min(nsrc, int(t * SRC_FPS) + 1):05d}.png")
             pan.append(png)
     for name, frames in (("term.txt", term), ("pan.txt", pan)):
-        lines = [f"file '{f}'\nduration {1 / FPS}" for f in frames] + [f"file '{frames[-1]}'\nduration {HOLD}", f"file '{frames[-1]}'"]
+        lines = [f"file '{f}'\nduration {1 / FPS}" for f in frames + frames[-1:] * (HOLD * FPS)]  # real frames: concat doubles a long last duration
         (tmp / name).write_text("\n".join(lines) + "\n")
-    graph = (f"[1:v][0:v]vstack,fps={FPS},scale=960:-1:flags=lanczos,split[a][b];"
-             "[a]palettegen=max_colors=96:stats_mode=diff[pal];[b][pal]paletteuse=dither=bayer:bayer_scale=4")
+    graph = (f"[1:v][0:v]vstack,fps={FPS},scale=860:-1:flags=lanczos,split[a][b];"
+             "[a]palettegen=max_colors=48:stats_mode=diff[pal];[b][pal]paletteuse=dither=none")
     subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", str(tmp / "term.txt"),
                     "-f", "concat", "-safe", "0", "-i", str(tmp / "pan.txt"), "-filter_complex", graph, out], check=True)
 

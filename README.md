@@ -17,8 +17,8 @@
 </p>
 
 <p align="center">
-  <img src="assets/demo.gif" alt="A real /herd:run session in Claude Code, with a panel above it lighting the current step: intake, criteria, red first, build, break it, review, verify, evidence" width="860">
-  <br><sub>A real session with Herd 0.3.2 and Claude Sonnet 5.5, sped up: one message, then intake, criteria, red first, build, break it, review, verify and evidence. The Stop gate blocks one early finish. Since 0.13.0 there is no review step.</sub>
+  <img src="assets/demo.gif" alt="A real /herd:run session in Claude Code, with a panel above it lighting the current step: intake, criteria, second look, red first, build, break it, verify, evidence" width="860">
+  <br><sub>A real session with Herd 0.14.0, sped up: Claude Sonnet 5.5 designs and checks, and a Claude Haiku 5.5 subagent builds. One message, then criteria, a second look at the request, checks that fail before any code, the build, attacks that find bugs the passing checks missed, and the evidence. The Stop gate blocks early finishes while the builder runs.</sub>
 </p>
 
 Herd is a lightweight [Claude Code](https://claude.com/claude-code) plugin that runs a task end to end with as little human input as possible. You give it a goal and, if you like, success criteria. The agent plans, builds, tries to break its own work, and verifies. It only stops when **runnable checks prove the criteria pass**, and it only asks you something when an action is irreversible or a real trade-off needs a human.

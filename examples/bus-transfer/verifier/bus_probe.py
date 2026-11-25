@@ -5,8 +5,10 @@
 
 An adapter's probe(scenario, temp_dir, probe_module) writes the scenario in the project's own file formats
 and returns the CLI argv (script path relative to the project, or "-m", "<package>", ...). See ADAPTER_SPEC.md.
-Outcome per scenario: ok / clean error (non-zero, no traceback) / CRASH (traceback) / HANG (timeout) /
-silent (exit 0 on an invalid input) / FAILS (the normal scenario gave no journey).
+Outcome per scenario: ok / clean error (non-zero exit with a message, no traceback) / CRASH (traceback) /
+HANG (timeout) / signal (killed by a signal) / no message (non-zero exit, no output) / silent (exit 0 on an
+invalid input) / garbled (output not UTF-8) / FAILS (the normal scenario gave no journey).
+Only clean error counts as handled.
 """
 import importlib.util
 import json
@@ -58,7 +60,11 @@ def classify(sc, argv, cwd, timeout=20):
         return "ok" if p.returncode == 0 and stdout.strip() and not garbled else "FAILS"
     if garbled:
         return "garbled"
-    return "silent" if p.returncode == 0 else "clean error"
+    if p.returncode == 0:
+        return "silent"
+    if p.returncode < 0:  # killed by a signal: a crash, whatever it printed
+        return "signal"
+    return "clean error" if out.strip() else "no message"
 
 
 GOOD = {"normal": {"ok"}, **{sc: {"clean error"} for sc in BAD}}

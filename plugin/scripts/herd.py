@@ -170,7 +170,7 @@ def _first(name, what):
             "\"<command>\"`; it should fail now (`n/a:` with the reason when it cannot apply)")
 
 
-# every standard attack is logged before building, so that it shapes the design
+# every standard attack is logged before building, so that it shapes the design: the first verify refuses otherwise
 FIRST_VERIFY_ATTACKS = (
     ("bad-input", _first("bad-input", "list every entry point")),
     ("collision", _first("collision", "decide what counts twice and what contradicts itself")),
@@ -660,6 +660,13 @@ def _check_command(root, slug):
               + ([] if refused else quotes)):
         print(f"warning: {w}")
     return 1 if errs or refused else 0
+
+
+def unlogged_attacks(root, slug):
+    """The messages of the standard attacks with no tried note that has a command, --covered-by or `n/a:`."""
+    logged = {n.get("attack") for n in load_notes(root, slug) if n["kind"] == "tried"
+              and (n.get("check") or n.get("covered_by") or n["text"].strip().lower().startswith("n/a:"))}
+    return [msg for name, msg in FIRST_VERIFY_ATTACKS if name not in logged]
 
 
 def late_attacks(root, slug, red):
@@ -1192,6 +1199,12 @@ def verify(root, slug):  # noqa: C901
     errs = validate_task(task)
     if errs:
         raise ValueError("; ".join(errs))
+    standard = task.get("route", "standard") == "standard"  # the quick route has no attacks
+    # the first verify (no red.json yet) refuses, before any check runs or anything is written
+    missing = unlogged_attacks(root, slug) if standard and not (_dir(root, slug) / "red.json").exists() else []
+    if missing:
+        raise ValueError(f"first verify refused: {len(missing)} of {len(FIRST_VERIFY_ATTACKS)} standard attacks have "
+                         "no note; no check was run and nothing was written\n  " + "\n  ".join(missing))
     results = []
     for c in task["criteria"]:
         r = {"id": c["id"], "text": c["text"], "source": c["source"], "check": c["check"],
@@ -1279,11 +1292,8 @@ def verify(root, slug):  # noqa: C901
     added = [cid for cid in now_by_id if frozen and cid not in frozen]
     human_not_verbatim = human_unquoted(task, request_text, load_notes(root, slug))
     inputs_left = input_warnings(task) + reading_quote_warnings(task, request_text)
-    standard = task.get("route", "standard") == "standard"  # the quick route has no attacks
     warnings = (check_warnings(task, request_text, load_notes(root, slug)) + coverage_warnings(task) + length_warnings(task)
                 + inputs_left
-                + [msg for name, msg in FIRST_VERIFY_ATTACKS
-                   if standard and first and not any(a.get("attack") == name for a in attacks)]
                 + (late_attacks(root, slug, red) if standard else []))
     fails_path = d / "fails.json"  # consecutive failing verifies per criterion, for the escalation rule
     fails = _state(fails_path, {})

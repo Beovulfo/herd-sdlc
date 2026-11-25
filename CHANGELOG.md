@@ -2,7 +2,7 @@
 
 All notable changes to Herd. Versions follow `plugin/.claude-plugin/plugin.json`.
 
-## 0.13.2
+## 0.13.3
 
 The example is run for real, against an answer written before the code (issue #93). `--example` passed on exit 0 alone, even when the program printed nothing or a wrong answer, and was required only at medium and high risk. The design review: "the freeze is what makes it real: the builder must hand-solve a tiny case first and cannot paste the program's own output". The owner asked: "let's implement Features 1 and 2".
 
@@ -12,7 +12,16 @@ The example is run for real, against an answer written before the code (issue #9
 - **Changed:** an `--example` passes only on exit 0, non-empty stdout, and stdout containing the expected text (exact substring, ends trimmed). Without `--expect` it fails.
 - **Changed:** on the standard route `herd done` requires `--example` with `--expect` at every risk, low included, unless `other-reading` is `n/a:` with a reason. An `n/a:` with no reason is refused for `other-reading`. The quick route is unchanged.
 - **Upgrading:** a task already verified on 0.13.1 must log its example again with `--expect` and `--expect-changed "<reason>"`.
-- **Known limits:** Herd cannot prove the expected text is right, only that it was set before the code. The example command itself is not frozen. A short text can match by chance. No model leg has measured 0.13.2.
+- **Known limits:** Herd cannot prove the expected text is right, only that it was set before the code. The example command itself is not frozen. A short text can match by chance. No model leg has measured 0.13.3.
+
+## 0.13.2
+
+The first `herd verify` refuses while a standard attack has no note (issue #94). It used to warn and record red anyway. From the design review: "Haiku ignores warnings. 'A late attack warns and does not refuse' is a hole." The owner asked: "let's implement Features 1 and 2".
+
+- **Changed:** on the standard route, while no `red.json` exists, `herd verify` exits 1 if any of the six attacks has no note. A note counts with `--check`, `--covered-by` or `n/a:`; its command need not pass. The message names each missing attack. No check runs and nothing is written.
+- **Removed:** the first-verify warning about a missing attack.
+- **Unchanged:** the quick route needs no attacks. A task already past its first verify, as tasks started on 0.13.x are, is not refused and keeps the late-attack warning.
+- **Known limits:** the refusal checks that a note exists, not that its command or `n/a:` reason is any good. A task switched from quick to standard after red is not refused. A task whose `red.json` was never written, because no criterion had a runnable check, is asked for the attacks on a later verify too. No model leg has measured 0.13.2, with Haiku or any other model.
 
 ## 0.13.1
 

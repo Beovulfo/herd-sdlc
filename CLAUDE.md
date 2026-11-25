@@ -9,7 +9,7 @@ review the evidence. Requirements: [`docs/PRD.md`](docs/PRD.md). Changes: [`CHAN
 - `plugin/scripts/herd.py`: the CLI (init, check, detect, verify, status, done, cancel, pr, gate, preinit, guard, design-brief, design-hook, lint, triage, note). It uses `herd_detect.py` and `herd_triage.py`.
 - `plugin/scripts/herd_arbiter.py`, `plugin/scripts/herd_escalation.py`: tested building blocks for the planned GitHub automation, not wired into the CLI yet.
 - `tests/`: `test_*.py` files, by module or by feature.
-- `docs/designs/`: specs, written with the Elephant-Goldfish Model (Herd dogfoods its own method). `docs/spikes/`: experiments. `docs/backlog.md`: deferred ideas.
+- `docs/designs/`: specs, written with the Elephant-Goldfish Model (Herd dogfoods its own method). `docs/spikes/`: experiments. `docs/backlog.md`: deferred ideas. `docs/how-it-works.md`: the detail behind the README (run steps, models, settings, benchmark notes).
 - `examples/supermarket-route/`: the benchmark, with and without Herd.
 
 ## Checks

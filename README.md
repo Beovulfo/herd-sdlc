@@ -7,6 +7,8 @@
 
 <h3 align="center">Hand an agent a goal. Get back code and proof.</h3>
 
+<p align="center"><strong>Shift left, with autopilot.</strong></p>
+
 <p align="center">
   <a href="https://github.com/Beovulfo/herd-sdlc/actions/workflows/ci.yml"><img alt="tests" src="https://github.com/Beovulfo/herd-sdlc/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="license: Apache 2.0" src="https://img.shields.io/badge/license-Apache%202.0-blue.svg"></a>

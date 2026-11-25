@@ -1,5 +1,5 @@
 {
-  "description": "Herd hooks: the Stop gate blocks finishing without fresh passing evidence; before `herd init`, a Bash hook records the files the session already edited, for red first; the optional lint hook feeds lint errors back after edits; while a task is active, the guard denies edits to secrets and Herd's state files and irreversible git and GitHub commands.",
+  "description": "Herd hooks: the Stop gate blocks finishing without fresh passing evidence; before `herd init`, a Bash hook records the files the session already edited, for red first; the optional lint hook feeds lint errors back after edits; while a task is active, the guard denies edits to secrets and Herd's state files and irreversible git and GitHub commands; when the herd-designer subagent stops, the design hook records its model from the session logs.",
   "hooks": {
     "Stop": [
       {
@@ -42,6 +42,18 @@
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/herd.py\" guard",
             "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "^herd:herd-designer$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/herd.py\" design-hook",
+            "timeout": 30
           }
         ]
       }

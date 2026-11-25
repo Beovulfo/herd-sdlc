@@ -52,6 +52,9 @@ def build(root, risk="medium", toml=""):
     git(root, "commit", "-q", "-m", "init")
     ok(run(root, "init", "t1", GOAL + " in app.py", "--request", GOAL + " in app.py"))
     (root / ".herd/tasks/t1/task.toml").write_text(TASK)
+    (root / ".herd/tasks/t1/ANSWERS.md").write_text("assumed and decided")  # the design of issue #102
+    (root / ".herd/tasks/t1/design.json").write_text(json.dumps(
+        {"model": "claude-sonnet-5-5", "matches": True, "answers": True}))
     (root / "tests").mkdir()
     (root / "tests/__init__.py").write_text("")
     (root / "tests/test_app.py").write_text(

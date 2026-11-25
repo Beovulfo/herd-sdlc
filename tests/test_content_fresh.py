@@ -221,6 +221,7 @@ class TestGitCalls(unittest.TestCase):
         T.git(self.root, "commit", "-q", "-m", "init")
         T.git(self.root, "switch", "-q", "-c", "herd/t1")
         self.herd("init", "t1", "Add a greeting")
+        T.no_design(self.root)
         (self.root / ".herd/tasks/t1/task.toml").write_text(ONE)
         for a in herd.ATTACKS:
             herd.add_note(self.root, "t1", "tried", f"{a} attack", attack=a, check=T.OK, **T.PROGRAMS.get(a, {}))

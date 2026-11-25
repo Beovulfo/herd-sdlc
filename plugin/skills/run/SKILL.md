@@ -12,10 +12,18 @@ Work the task to the end without waiting on the human. You deliver code plus **e
 
 Reference files hold the detail of a step. When a step names one, open it and read all of it before you act on that step. A summary in this file never replaces it: [quick.md](quick.md) (quick route), [worktree.md](worktree.md) (own worktree), [adversarial.md](adversarial.md) (every standard-route task), [pr.md](pr.md) (pull request).
 
+## Who designs, who builds
+
+Run `herd status` first: it prints `Design:` and `Build:` lines (before init, also `no active task`). The quick route has no design steps. The design steps, in order: init, criteria and inputs (steps 1, 2), the second look (`herd design-brief`, answered in ANSWERS.md), then the six attacks and red (steps 3, 4).
+
+- `Design: here`: do them yourself.
+- `Design: spawn herd:herd-designer with model M`: spawn it with the Agent tool on `model` M, in the foreground (a full name the tool rejects: pass its tier). Give it the request verbatim, the full `herd` command, the project folder, whether to use `--worktree`, and the paths of adversarial.md and worktree.md. Never design first or rewrite its criteria or attacks. Then continue at step 5.
+- `Build: spawn herd:herd-builder with model M`: after step 5, spawn it for step 6 with the full `herd` command, the task folder and this skill's folder. Then do steps 7 to 9 yourself. `Build: here`: build yourself.
+
 ## Steps
 
 1. **Intake.** If `herd status` starts with `Stopped` and gives a `Next`, do that first. Otherwise pick a short slug. Trivial change (one file, no new behaviour, an existing check can fail first)? Take the quick route: [quick.md](quick.md). Otherwise run `herd init <slug> "<goal>" --request "<the user's message, verbatim>"`. Add `--worktree` when `herd.toml` has `[worktree] required = true`, the user asks for it, or other agents work in this repository: [worktree.md](worktree.md). Then run `herd triage "<goal text>"`. It prints the risk floor. You may raise it, never lower it. Do not ask clarifying questions: state assumptions.
-2. **Criteria.** Follow the `herd:criteria` skill, then run `herd check` and fix its warnings. Use `herd detect` for the real test command. To plan evidence with the user, point them to `/herd:evidence`.
+2. **Criteria.** Follow the `herd:criteria` skill, then run `herd check` and fix its warnings. Use `herd detect` for the real test command. To plan evidence with the user, point them to `/herd:evidence`. Then, on the standard route and before any attack, the second look: run `herd design-brief`, do what it says, and write `.herd/tasks/<slug>/ANSWERS.md`. The first `herd verify` refuses without it. Add no scope nobody asked for.
 3. **Break it** (standard route, never skipped), before any code. Read [adversarial.md](adversarial.md) now: attack exactly what the request promises. Log all six standard attacks, each with its check, in one Bash call: the first `herd verify` refuses while one has no note. Solve one tiny case by hand for `--expect`. `herd done` refuses until each one has a command that `herd verify` ran and saw pass.
 4. **Red.** Run `herd verify` before writing code. Checks must fail. A check that already passes proves nothing: tighten it. A check marked `(ran zero tests)` found no tests: fix its command.
 5. **Gate.** Risk `high`: show the criteria table and assumptions, ask one approval question, wait. Otherwise show them and continue. Always ask if the user said to confirm criteria first.

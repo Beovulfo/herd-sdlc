@@ -73,9 +73,23 @@ def run_herd(cwd, *args, input=None):
     return subprocess.CompletedProcess(args, code or 0, out.getvalue(), err.getvalue())
 
 
+def no_design(root, slug="t1"):
+    """Make the task one from before 0.14.0: a `herd` subprocess cannot stub the design rules (issue #102), which
+    are not under test here. tests.test_designer covers them."""
+    path = Path(root) / ".herd" / "tasks" / slug / "start.json"
+    start = json.loads(path.read_text())
+    start.pop("models", None)
+    path.write_text(json.dumps(start))
+
+
 def stub_first_verify_refusal(case):
     """Most tests are about other rules: they run a first verify with no attack notes, which is refused since issue #94.
-    A class that tests the refusal itself sets `refuses_first = True`."""
+    A class that tests the refusal itself sets `refuses_first = True`. The design rules (issue #102) are not under test
+    here either: tests.test_designer covers them."""
+    for name, value in (("has_answers", True), ("design_problems", [])):
+        design = mock.patch.object(herd, name, return_value=value)
+        design.start()
+        case.addCleanup(design.stop)
     if not case.refuses_first:
         patch = mock.patch.object(herd, "unlogged_attacks", return_value=[])
         patch.start()
@@ -835,6 +849,7 @@ class TestCli(Base):
     def test_flow(self):
         rc, out, _ = self.run_cli("init", "t1", "Add a greeting")
         self.assertEqual(rc, 0)
+        no_design(self.root)
         (self.root / ".herd/tasks/t1/task.toml").write_text(TASK)
         self.assertEqual(self.run_cli("check")[0], 0)
         for a in herd.ATTACKS:
@@ -866,6 +881,7 @@ class TestCli(Base):
                 self.attacks()
                 self.assertEqual(herd.verify(self.root, "t1")["risk"]["effective"], risk)
                 self.assertEqual(herd.problems(self.root, "t1"), [])
+                no_design(self.root)
                 self.assertEqual(self.run_cli("done")[0], 0)
 
     def test_done_refuses_when_not_passing(self):
@@ -1490,6 +1506,7 @@ class TestPr(Base):
         self.assertIn("--title Add a greeting", create[0])
 
     def test_done_refreshes_the_pr_description(self):
+        no_design(self.root)
         self.attacks()
         herd.verify(self.root, "t1")
         self.herd("pr", "t1", "--yes")
@@ -1502,6 +1519,7 @@ class TestPr(Base):
         self.assertIn("a late finding", (self.gh / "body").read_text())
 
     def test_done_without_a_pr_never_calls_gh(self):
+        no_design(self.root)
         self.attacks()
         herd.verify(self.root, "t1")
         self.assertEqual(self.herd("done").returncode, 0)
@@ -1733,6 +1751,7 @@ class TestWorktree(Base):
     def test_end_to_end_inside_the_worktree(self):
         self.assertEqual(self.herd("init", "t1", "Write out.txt", "--worktree").returncode, 0)
         path = self.wt("t1")
+        no_design(path)
         (path / ".herd/tasks/t1/task.toml").write_text(WT_TASK)
         self.attacks(root=path)
         self.assertEqual(self.herd("check", cwd=path).returncode, 0)
@@ -1911,12 +1930,13 @@ class TestBudgets(Base):
     # (3) short skills, rare parts in reference files read only when needed
     def test_skill_word_budgets(self):
         # quality first: 0.3.1 raised run from 800 when the break-it attacks moved back into it
-        budget = {"run": 845, "criteria": 565, "evidence": 450}  # 0.4.0: rules the CLI enforces left the skill;
+        budget = {"run": 1025, "criteria": 565, "evidence": 450}  # 0.4.0: rules the CLI enforces left the skill;
         # 0.5.0: +10 for resuming from the stop record; 0.6.0: +15 for the guard rule; 0.9.0: criteria +30 for `inputs`;
         # 0.10.0: criteria +20 for the top-level [[inputs]] example (a Haiku run put `inputs` inside [[criteria]])
         # 0.12.9: criteria +45 for `readings` (a sentence and an example line)
         # 0.12.13: criteria +30 for the sentence that the first reading quotes the request
         # 0.11.0: run +30 for an intake review step, given back in 0.12.0 when it was removed
+        # 0.14.0: run +180 for who designs and who builds, and the second look (issue #102)
         for name, limit in budget.items():
             self.assertLessEqual(words((SKILLS / name / "SKILL.md").read_text()), limit, name)
 

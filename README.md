@@ -36,7 +36,7 @@ Most agent workflows ask people to write long requirement lists, then trust the 
 
 You need Claude Code, Python 3.11 or newer as `python3`, and a git repository. CI tests Python 3.13 only.
 
-The builder model, the one that runs `/herd:run`, must be Sonnet or stronger. Haiku is not supported for reliable results.
+By default Sonnet designs and Haiku builds: see [Models](#models).
 
 ```text
 /plugin marketplace add Beovulfo/herd-sdlc
@@ -73,6 +73,18 @@ flowchart LR
 
 Every criterion has a `check`, a shell command where exit 0 means pass. Before any code, the agent also logs six standard attacks, so they shape the design. On the standard route the first `herd verify` refuses while one has no note. For `recount`, `refusal` and `other-reading`, `--covered-by <criterion id>` reuses a criterion's check instead of a second test. The agent also solves one tiny case by hand: that answer is frozen before any code (`--expect`), and the real program's output must contain it. The checks run once before any work and should fail. `herd verify` runs no check when the work, `task.toml` and the attack notes are unchanged since the last full run; `--fresh` runs them all. Untrusted input is refused, not tolerated: contradictory entries, or a broken entry that could change a requested answer, end in an error, not a warning with exit 0. The agent then builds, tries to break the result and verifies. No second model reviews the change: bugs outside the attacks and criteria are not caught. `herd done` writes the evidence report. With `herd pr` (opt-in) that report is the pull request description; Herd never merges.
 
+## Models
+
+On the standard route Herd designs on one model and builds on another. The defaults are Sonnet for design and Haiku for the build. Change them in `herd.toml` at the project root:
+
+```toml
+[models]
+design = "sonnet"   # criteria, the "be specific" second look, the six attacks, the first verify
+build = "haiku"     # the code
+```
+
+Each takes a tier (`haiku`, `sonnet`, `opus`) or a model name, and matches any model id that contains it. The values are read at `herd init`. `herd status` prints both and says what runs in your session and what in a subagent. When your session's model is the `design` model, it designs itself. `herd done` refuses a design that was not made on the `design` model.
+
 ## Settings
 
 All optional, in `herd.toml` at the project root. Without it, Herd uses these defaults.
@@ -80,6 +92,7 @@ All optional, in `herd.toml` at the project root. Without it, Herd uses these de
 | Table | Default | What it does |
 | --- | --- | --- |
 | `[floor]` | `high`: `migrations/**`, `auth/**`, `billing/**`, `herd.toml`; `medium`: `api/**`; any other path is medium | Risk floor by path; a high floor means one approval question and no quick route |
+| `[models]` | `design = "sonnet"`, `build = "haiku"` | Which model designs and which builds ([Models](#models)) |
 | `[worktree] required = true` | off | Every task starts in its own git worktree |
 | `[pr] open = true` | off | Herd may push the task branch and open its pull request |
 
@@ -97,7 +110,7 @@ All settings: [Settings](https://github.com/Beovulfo/herd-sdlc/wiki/Settings).
 
 ## Status
 
-Version 0.13.4 (see the [changelog](CHANGELOG.md)). The local autopilot works and has unit tests that CI runs on Python 3.13. Not yet done: many live runs across project types, and issue-to-pull-request automation on GitHub. Checks run as shell commands with your permissions: read a task file as you read code.
+Version 0.14.0 (see the [changelog](CHANGELOG.md)). The local autopilot works and has unit tests that CI runs on Python 3.13. Not yet done: many live runs across project types, and issue-to-pull-request automation on GitHub. Checks run as shell commands with your permissions: read a task file as you read code.
 
 ## License
 

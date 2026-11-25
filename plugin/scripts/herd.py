@@ -9,12 +9,12 @@ red first, the standard attacks and frozen human criteria.
 import sys
 
 if sys.version_info < (3, 11):  # keep this block parseable by old Pythons: it runs before tomllib is imported
-    if sys.argv[1:2] in (["gate"], ["lint"], ["preinit"], ["guard"]):
+    if sys.argv[1:2] in (["gate"], ["lint"], ["preinit"], ["guard"], ["design-hook"]):
         sys.exit(0)  # a hook must never break the session; the CLI says why below
     sys.exit("herd needs Python 3.11 or newer, found " + sys.version.split()[0])
 if sys.argv[1:2] == ["preinit"]:  # the PreToolUse hook runs before every Bash command: leave before the imports
     PREINIT_RAW = sys.stdin.read() if not sys.stdin.isatty() else ""
-    if "herd.py" not in PREINIT_RAW or "init" not in PREINIT_RAW:
+    if "herd.py" not in PREINIT_RAW or ("init" not in PREINIT_RAW and "status" not in PREINIT_RAW):
         sys.exit(0)
 
 
@@ -259,9 +259,234 @@ def active_slug(root):
     return p.read_text().strip() if p.exists() else None
 
 
+# ---- models and design ----------------------------------------------------
+# The design steps run on a stronger model than the build, with a "be specific" second look before the attacks
+# (issue #102). Models are read from the session logs Claude Code writes, never from what an agent says.
+
+DEFAULT_MODELS = {"design": "sonnet", "build": "haiku"}
+DESIGNER, BUILDER = "herd:herd-designer", "herd:herd-builder"  # plugin agents: a project's own copy does not count
+SESSION_FILE = "herd-session.json"  # in the checkout's git dir: the session log the pre-init hook last saw
+# the exact text measured in the design eval: keep it word for word
+DESIGN_BRIEF = ("Challenge your own understanding of the request and its business context: do not assume you already "
+                "know everything. Write ANSWERS.md, saying what you first assumed and what you decided after thinking "
+                "it through. Be specific: every success criterion you propose and every input form must state exactly "
+                "what the program accepts, what it does with it and what it refuses, so that no choice is left "
+                "unstated. Then update your Herd task to match your decisions (the human's criteria stay word for "
+                "word), write your attacks and run herd verify.")
+
+
+def read_models(root):
+    """herd.toml `[models]` over the defaults. A broken file or value is refused: a silent default would run the
+    wrong model."""
+    path = Path(root) / "herd.toml"
+    if not path.exists():
+        return dict(DEFAULT_MODELS)
+    try:
+        cfg = tomllib.loads(path.read_text()).get("models", {})
+    except (OSError, ValueError) as e:
+        raise ValueError(f"herd.toml: unreadable ({e})") from None
+    if not isinstance(cfg, dict):
+        raise ValueError("herd.toml: `models` must be a table: [models] design = \"sonnet\", build = \"haiku\"")
+    for key, value in cfg.items():
+        if key not in DEFAULT_MODELS:
+            raise ValueError(f"herd.toml: unknown [models] key `{key}`: use design or build")
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"herd.toml: [models] {key} must be a model name or tier, such as \"sonnet\"")
+    return DEFAULT_MODELS | {k: v.strip() for k, v in cfg.items()}
+
+
+def task_models(root, slug):
+    """The models as herd.toml had them at `herd init`, or None for a task from before 0.14.0."""
+    cfg = _state(_dir(root, slug) / "start.json", {}).get("models")
+    return cfg if isinstance(cfg, dict) and all(isinstance(cfg.get(k), str) for k in DEFAULT_MODELS) else None
+
+
+def model_matches(setting, model):
+    """A setting is a tier (`sonnet`) or a model name: it matches a model id that contains it."""
+    return isinstance(model, str) and setting.strip().lower() in model.lower()
+
+
+def log_models(path, since=None, until=None, sidechain=False):
+    """The models of a session log's assistant lines, in order; a bad line or log gives none. `since` also keeps
+    the last line before it (the turn that ran `herd init`). Subagent lines count only with sidechain."""
+    try:
+        raw = Path(path).read_text(encoding="utf-8", errors="replace").splitlines()
+    except (OSError, TypeError, ValueError):
+        return []
+    before, out = [], []
+    for line in raw:
+        try:
+            d = json.loads(line)
+            model = d["message"]["model"] if d["type"] == "assistant" else None
+            if not model or not isinstance(model, str) or model == "<synthetic>" or (
+                    d.get("isSidechain") and not sidechain):
+                continue
+            at = _when(d.get("timestamp")) if since or until else None
+        except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
+            continue
+        if (since or until) and at is None:
+            continue
+        if since and at < since:
+            before = [model]
+        elif not until or at <= until:
+            out.append(model)
+    return before + out
+
+
+def _when(stamp):
+    try:
+        t = datetime.fromisoformat(str(stamp).strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return t if t.tzinfo else t.replace(tzinfo=timezone.utc)  # a stamp without a zone is UTC, like Herd's own
+
+
+def _session_path(root):
+    where = _git(root, "rev-parse", "--git-dir").decode().strip()
+    return (Path(root) / where).resolve() / SESSION_FILE if where else None
+
+
+def _see_session(command, cwd, log):
+    """Remember the session log of a Bash command that runs herd.py, per checkout (follows a leading `cd <dir>`)."""
+    if "herd.py" not in command or not isinstance(log, str) or not log:
+        return
+    m = re.match(r"\s*cd\s+(\S+)\s*(?:&&|;)", command)
+    where = Path(cwd) / m[1].strip("'\"") if m else Path(cwd)
+    if where.is_dir() and (record := _session_path(where)):
+        record.write_text(json.dumps({"log": log}))
+
+
+def _seen_session(root):
+    record = _session_path(root)
+    log = _state(record, {}).get("log") if record else None
+    return log if isinstance(log, str) else None
+
+
+def has_answers(root, slug):
+    try:
+        return bool((_dir(root, slug) / "ANSWERS.md").read_text(errors="replace").strip())
+    except OSError:
+        return False
+
+
+def design_fingerprint(root, slug):
+    """A hash of the task's criteria and attack notes, or None when task.toml cannot be read."""
+    try:
+        crit = [[c.get(k) for k in ("id", "text", "source", "check")] for c in load_task(root, slug).get("criteria", [])]
+        notes = [[n.get(k) for k in ("attack", "text", "check", "covered_by", "expect", *PROGRAM_FLAGS)]
+                 for n in load_notes(root, slug) if n.get("attack")]
+    except STATE_ERRORS:
+        return None
+    return hashlib.sha1(json.dumps([crit, notes], sort_keys=True, default=str).encode()).hexdigest()
+
+
+def design_hook(root, hook):
+    """SubagentStop hook for herd-designer: record design.json from the subagent's own log. Prints nothing and
+    never blocks. The task is this session's, in this checkout or a worktree started from it."""
+    if not isinstance(hook, dict) or hook.get("agent_type") != DESIGNER:
+        return
+    main, log = hook.get("transcript_path"), hook.get("agent_transcript_path")
+    try:  # where Claude Code keeps a subagent's log (spike S3): <session>/subagents/agent-<id>.jsonl
+        home = Path(main).parent / Path(main).stem / "subagents" / f"agent-{hook.get('agent_id')}.jsonl"
+        placed = os.path.realpath(home) == os.path.realpath(log)
+    except (TypeError, ValueError):
+        placed = False
+    models = log_models(log, sidechain=True) if placed else []
+    tasks = []
+    for r in [Path(root)] + [Path(p) for p in elsewhere(root).values()]:
+        slug = active_slug(r)
+        if slug and (_dir(r, slug) / "task.toml").exists() and not cancelled(r, slug):
+            tasks.append((r, slug))
+    mine = [t for t in tasks if isinstance(main, str) and _state(_dir(*t) / "start.json", {}).get("session") == main]
+    for r, slug in mine or [t for t in tasks if t[0] == Path(root)]:
+        wanted = task_models(r, slug)
+        if not wanted:
+            continue
+        rec = {"at": now(), "model": models[-1] if models else None, "design": wanted["design"],
+               "matches": bool(models) and all(model_matches(wanted["design"], m) for m in models),
+               "answers": has_answers(r, slug), "fingerprint": design_fingerprint(r, slug)}
+        (_dir(r, slug) / "design.json").write_text(json.dumps(rec, indent=2) + "\n")
+
+
+def own_design(root, slug):
+    """The main session's model when it designed the task itself: every model it used from `herd init` to the first
+    verify matches the design setting. Else None."""
+    wanted, d = task_models(root, slug), _dir(root, slug)
+    log = _state(d / "start.json", {}).get("session")
+    try:
+        since = _when((d / "started").read_text())
+    except OSError:
+        since = None
+    if not wanted or not log or not since:
+        return None
+    models = log_models(log, since=since, until=_when(_state(d / "red.json", {}).get("at")))
+    return models[-1] if models and all(model_matches(wanted["design"], m) for m in models) else None
+
+
+def _standard(root, slug):
+    """Whether the design rules apply: a standard-route task started on 0.14.0 or later."""
+    try:
+        quick = load_task(root, slug).get("route", "standard") == "quick"
+    except STATE_ERRORS:
+        quick = False
+    return not quick and task_models(root, slug) is not None
+
+
+def design_problems(root, slug):
+    """Why the design does not count. A designer that ran decides; without one, the main session's own design."""
+    if not _standard(root, slug):
+        return []
+    model, d = task_models(root, slug)["design"], _dir(root, slug)
+    spawn = f"spawn {DESIGNER} with model {model} (see the run skill)"
+    out = [] if has_answers(root, slug) else [
+        f"ANSWERS.md is missing or empty in {d}: answer `herd design-brief` there, then {spawn}"]
+    if (d / "design.json").exists():
+        rec = _state(d / "design.json", {})
+        if not model_matches(model, rec.get("model")) or rec.get("matches") is not True:
+            out.append(f"the herd-designer ran on {rec.get('model') or 'an unknown model'}, not {model}: {spawn}")
+        elif rec.get("answers") is not True:
+            out.append(f"the herd-designer stopped without ANSWERS.md: {spawn}")
+    elif not own_design(root, slug):
+        out.append(f"no design on {model}: no design.json from a herd-designer, and this session is not seen on "
+                   f"{model}: {spawn}")
+    return out
+
+
+def design_line(root, slug):
+    """`Design: <model>, ...` for the report, or None."""
+    if not _standard(root, slug):
+        return None
+    asked, path = task_models(root, slug)["design"], _dir(root, slug) / "design.json"
+    if not path.exists():
+        model = own_design(root, slug)
+        return f"Design: {model}, in the main session ({asked} asked)" if model else None
+    rec = _state(path, {})
+    changed = rec.get("fingerprint") != design_fingerprint(root, slug)
+    return (f"Design: {rec.get('model')}, herd-designer ({asked} asked)"
+            + ("; criteria or attack notes changed after it stopped" if changed else ""))
+
+
+def routing(root, slug=None):
+    """What `herd status` says: the two models, and whether to design and build here or in a subagent."""
+    models = (task_models(root, slug) if slug else None) or read_models(root)
+    log = _seen_session(root) or (_state(_dir(root, slug) / "start.json", {}).get("session") if slug else None)
+    seen = log_models(log)[-1:] if log else []
+    out = [f"Models: design {models['design']}, build {models['build']} (herd.toml [models])"
+           + (f"; this session: {seen[0]}" if seen else "")]
+    for step, agent, label in (("design", DESIGNER, "Design"), ("build", BUILDER, "Build")):
+        want = models[step]
+        if seen and model_matches(want, seen[0]):
+            out.append(f"{label}: here, in this session (its model matches {want})")
+        else:
+            out.append(f"{label}: spawn {agent} with model {want}" + (
+                "" if seen else f", unless your model is {want} (Herd has not seen this session's model)"
+                if step == "build" else " (Herd has not seen this session's model)"))
+    return out
+
+
 # ---- task -----------------------------------------------------------------
 
-def init_task(root, slug, goal, quick_check=None, request=None):
+def init_task(root, slug, goal, quick_check=None, request=None, session=None):
     """Create a task. quick_check makes a one-criterion `quick` task (refused at a high risk floor).
 
     request is the human's message, verbatim: human criteria must quote it (see human_unquoted).
@@ -285,6 +510,8 @@ def init_task(root, slug, goal, quick_check=None, request=None):
     if other and _dir(root, other).exists() and not cancelled(root, other):
         raise ValueError(f"task {other} is still active in this checkout: finish it (`herd done`), cancel it, "
                          f"or start this one in its own worktree with --worktree")
+    models = read_models(root)  # refused before anything is written
+    session = session or _seen_session(root)
     d.mkdir(parents=True)
     (d / "task.toml").write_text(text)
     (d / "started").write_text(now() + "\n")
@@ -297,7 +524,9 @@ def init_task(root, slug, goal, quick_check=None, request=None):
     edits = _take_preinit(root, slug, changed)  # what this session edited before init is the agent's
     dirty = {f: _file_sha(root, f) for f in changed if f not in edits}  # already there: not the agent's,
     (d / "start.json").write_text(json.dumps({"head": head, "risk": risk, "dirty": dirty,  # while unchanged
-                                              "stashes": _stash_shas(root)} | ({"agent_edits": edits} if edits else {}))
+                                              "stashes": _stash_shas(root), "models": models}
+                                             | ({"session": session} if session else {})
+                                             | ({"agent_edits": edits} if edits else {}))
                                   + "\n")
     if request is not None:
         (d / "request.md").write_text(request)
@@ -434,7 +663,7 @@ def init_worktree(root, slug, goal, quick_check=None, request=None):
         raise ValueError(f"git worktree add failed: {p.stderr.strip()[-300:]}")
     path = tree / Path(root).resolve().relative_to(toplevel(root).resolve())  # same subfolder as the project
     try:
-        init_task(path, slug, goal, quick_check=quick_check, request=request)
+        init_task(path, slug, goal, quick_check=quick_check, request=request, session=_seen_session(root))
         (_dir(path, slug) / "base").write_text(base + "\n")
     except Exception:  # undo only what this call made: its own new worktree and branch
         subprocess.run(["git", "worktree", "remove", "--force", str(tree)], cwd=root, capture_output=True)
@@ -763,14 +992,16 @@ def _edited_files(log):
 
 
 def preinit(hook):
-    """PreToolUse hook on Bash. Right before `herd init <slug>`, record the files this session (and its subagents)
+    """PreToolUse hook on Bash. Before a herd command it records which session log is this checkout's. Right before `herd init <slug>`, record the files this session (and its subagents)
     edited, from the session log, so red first counts them as the agent's even if they are uncommitted at init.
     The record is per task and always written, so another task's init never reads it. Never blocks, prints
     nothing; other commands return at once. ponytail: edits made through Bash (sed, cat >) are not seen."""
     if not isinstance(hook, dict):
         return
     cwd = Path(str(hook.get("cwd") or "."))
-    target = _init_target(str((hook.get("tool_input") or {}).get("command", "")), cwd)
+    command = str((hook.get("tool_input") or {}).get("command", ""))
+    _see_session(command, cwd, hook.get("transcript_path"))
+    target = _init_target(command, cwd)
     if not target:
         return
     where, slug = target
@@ -1229,6 +1460,10 @@ def verify(root, slug):  # noqa: C901
     if missing:
         raise ValueError(f"first verify refused: {len(missing)} of {len(FIRST_VERIFY_ATTACKS)} standard attacks have "
                          "no note; no check was run and nothing was written\n  " + "\n  ".join(missing))
+    if standard and not (_dir(root, slug) / "red.json").exists() and task_models(root, slug) and not has_answers(root, slug):
+        raise ValueError("first verify refused: no ANSWERS.md; no check was run and nothing was written\n  the second "
+                         "look comes before red: run `herd design-brief` and answer it in "
+                         f"{_dir(root, slug) / 'ANSWERS.md'}")
     results = []
     for c in task["criteria"]:
         r = {"id": c["id"], "text": c["text"], "source": c["source"], "check": c["check"],
@@ -1616,6 +1851,8 @@ def report(ev, notes=None):  # noqa: C901
              f"Result: {s['passing']} passing, {s['failing']} failing, {s['unchecked']} unchecked"]
     if ev.get("route") == "quick":
         lines.append("Route: quick")
+    if ev.get("design"):
+        lines.append(ev["design"])
     if ev.get("red"):
         lines.append(f"First verify: {ev['red']['failed']} of {ev['red']['total']} checks failed before the work")
     if ev.get("timing"):
@@ -1729,6 +1966,8 @@ def pr_body(root, slug):  # noqa: C901
         return "\n".join(head + ["No evidence yet: `herd verify` has not run. The next `herd pr` replaces this."]
                          + foot) + "\n"
     s, results = ev["summary"], ev["results"]
+    if design := design_line(root, slug):
+        head += [design, ""]
     stale = _stale(root, slug, ev)
     if stale:
         fresh = ("**The evidence is stale:** the code or the task changed after the last `herd verify`, "
@@ -2039,7 +2278,8 @@ def stop_line(rec):
 # Herd's state files, written only by the herd CLI: the design's list (G3), plus `started`,
 # `request.md` (the human's words) and `.herd/active` (removing it switches the gate off). task.toml is the agent's.
 GUARD_STATE = ("evidence.json", "notes.jsonl", "start.json", "red.json", "frozen.json", "green.json", "fails.json",
-               "stopped.json", "gate_blocks", "done_blocks", "cancelled", "started", "request.md", "base", "pr")
+               "stopped.json", "gate_blocks", "done_blocks", "cancelled", "started", "request.md", "base", "pr",
+               "design.json")
 # the design's list, with .env and .env.* in every folder (a monorepo keeps apps/web/.env) and .git itself
 GUARD_PATHS = ("**/.env", "**/.env.*", "**/*.pem", "**/*.key", "**/id_rsa*", ".git", ".git/**")  # herd.toml only adds
 ENV_TEMPLATES = ("**/.env.example", "**/.env.sample", "**/.env.template", "**/.env.dist")  # committed, no secrets
@@ -2062,7 +2302,7 @@ WRAPPERS = {"env": ("-u", "-C", "-S", "--unset", "--chdir", "--split-string"),
             "command": (), "time": (), "nohup": (), "exec": ("-a",), "nice": ("-n",),
             "timeout": ("-s", "-k", "--signal", "--kill-after"),  # then a duration
             "xargs": ("-n", "-I", "-P", "-L", "-d", "-s", "-E", "-a")}
-HOOK_COMMANDS = ("gate", "preinit", "guard")  # Claude Code runs these; the agent never needs to
+HOOK_COMMANDS = ("gate", "preinit", "guard", "design-hook")  # Claude Code runs these; the agent never needs to
 SUBST = re.compile(r"\$\(([^()]*)\)|`([^`]*)`")  # command substitution, which runs inside double quotes too
 KEYWORDS = ("if", "then", "do", "else", "elif", "while", "until", "!", "{", "}")
 SEPARATORS = {"&&", "||", ";", ";;", "|", "|&", "&", "(", ")"}
@@ -2464,6 +2704,7 @@ def problems(root, slug):  # noqa: C901
         out += ev.get("inputs_left") or []  # structure only: missing, misplaced inside a criterion, or incomplete
     if ev.get("route") != "quick":
         out += attack_problems(root, slug, ev)
+        out += design_problems(root, slug)
     return out
 
 
@@ -2548,6 +2789,8 @@ USAGE = {
     "verify": "herd verify [slug] [--verbose] [--fresh] [--only <id>]   (an unchanged tree runs no check unless --fresh; "
               "--only: run one criterion or attack, write nothing)",
     "status": "herd status [slug] [--json]   (--json: the stop record, or null)",
+    "design-brief": "herd design-brief   (the second look, answered in the task's ANSWERS.md before the attacks)",
+    "design-hook": "herd design-hook   (the SubagentStop hook for herd-designer, reads hook JSON on stdin)",
     "done": "herd done [slug] [--verbose]",
     "cancel": 'herd cancel [slug] [--reason "text"]',
     "pr": "herd pr [slug] [--yes]   (push the herd/* branch, open or update its PR with the evidence)",
@@ -2606,7 +2849,7 @@ def main(argv):  # noqa: C901
     try:
         root = find_root(Path.cwd())
     except FileNotFoundError:  # the folder was deleted under the process: a hook must still exit 0
-        return 0 if argv[:1] in (["gate"], ["lint"], ["preinit"], ["guard"]) else 1
+        return 0 if argv[:1] in (["gate"], ["lint"], ["preinit"], ["guard"], ["design-hook"]) else 1
     cmd, args = (argv[0], argv[1:]) if argv else ("status", [])
     if cmd in ("help", "-h", "--help"):
         print(__doc__ + "\nCommands:\n" + "\n".join(f"  {u}" for u in USAGE.values()))
@@ -2697,7 +2940,12 @@ def main(argv):  # noqa: C901
                 return 1 if s["failing"] or any(st == "failing" for st, _ in states.values()) else 0
         elif cmd == "status":
             as_json = "--json" in args
-            slug = _slug_arg(root, [a for a in args if a != "--json"])
+            try:
+                slug = _slug_arg(root, [a for a in args if a != "--json"])
+            except SystemExit:
+                if not as_json:  # before `herd init`: the models still say who designs
+                    print("\n".join(routing(root)))
+                raise
             stop = load_stop(root, slug)
             if as_json:
                 print(json.dumps(stop, indent=2))
@@ -2716,6 +2964,7 @@ def main(argv):  # noqa: C901
                 return 0
             probs = problems(root, slug)
             print("not done: " + "; ".join(probs) if probs else "done: evidence is fresh and passing")
+            print("\n".join(([line] if (line := design_line(root, slug)) else []) + routing(root, slug)))
         elif cmd == "done":
             verbose = "--verbose" in args
             slug = _slug_arg(root, [a for a in args if a != "--verbose"])
@@ -2737,6 +2986,7 @@ def main(argv):  # noqa: C901
             if stop and not stop.get("resolved_at"):  # the record stays; it says the task went on and finished
                 stop["resolved_at"] = now()
                 (_dir(root, slug) / "stopped.json").write_text(json.dumps(stop, indent=2) + "\n")
+            ev["design"] = design_line(root, slug)
             text = report(ev, notes)
             (_dir(root, slug) / "evidence.md").write_text(text)
             (root / ".herd" / "active").unlink(missing_ok=True)
@@ -2788,6 +3038,16 @@ def main(argv):  # noqa: C901
             out = gate(find_root(Path(hook.get("cwd") or root)), hook)
             if out:
                 print(json.dumps(out))
+        elif cmd == "design-brief":
+            if args:
+                raise UsageError(f"unexpected argument `{args[0]}`")
+            print(DESIGN_BRIEF)
+        elif cmd == "design-hook":  # SubagentStop hook: an error records nothing, with one stderr line
+            try:
+                hook = json.loads(sys.stdin.read() if not sys.stdin.isatty() else "")
+                design_hook(find_root(Path(hook.get("cwd") or root)), hook)
+            except Exception as e:  # noqa: BLE001 - a hook must never break the session
+                print(f"herd design-hook: nothing recorded after an error: {e!r}"[:300].replace("\n", " "), file=sys.stderr)
         elif cmd == "triage":
             as_json = "--json" in args
             text = " ".join(a for a in args if a != "--json")

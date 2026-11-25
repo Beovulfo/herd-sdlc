@@ -2,6 +2,31 @@
 
 All notable changes to Herd. Versions follow `plugin/.claude-plugin/plugin.json`.
 
+## 0.14.0
+
+Design runs on a stronger model than the build, with a "be specific" second look before the attacks (issue #102). The owner: "I WANT the be specific second look BEFORE the attack", and "give more weight to \"be right \" than to be cheap. It is more expensive to run twice the same project because it got wrong results".
+
+Design eval on supermarket-route, 6 runs per arm, judge 9 of 10 against hand labels. "Right" means the design takes products on their shelves:
+
+| arm | right | wrong |
+|---|---|---|
+| Haiku design | 2/6 | 3 |
+| Haiku with a "be specific" second look | 0/6 | 6 |
+| Sonnet design with the sentence in the skill, no second look | 0/6 | 0 (all unstated) |
+| Sonnet design, then a "be specific" second look after the attacks and red | 6/6 | 0 |
+| Sonnet design, a "be specific" second look before the attacks, then the attacks and red | 6/6 | 0 |
+
+End to end, a Sonnet design with a Haiku build scored 39.3 of 40 stores, against 38.0 for Haiku alone.
+
+- **Added:** `herd.toml` `[models]`: `design` (default `sonnet`) and `build` (default `haiku`), frozen at `herd init`. A broken value or unknown key is refused. `herd status` prints both and says which step runs here and which in a subagent.
+- **Added:** the `herd-designer` and `herd-builder` agents, and `herd design-brief`, the fixed second-look message.
+- **Added:** a SubagentStop hook records `design.json`: the designer's model, whether ANSWERS.md exists and a fingerprint of the criteria and attack notes. The report and the PR name the design model.
+- **Changed:** on the standard route the first `herd verify` refuses without ANSWERS.md, and `herd done` refuses without a design on the `design` model. A session on that model needs no subagent. The quick route is unchanged.
+- **Changed:** the pre-init hook also runs before `herd status`, and notes the session log in the checkout's git folder.
+- **Changed:** the builder no longer has to be Sonnet or stronger.
+- **Upgrading:** tasks started before 0.14.0 need no design. Add `[models]` only to change the defaults.
+- **Known limits:** Herd checks that a designer of the right tier ran, not that its design is right. The cost per run rises by about $0.5 on Haiku. In the end-to-end test a Sonnet second look added scope nobody asked for: two floors and an HTML replay. The build model is not enforced: `herd status` only says which one to use. A full model name works only if your Claude Code can spawn it. One live smoke run (Haiku session, Sonnet subagent, $0.07) showed that the hook records `design.json`; no live run has done a full design with the agents, and no model leg has measured 0.14.0.
+
 ## 0.13.4
 
 `herd verify` skips an unchanged tree, and attack notes go in one call (issue #100). On Haiku, 0.13.3 cost $0.28 per supermarket run against $0.10 with no plugin. In three runs, `herd verify` ran 5 to 7 times each, 7 to 46 s a time (7 to 22% of wall time). Logging attack notes took 3 to 4 turns per run, with retries after a flag error. The owner asked: "make Herd a new approach to shift to the left: lean, robust, accurate".

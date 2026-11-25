@@ -11,6 +11,12 @@ path_extensions = ["py", "ts", "js", "sql", "toml", "json", "md"]
 high = ["migrations/**", "auth/**", "billing/**", "herd.toml"]
 medium = ["api/**"]
 
+# Who designs and who builds. Either takes a tier (haiku, sonnet, opus) or a model name: it matches a model id
+# that contains it. Read at `herd init`, so an edit during a task does not change it. These are the defaults.
+[models]
+design = "sonnet"
+build = "haiku"
+
 # Used by the planned GitHub automation (docs/designs/herd-arbiter.md), not by the local autopilot.
 [arbiter]
 model = "inherit"

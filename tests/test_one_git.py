@@ -8,6 +8,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from tests.test_herd_cli import no_design
+
 HERD = str(Path(__file__).resolve().parent.parent / "plugin" / "scripts" / "herd.py")
 TASK = '''goal = "Add a greeting"
 test_budget = "One file check"
@@ -45,6 +47,7 @@ class TestOneGitCall(unittest.TestCase):
         git(self.root, "add", "-A")
         git(self.root, "commit", "-q", "-m", "init")
         self.herd("init", "t1", "Add a greeting")
+        no_design(self.root)
         (self.root / ".herd/tasks/t1/task.toml").write_text(TASK)
         for name in ("bad-input", "collision", "one-bad-part", "recount", "refusal", "other-reading"):
             self.herd("note", "--tried", "--attack", name, "n/a: not under test")  # or the first verify refuses

@@ -259,5 +259,33 @@ class TestTask(Base):
         self.assertIn("--prompt or --task", out)
 
 
+class TestHiddenBus(Base):
+    def test_Hidden_bus_test_file_is_in_the_bus_table(self):
+        self.assertIn("test_bus_verify.py", rl.HIDDEN["bus-transfer"])
+        self.assertIn("test_bus_verify.py", rl.PLANTED_NAMES)
+
+    def test_Hidden_stray_copy_of_the_bus_test_file_in_the_temp_folder_is_refused(self):
+        planted = self.tmpdir / "stray" / "test_bus_verify.py"
+        planted.parent.mkdir()
+        planted.write_text("x")
+        for task in ("bus-transfer", "supermarket-route"):
+            code, out = run_main(self.args("--task", task, "--dry-run"), self.env, [str(self.tmpdir)])
+            self.assertEqual(code, 2, (task, out))
+            self.assertIn("refused: the hidden verifier or a probe is readable by a run", out)
+            self.assertIn(str(planted), out)
+        self.assertFalse((self.tmpdir / "herd-bench").exists())
+
+    def test_Hidden_refusal_of_every_bus_name_matches_a_plain_find(self):
+        names = sorted({"bus_verify.py", "bus_probe.py", "bus_reference.py", "test_bus_verify.py"})
+        for name in names:
+            (self.tmpdir / "copies" / name.replace(".py", "")).mkdir(parents=True)
+            (self.tmpdir / "copies" / name.replace(".py", "") / name).write_text("x")
+        (self.tmpdir / "copies" / "other.py").write_text("x")
+        want = subprocess.run(["find", str(self.tmpdir), "-type", "f", "(", *sum(([ "-name", n, "-o"] for n in names), [])[:-1], ")"],
+                              capture_output=True, text=True, check=True).stdout.split()
+        self.assertEqual(rl.preflight([str(self.tmpdir)], []), sorted(want))
+        self.assertEqual(len(want), len(names))
+
+
 if __name__ == "__main__":
     unittest.main()

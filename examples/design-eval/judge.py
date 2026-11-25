@@ -26,9 +26,16 @@ class Refused(Exception):
     """Input the eval will not work on; the message says why."""
 
 
+def _once(pairs):
+    """An object that gives one key twice is refused: json would silently keep the last."""
+    if len({k for k, _ in pairs}) != len(pairs):
+        raise ValueError("an object gives one key twice")
+    return dict(pairs)
+
+
 def read_json(path):
     try:
-        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        data = json.loads(Path(path).read_text(encoding="utf-8"), object_pairs_hook=_once)
     except (OSError, ValueError) as e:
         raise Refused(f"cannot read {path}: {getattr(e, 'strerror', None) or e}") from None
     if not isinstance(data, dict):
@@ -41,6 +48,8 @@ def _check_case(path, case):
         return isinstance(v, str) and v.strip() != ""
 
     labels = case.get("labels")
+    if isinstance(labels, dict):  # {id: meaning}
+        labels = case["labels"] = [{"id": k, "means": v} for k, v in labels.items()]
     if not all(text(case.get(k)) for k in ("task", "prompt", "question")):
         raise Refused(f"{path}: task, prompt and question must be non-empty text")
     if not (isinstance(labels, list) and len(labels) >= 2

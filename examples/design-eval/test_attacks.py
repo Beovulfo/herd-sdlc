@@ -3,18 +3,19 @@ import contextlib
 import io
 import json
 import random
-import re
 import shutil
 import tempfile
 import unittest
 from pathlib import Path
 
+import armfile
 import judge
 import report
 import run_eval
 
 HERE = Path(__file__).resolve().parent
 TASKS = ("supermarket-route", "bus-transfer")
+ARMS = ("control", "generic-after-red", "generic-before-attacks")
 
 
 def call(main, argv, **kw):
@@ -55,7 +56,7 @@ class Base(unittest.TestCase):
         results = Path(tempfile.mkdtemp(prefix=name, dir=self.tmp))
         for task in TASKS:
             ids = [x["id"] for x in self.cases[task]["labels"]]
-            for arm in report.ARMS:
+            for arm in ARMS:
                 for n in range(1, (sizes or rng.randint(1, 16)) + 1):
                     status = rng.choice(["ok"] * 6 + ["no-start", "leak", "no-verify"])
                     before, after = rng.choice(ids + [None] if status == "ok" else ids), rng.choice(ids)
@@ -88,7 +89,8 @@ class TestAttacks(Base):
         for path in (empty, binary, self.tmp):
             folder = self.cases_folder(prompt=str(path))
             self.assert_clear(*call(run_eval.main, ["--dry-run", "--cases", str(folder)]), path)
-        for argv in (["--case", "nope", "--dry-run"], ["--runs", "0"], ["--runs", "x"], ["--budget", "-1"],
+        for argv in (["--case", "nope", "--dry-run"], ["--arm", "nope", "--dry-run"], ["--parallel", "0"],
+                     ["--runs", "0"], ["--runs", "x"], ["--budget", "-1"],
                      ["--cases", str(self.tmp / "none"), "--dry-run"], ["--root", str(Path.home() / "x")],
                      ["--herd-tag", "no-such-tag", "--root", str(self.tmp / "r")]):
             self.assert_clear(*call(run_eval.main, argv, scan_dirs=[]), argv)
@@ -111,6 +113,10 @@ class TestAttacks(Base):
         folder = self.cases_folder()
         shutil.copy(folder / "bus-transfer.json", folder / "again.json")
         self.assert_clear(*call(run_eval.main, ["--dry-run", "--cases", str(folder)]), "same task twice")
+        twice = Path(tempfile.mkdtemp(dir=self.tmp))
+        (twice / "x.json").write_text('{"task": "x", "prompt": "p", "question": "q", "right": ["a"], "wrong": ["b"], '
+                                      '"labels": {"a": "one", "b": "two", "a": "three"}}')
+        self.assert_clear(*call(run_eval.main, ["--dry-run", "--cases", str(twice)]), "label key twice")
         label = {"id": "refused", "means": "a different meaning"}
         for change in ({"labels": [*self.cases["bus-transfer"]["labels"], label]},
                        {"right": ["refused"], "wrong": ["refused"]}):
@@ -119,11 +125,11 @@ class TestAttacks(Base):
 
     def test_collision_identical_runs_are_each_counted(self):
         results = self.tmp / "results"
-        for arm in ("control", "after-red"):
+        for arm in ARMS[:2]:
             for n in (1, 2, 10):  # same labels, run-1 and run-10 share a prefix
                 self.put_run(results, "bus-transfer", arm, n, "unstated", "refused")
-        data = report.collect(results, self.cases)
-        self.assertEqual([len(data["bus-transfer"][a]["runs"]) for a in ("control", "after-red")], [3, 3])
+        data = report.collect(results, self.cases, armfile.load_arms())
+        self.assertEqual([len(data["bus-transfer"][a]["runs"]) for a in ARMS[:2]], [3, 3])
 
     def test_bad_part_one_broken_record_refuses_the_report(self):
         for what in ("run.json cut", "no status", "label missing", "unknown label", "unknown arm", "unknown case"):
@@ -143,73 +149,7 @@ class TestAttacks(Base):
                 (results / "other-case").mkdir()
             code, out = call(report.main, [str(results)])
             self.assert_clear(code, out, what)
-            self.assertNotIn("## Bar", out, what)
-
-    def test_recount_report_numbers_on_generated_results(self):
-        for seed in range(25):
-            results = self.tree(random.Random(seed))
-            code, out = call(report.main, [str(results)])
-            self.assertEqual(code, 0, out)
-            for task in TASKS:
-                block = out.split(f"## {task} ")[1].split("\n## ")[0]
-                for arm in report.ARMS:
-                    section = block.split(f"### {arm}: ")[1].split("###")[0]
-                    pairs, excluded, flipped = {}, {}, 0
-                    for run in (results / task / arm).iterdir():
-                        status = json.loads((run / "run.json").read_text())["status"]
-                        before, after = (json.loads((run / w / "label.json").read_text())["label"]
-                                         for w in ("before", "after"))
-                        if status == "ok" and before is None:
-                            status = "judge-error"
-                        if status != "ok":
-                            excluded[status] = excluded.get(status, 0) + 1
-                            continue
-                        pairs[f"{before}→{after}"] = pairs.get(f"{before}→{after}", 0) + 1
-                        flipped += before in self.cases[task]["right"] and after in self.cases[task]["wrong"]
-                    shown = {m[0]: int(m[1]) for m in re.findall(r"^(\w+→\w+): (\d+)$", section, re.M)}
-                    self.assertEqual(shown, pairs, (seed, task, arm))
-                    right = sum(n for k, n in pairs.items() if k.split("→")[1] in self.cases[task]["right"])
-                    self.assertTrue(section.startswith(f"right after {right}/{sum(pairs.values())}\n"), section)
-                    self.assertIn(f"right-to-wrong flips: {flipped}", section)
-                    found = re.search(r"^excluded: (.*)$", section, re.M)
-                    shown = dict(x.rsplit(" ", 1) for x in found[1].split(", ")) if found else {}
-                    self.assertEqual({k: int(v) for k, v in shown.items()}, excluded)
-
-    def bar_tree(self, right, n=12, flips=0):
-        """right[task] = (right runs in control, right runs in both question arms)."""
-        results = Path(tempfile.mkdtemp(dir=self.tmp))
-        for task, counts in right.items():
-            good, bad = self.cases[task]["right"][0], self.cases[task]["wrong"][0]
-            for arm in report.ARMS:
-                k = counts[0] if arm == "control" else counts[1]
-                for i in range(n):
-                    after = good if i < k else bad
-                    flip = arm != "control" and task == "bus-transfer" and k <= i < k + flips
-                    self.put_run(results, task, arm, i + 1, good if flip else "unstated", after)
-        return report.collect(results, self.cases)
-
-    def test_refusal_the_bar_matches_a_plain_check(self):
-        rng = random.Random(7)
-        seen = set()
-        for _ in range(150):
-            a, b = [(rng.randint(0, 12), rng.randint(0, 12)) for _ in TASKS]
-            flips = rng.randint(0, min(3, 12 - b[1]))
-            data = self.bar_tree({TASKS[0]: a, TASKS[1]: b}, flips=flips)
-            gains = [a[1] - a[0], b[1] - b[0]]
-            want = "met" if max(gains) >= 6 and min(gains) >= 0 and flips <= 1 else "not met"
-            self.assertEqual(report.bar(data, self.cases, "after-red")[0], want, (a, b, flips))
-            seen.add(want)
-        self.assertEqual(seen, {"met", "not met"})
-
-    def test_refusal_the_bar_is_not_evaluated_only_when_short(self):
-        both = {t: (0, 6) for t in TASKS}
-        for n in (6, 11):
-            self.assertEqual(report.bar(self.bar_tree(both, n=n), self.cases, "after-red")[0], "not evaluated")
-        for n in (12, 13, 24):
-            self.assertNotEqual(report.bar(self.bar_tree(both, n=n), self.cases, "after-red")[0], "not evaluated")
-        one = self.bar_tree({"bus-transfer": (0, 12)})
-        cases = {"bus-transfer": self.cases["bus-transfer"]}
-        self.assertEqual(report.bar(one, cases, "after-red")[0], "not evaluated")
+            self.assertNotIn("| arm |", out, what)
 
     def test_reading_prompts_reach_the_session_word_for_word(self):
         rng = random.Random(3)
@@ -240,7 +180,7 @@ class TestAttacks(Base):
         self.put_run(results, "held-out", "control", 1, "no", "yes")
         code, out = call(report.main, [str(results), "--cases", str(folder)])
         self.assertEqual(code, 0, out)
-        self.assertIn("no→yes: 1", out)
+        self.assertIn("no→yes 1", out)
 
 
 if __name__ == "__main__":

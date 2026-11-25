@@ -1,0 +1,10 @@
+{
+  "name": "limit-cost-before-attacks",
+  "when": "before-attacks",
+  "sees": [
+    "request",
+    "inputs_program",
+    "known_limits"
+  ],
+  "instruction": "You are a challenger who has not seen any code. Below are a request and what the builder has stated about their design so far. First state in 2 or 3 lines the business context: who uses this program, in what real situation, and what a wrong answer costs them. Then go through the known limits. For each one ask, naming the person who uses the program: 'for <the person who uses it>, what does this limit cost them, and should it be a limit at all?' Write at most 5 numbered questions, the costliest limits first."
+}

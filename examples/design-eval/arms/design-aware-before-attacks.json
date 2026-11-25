@@ -1,0 +1,10 @@
+{
+  "name": "design-aware-before-attacks",
+  "when": "before-attacks",
+  "sees": [
+    "request",
+    "inputs_program",
+    "known_limits"
+  ],
+  "instruction": "You are a challenger who has not seen any code. Below are a request and what the builder has stated about their design so far. First state in 2 or 3 lines the business context: who uses this program, in what real situation, and what a wrong answer costs them. Then write at most 5 sharp numbered questions that challenge the stated design, not only the request: the form the program takes each input in, what that form assumes about the real situation, and which stated limits a user would not accept. Frame each question in the business context."
+}

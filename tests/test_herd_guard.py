@@ -471,3 +471,16 @@ class TestWiring(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestInstalledPlugin(Base):
+    def test_the_installed_plugin_is_protected(self):
+        plugin = Path(self.tmp.name + "-plugin")
+        (plugin / "skills").mkdir(parents=True)
+        self.addCleanup(shutil.rmtree, plugin)
+        hook = {"cwd": str(self.root), "tool_name": "Write", "tool_input": {"file_path": str(plugin / "skills/x.md")}}
+        with mock.patch.dict("os.environ", {"CLAUDE_PLUGIN_ROOT": str(plugin)}):
+            self.assertEqual(herd.guard(self.root, hook)["hookSpecificOutput"]["permissionDecision"], "deny")
+        inside = dict(hook, tool_input={"file_path": str(self.root / "skills/x.md")})
+        with mock.patch.dict("os.environ", {"CLAUDE_PLUGIN_ROOT": str(self.root)}):  # developing Herd itself
+            self.assertIsNone(herd.guard(self.root, inside))

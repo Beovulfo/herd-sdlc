@@ -224,7 +224,6 @@ class TestGitCalls(unittest.TestCase):
         (self.root / ".herd/tasks/t1/task.toml").write_text(ONE)
         for a in herd.ATTACKS:
             herd.add_note(self.root, "t1", "tried", f"{a} attack", attack=a, check=T.OK, **T.PROGRAMS.get(a, {}))
-        T.late_review(self.root)
         (self.root / "greet.txt").write_text("hello")
         self.herd("verify")
 

@@ -4,7 +4,7 @@ import unittest
 
 from scripts import herd
 from tests.test_harness_rules import NO_INPUTS, OK, REQUEST, TASK, Base
-from tests.test_herd_cli import PROGRAMS, late_review
+from tests.test_herd_cli import PROGRAMS
 
 NAME = "other-reading"
 ENTRY = '\n[[inputs]]\nhuman = "a date"\nprogram = "03/04/2026 or 2026-04-03"\n'
@@ -29,7 +29,6 @@ class TestOtherReading(Base):
     def refused(self, why, **kw):
         self.built()
         self.log(**kw)
-        late_review(self.root)
         herd.verify(self.root, "t1")
         self.assertIn(f"{NAME} ({why})", " ".join(herd.problems(self.root, "t1")))
 
@@ -42,7 +41,6 @@ class TestOtherReading(Base):
         for a in herd.ATTACKS:
             if a != NAME:
                 herd.add_note(self.root, "t1", "tried", f"{a} attack", attack=a, check=OK, **PROGRAMS.get(a, {}))
-        late_review(self.root)
         herd.verify(self.root, "t1")
         self.assertIn(f"{NAME} (no passing command)", " ".join(herd.problems(self.root, "t1")))
 
@@ -61,21 +59,18 @@ class TestOtherReading(Base):
     def test_passing_counts(self):
         self.built()
         self.log()
-        late_review(self.root)
         herd.verify(self.root, "t1")
         self.assertNotIn(NAME, " ".join(herd.problems(self.root, "t1")))
 
     def test_na_is_refused_when_the_task_has_an_input(self):
         self.built(TASK.replace("inputs = []\n", "") + ENTRY)
         self.log(check=None, text="n/a: nothing to read twice")
-        late_review(self.root)
         herd.verify(self.root, "t1")
         self.assertIn(f"{NAME} marked n/a, but the task lists inputs", " ".join(herd.problems(self.root, "t1")))
 
     def test_na_is_accepted_with_no_inputs(self):
         self.built()
         self.log(check=None, text="n/a: the task has no inputs")
-        late_review(self.root)
         herd.verify(self.root, "t1")
         self.assertNotIn(NAME, " ".join(herd.problems(self.root, "t1")))
 
@@ -120,7 +115,6 @@ class TestReadings(Base):
         return [w for w in self.red_then_build()["warnings"] if w.startswith("inputs #1")]
 
     def refused(self):
-        late_review(self.root)
         herd.verify(self.root, "t1")
         return " ".join(herd.problems(self.root, "t1"))
 
@@ -220,7 +214,6 @@ class TestReadingQuotes(Base):
     def test_done_refuses_too(self):
         self.start(entries("typed by hand"))
         self.red_then_build()
-        late_review(self.root)
         herd.verify(self.root, "t1")
         self.assertIn(QUOTE.format(1), " ".join(herd.problems(self.root, "t1")))
 
@@ -236,7 +229,6 @@ class TestReadingQuotes(Base):
         self.assertEqual((p.returncode, self.refusals(p)), (0, []))
         self.assertIn("warning: " + QUOTE.format(1), p.stdout)
         self.red_then_build()
-        late_review(self.root)
         herd.verify(self.root, "t1")
         self.assertNotIn("readings[0]", " ".join(herd.problems(self.root, "t1")))
         self.assertEqual(herd.reading_quote_warnings({"route": "quick", "inputs": [{"readings": ["no"]}]}, REQUEST), [])

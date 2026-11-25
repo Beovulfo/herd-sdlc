@@ -44,7 +44,6 @@ class TestDocsSync(unittest.TestCase):
             "README.md": STALE,
             "docs/PRD.md": ["modules in `scripts/`", "(version 0.12.10"],
             "plugin/skills/run/SKILL.md": ["one tier above yours (`herd status` prints it)"],
-            "plugin/agents/herd-reviewer.md": ["a model one tier above yours (`herd status` names it)"],
             "examples/supermarket-route/README.md": ["so it ships this folder",
                                                      "only for runs whose audit prints"],
             "examples/supermarket-route/BENCHMARK.md": ["are on branch `herd/bench-isolation`"],
@@ -72,15 +71,7 @@ class TestDocsSync(unittest.TestCase):
         floor = row(text, "| `[floor]`")
         for globs in herd_triage.DEFAULT_RULES.values():
             self.assertEqual([g for g in globs if g not in floor], [])
-        review = row(text, "| `[review]`")
-        self.assertIn(json.dumps(list(herd.DEFAULT_TIERS)), review)
-        self.assertIn(f"`step = {herd.DEFAULT_STEP}`", review)
-        self.assertIn(f"`{herd.REVIEW_CAP}`", review)
-
-    def test_reviewer_knows_the_limits(self):
-        text = read("plugin/agents/herd-reviewer.md")
-        self.assertIn("capped at Sonnet", text)
-        self.assertIn(f"at most {herd.MAX_REVIEW_ROUNDS} reviews", text)
+        self.assertNotIn("| `[review]`", text)
 
     def test_attacks_are_all_named(self):
         for text in (read("plugin/skills/run/adversarial.md"), herd.USAGE["note"]):

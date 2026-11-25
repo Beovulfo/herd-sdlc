@@ -4,12 +4,12 @@
 A task is `.herd/tasks/<slug>/task.toml`: a goal plus success criteria, each with a
 `check` command. `herd verify` runs the checks and stores evidence. `herd gate` (the
 Stop hook) and `herd done` refuse to finish without fresh, passing evidence and the run rules:
-red first, the standard attacks, frozen human criteria and, at medium and high risk, a review.
+red first, the standard attacks and frozen human criteria.
 """
 import sys
 
 if sys.version_info < (3, 11):  # keep this block parseable by old Pythons: it runs before tomllib is imported
-    if sys.argv[1:2] in (["gate"], ["lint"], ["preinit"], ["guard"], ["review-hook"]):
+    if sys.argv[1:2] in (["gate"], ["lint"], ["preinit"], ["guard"]):
         sys.exit(0)  # a hook must never break the session; the CLI says why below
     sys.exit("herd needs Python 3.11 or newer, found " + sys.version.split()[0])
 if sys.argv[1:2] == ["preinit"]:  # the PreToolUse hook runs before every Bash command: leave before the imports
@@ -137,6 +137,7 @@ VARIES = re.compile(r"\b(vary|varies|varied|varying|variation|generated?|random\
                     r"parametri[sz]ed|families|several|multiple|across|sizes?)\b", re.I)
 SCALED = re.compile(r"\b(scales?|sizes?|largest?|big|biggest|huge|time limit|timed|timing|seconds|performance|"
                     r"runtime|latency|up to \d+)\b", re.I)
+# "review" is never written since 0.13.0; it stays so the notes of a 0.12.x task are still counted and shown
 NOTE_KINDS = ("found", "fixed", "open", "tried", "decision", "late-red", "review", "human-change", "guard")
 # red first: files that do not count as code written before the first verify
 DOC_EXT = (".md", ".rst", ".txt",  # docs, and setup and config files
@@ -289,12 +290,10 @@ def init_task(root, slug, goal, quick_check=None, request=None):
     head = _git(root, "rev-parse", "HEAD").decode().strip() or None  # red first: what changed since here
     # ponytail: hashes every uncommitted file once at init (about 1 s per 20k small files); a git stat cache if slower
     changed = changed_since(root, head) or []
-    edits, log = _take_preinit(root, slug, changed)  # what this session edited before init is the agent's
+    edits = _take_preinit(root, slug, changed)  # what this session edited before init is the agent's
     dirty = {f: _file_sha(root, f) for f in changed if f not in edits}  # already there: not the agent's,
     (d / "start.json").write_text(json.dumps({"head": head, "risk": risk, "dirty": dirty,  # while unchanged
-                                              "stashes": _stash_shas(root)} | ({"agent_edits": edits} if edits else {})
-                                             | ({"transcript": log, "sessions": [log]} if log else {})
-                                             | {"review": dict(zip(("tiers", "step"), review_tiers(root)))})
+                                              "stashes": _stash_shas(root)} | ({"agent_edits": edits} if edits else {}))
                                   + "\n")
     if request is not None:
         (d / "request.md").write_text(request)
@@ -648,7 +647,7 @@ def _check_command(root, slug):
         start, snap = _state(d / "start.json", {}), git_state(root, fresh=True)
         changed = changed_since(root, start.get("head"), snap)
         changed = changed if changed is not None else changed_since(root, "HEAD", snap)
-        refused = review_needed({"route": task.get("route", "standard"), "risk": risk_of(root, start, changed)})
+        refused = full_rules({"route": task.get("route", "standard"), "risk": risk_of(root, start, changed)})
     for line in errs or ([] if refused else ["ok"]):
         print(line)
     for w in quotes if refused else []:
@@ -768,28 +767,27 @@ def preinit(hook):
     files = _edited_files(log) if log.is_file() else set()
     record = _preinit_path(where, slug)
     if record:
-        record.write_text(json.dumps({"at": datetime.now(timezone.utc).timestamp(), "transcript": str(log),
+        record.write_text(json.dumps({"at": datetime.now(timezone.utc).timestamp(),
                                       "files": sorted(str((cwd / f).resolve()) for f in files)}))
 
 
 def _take_preinit(root, slug, changed):
-    """The hook's record for this task, consumed: (changed paths, relative to root, the session edited before init;
-    the session log, which `herd status` reads for the builder's model, or None)."""
+    """The hook's record for this task, consumed: the changed paths, relative to root, the session edited before
+    init."""
     target = _preinit_path(root, slug)
     if not target or not target.exists():
-        return [], None
+        return []
     rec = _state(target, {})
     target.unlink(missing_ok=True)
     try:
         if datetime.now(timezone.utc).timestamp() - float(rec.get("at") or 0) > PREINIT_MAX_AGE:
-            return [], None
+            return []
         base = Path(root).resolve()
         edited = {str(Path(f).relative_to(base)) for f in rec.get("files") or []
                   if isinstance(f, str) and Path(f).is_relative_to(base)}
     except (TypeError, ValueError):  # a hand-edited record never stops `herd init`
-        return [], None
-    log = rec.get("transcript")
-    return sorted(f for f in changed if f in edited), log if isinstance(log, str) and log else None
+        return []
+    return sorted(f for f in changed if f in edited)
 
 
 def _git(root, *args):
@@ -1260,9 +1258,6 @@ def verify(root, slug):  # noqa: C901
     fails = _state(fails_path, {})
     fails = {r["id"]: fails.get(r["id"], 0) + 1 if r["status"] == "failing" and not first else 0 for r in results}
     fails_path.write_text(json.dumps(fails))  # the intended red run is not a failed attempt
-    if summary["passing"] and not summary["failing"] and not (d / "green.json").exists():
-        # all checks passed for the first time; "notes" orders it among the notes (timestamps are to the second)
-        (d / "green.json").write_text(json.dumps({"at": now(), "notes": len(load_notes(root, slug))}))
     timing, started_path = None, _dir(root, slug) / "started"
     if started_path.exists():  # wall clock from `herd init`, so it includes any waiting on the human
         started = started_path.read_text().strip()
@@ -1299,7 +1294,7 @@ def _check_programs(attack, check, programs):
 def add_note(root, slug, kind, text, attack=None, check=None, timeout=None, extra=None, refuses=None,
              example=None):
     """Append a note to the task's log: one of NOTE_KINDS (found, fixed, open for a known limit, tried for an
-    adversarial attempt, decision, late-red, review, human-change).
+    adversarial attempt, decision, late-red, human-change).
 
     attack names which standard attack a tried note covers (one of ATTACKS); check is the command that
     shows it, run by `herd verify`. An attack that cannot apply has no check and text starting `n/a:`.
@@ -1332,381 +1327,9 @@ def add_note(root, slug, kind, text, attack=None, check=None, timeout=None, extr
         f.write(json.dumps(rec) + "\n")
 
 
-def add_review(root, slug, by, text, extra=None):
-    """Record a review: who reviewed and what they found. At medium and high risk only one the review hook
-    records (extra has source "hook", the tiers and the verdict) counts; `herd review --by` is a note."""
-    if not text.strip() or not (by and by.strip()):
-        raise ValueError('use `herd review --by "<reviewer>" "<what they found>"`')
-    ev = load_evidence(root, slug) or {}  # the code state the review saw: it counts only for that state and risk
-    add_note(root, slug, "review", text, extra={"by": by.strip(), "content": ev.get("content"),
-                                                "risk": (ev.get("risk") or {}).get("effective")} | (extra or {}))
-
-
-def review_needed(ev):
-    """The standard route at medium and high risk needs a fresh-context review."""
+def full_rules(ev):
+    """The standard route at medium and high risk: required fields and the attacks' program runs apply."""
     return ev.get("route") != "quick" and (ev.get("risk") or {}).get("effective") in ("medium", "high")
-
-
-def review_state(root, slug, ev, notes):
-    """(counts, why not): the latest review counts only after all checks first passed, at the current risk or
-    above, and at high risk only for the content it saw (a commit alone does not change that)."""
-    rv = [n for n in notes if n["kind"] == "review"]
-    if not rv:
-        return False, "no review recorded"
-    n, green = rv[-1], _state(_dir(root, slug) / "green.json", {})
-    if n.get("over_cap"):
-        return False, "the review limit was reached before this review, so it cannot pass the task: stop and ask the human"
-    if not green or notes.index(n) < green.get("notes", len(notes)):
-        return False, "the review was recorded before all checks first passed: review the finished change"
-    risk = (ev.get("risk") or {}).get("effective", "medium")
-    if n.get("risk") not in LEVELS:
-        return False, "the review was recorded before any `herd verify`: review the finished change"
-    if LEVELS.index(n["risk"]) < LEVELS.index(risk):
-        return False, f"the risk rose to {risk} after the review: review again"
-    if risk == "high" and n.get("content") != ev.get("content"):  # a commit alone does not change the content
-        return False, "the code changed after the review, and the risk is high: review the final change"
-    return _tier_rule(root, slug, n)
-
-
-def _tier_rule(root, slug, n):
-    """(counts, why not) for a review note by the rules of the review hook (design B4)."""
-    if n.get("source") != "hook":
-        return False, "recorded by hand, not by the review hook: spawn herd-reviewer"
-    tiers, step = review_tiers(root, slug)
-    t = tiers.index(n["tier"]) if n.get("tier") in tiers else None
-    b = tiers.index(n["builder_tier"]) if n.get("builder_tier") in tiers else None
-    if t is None or b is None:
-        which = "reviewer's" if t is None else "builder's"
-        return False, f"the {which} model could not be read: {n.get('unread') or 'its tier is unknown'}"
-    if n.get("saw") is None:
-        return False, "the review was recorded before Herd 0.10.0 checked what the reviewer read: spawn herd-reviewer again"
-    if not n["saw"] and n.get("diff_seen") and n.get("new_unread"):  # 0.12.1: new files are in no git diff
-        return False, (f"the reviewer printed the diff but did not read these new files, which no git diff shows: "
-                       f"{', '.join(n['new_unread'])}: spawn herd-reviewer again with what `herd review-brief` prints")
-    if not n["saw"]:
-        missed = n.get("code_unread") or []
-        more = (n.get("code_total") or 0) - (n.get("code_read") or 0) - len(missed)
-        return False, (f"the reviewer did not read: {', '.join(missed)}{f' and {more} more' if more > 0 else ''}, and "
-                       "ran no `git diff` or `git show`: spawn herd-reviewer again and have it read the diff")
-    if n.get("verdict") != "PASS":
-        return False, "the review found Blocker or Major issues, or gave no verdict: fix them and review again"
-    need = _need(tiers, b, step)
-    if t < need:
-        return False, (f"review by {tiers[t]} does not count: the builder ran on {tiers[b]}, the reviewer must be "
-                       f"{tiers[need]} or higher. Spawn herd-reviewer with model {tiers[need]}")
-    return True, None
-
-
-# ---- review hook ----------------------------------------------------------
-
-REVIEWER = "herd:herd-reviewer"  # the plugin agent's agent_type (spike S3); a project's own copy does not count
-DEFAULT_TIERS, DEFAULT_STEP = ("haiku", "sonnet", "opus"), 1  # 0.10.0: one tier above again (0 in 0.8 and 0.9)
-VERDICT = re.compile(r"\s*HERD-REVIEW: (PASS|FAIL)\s*")
-REVIEW_CHARS = 2000
-READERS = {"cat", "nl", "less", "more", "head", "tail", "bat", "sed"}  # Bash commands that print a file's lines
-SHOWS_CHANGE = ("git diff", "git show", "git log -p", "git log --patch")
-SUMMARY_ONLY = {"--stat", "--shortstat", "--numstat", "--dirstat", "--name-only", "--name-status", "--summary",
-                "--compact-summary", "--raw", "--quiet", "--no-patch", "-s", "--check", "--output"}  # no changed lines
-# `path:line` or `path:first-last` in a report: a path with a file extension or a folder; not a URL, time or C1:2
-REF = re.compile(r"(?<![\w/.:-])(/?(?:[\w.-]+/)*[\w-][\w.-]*\.[A-Za-z]\w*|/?(?:[\w.-]+/)+[\w.-]+):(\d+)(?:-(\d+))?(?![\w-])")
-MAX_REFS = 20
-
-
-REVIEW_CAP = "sonnet"  # 0.12.8, owner: a Sonnet builder gets a Sonnet reviewer, not Opus (low measured review yield)
-
-
-def _need(tiers, b, step):
-    """Index of the lowest reviewer tier that counts for a builder at index b: step tiers above, capped at the top
-    tier and at REVIEW_CAP, but never below the builder's own tier (Opus still reviews Opus)."""
-    top = len(tiers) - 1
-    cap = tiers.index(REVIEW_CAP) if REVIEW_CAP in tiers else top
-    return max(b, min(b + step, top, cap))
-
-
-def review_tiers(root, slug=None):
-    """([review] tiers, lowest first, and step): for a task, as herd.toml had them at `herd init` (so an edit
-    during the task cannot change the rule); otherwise from herd.toml. Unreadable or odd means the defaults."""
-    cfg = _state(_dir(root, slug) / "start.json", {}).get("review") if slug else None
-    if not isinstance(cfg, dict):
-        try:
-            cfg = tomllib.loads((Path(root) / "herd.toml").read_text()).get("review")
-        except (OSError, tomllib.TOMLDecodeError):
-            cfg = None
-    cfg = cfg if isinstance(cfg, dict) else {}
-    tiers, step = cfg.get("tiers"), cfg.get("step")
-    ok = isinstance(tiers, list) and tiers and all(isinstance(t, str) and t.strip() for t in tiers)
-    tiers = [t.strip().lower() for t in tiers] if ok else list(DEFAULT_TIERS)
-    return tiers, step if isinstance(step, int) and not isinstance(step, bool) and step >= 0 else DEFAULT_STEP
-
-
-def tier_of(model, tiers):
-    """The first tier whose name the model id contains, or None."""
-    return next((t for t in tiers if isinstance(model, str) and t in model.lower()), None)
-
-
-def _assistant_lines(path, last_turn=False):
-    """The assistant lines of a Claude Code session log, as dicts; an unreadable file gives none. With last_turn,
-    only those after the last prompt (a user line that is not a tool result), so an old turn's report is not read."""
-    try:
-        raw = Path(path).read_text(encoding="utf-8", errors="replace").splitlines()
-    except (OSError, TypeError, ValueError):
-        return []
-    out = []
-    for line in raw:
-        try:
-            d = json.loads(line)
-        except ValueError:
-            continue
-        if not isinstance(d, dict) or not isinstance(d.get("message"), dict):
-            continue
-        content = d["message"].get("content")
-        if last_turn and d.get("type") == "user" and not (isinstance(content, list) and any(
-                isinstance(c, dict) and c.get("type") == "tool_result" for c in content)):
-            out = []
-        elif d.get("type") == "assistant":
-            out.append(d)
-    return out
-
-
-def _model(line):
-    m = line["message"].get("model")
-    return m if isinstance(m, str) and m and m != "<synthetic>" else None
-
-
-def _final_text(lines):
-    """The reviewer's report: the last assistant text block or SubagentHandback message (spike S3)."""
-    for line in reversed(lines):
-        content = line["message"].get("content")
-        for c in reversed(content if isinstance(content, list) else []):
-            if not isinstance(c, dict):
-                continue
-            if c.get("type") == "text" and isinstance(c.get("text"), str) and c["text"].strip():
-                return c["text"]
-            if c.get("type") == "tool_use" and c.get("name") == "SubagentHandback":
-                msg = (c.get("input") or {}).get("message") if isinstance(c.get("input"), dict) else None
-                if isinstance(msg, str) and msg.strip():
-                    return msg
-    return None
-
-
-def _when(stamp):
-    try:
-        t = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    return t if t.tzinfo else t.replace(tzinfo=timezone.utc)  # a stamp without a zone is UTC, like Herd's own
-
-
-def builder_tier(path, since, tiers):
-    """(the builder's highest tier among the main log's assistant lines at or after since, or None; why None)."""
-    start = _when(since) if since else None
-    lines = [ln for ln in _assistant_lines(path) if _model(ln)
-             and (start is None or ((w := _when(ln.get("timestamp"))) is not None and w >= start))]
-    if not lines:
-        return None, f"no model in the main session log {path} since the task started"
-    models = list(dict.fromkeys(_model(ln) for ln in lines))
-    unknown = [m for m in models if tier_of(m, tiers) is None]
-    if unknown:
-        return None, f"{unknown[0]} matches no tier"
-    return max((tier_of(m, tiers) for m in models), key=tiers.index), None
-
-
-def review_need(root, slug):
-    """(the tier the reviewer needs or None, the builder's tier or why it is unknown), from the latest session log
-    the gate or `herd init` saw."""
-    tiers, step = review_tiers(root, slug)
-    log = _state(_dir(root, slug) / "start.json", {}).get("transcript")
-    started = _dir(root, slug) / "started"
-    try:
-        since = started.read_text().strip()
-    except OSError:
-        since = None
-    b, why = builder_tier(log, since, tiers) if isinstance(log, str) else (None, "the builder's model is not known yet")
-    return (tiers[_need(tiers, tiers.index(b), step)], b) if b else (None, why)
-
-
-def _shows_change(words, cwd):
-    """A git command that prints the changed lines: diff, show, or log with a patch, without a summary-only flag."""
-    if not any(_rule_hit(r, words, cwd) for r in SHOWS_CHANGE):
-        return False
-    if any(REDIRECT.fullmatch(w) for w in words):  # `git diff > d.txt` or `> /dev/null`: the reviewer saw nothing
-        return False
-    return bool({"-p", "-u", "--patch"} & set(words)) or not any(w.split("=", 1)[0] in SUMMARY_ONLY for w in words)
-
-
-def reviewer_saw(root, cwd, lines):  # noqa: C901
-    """(whether the reviewer ran a git command that prints the change, the files under root it read), from the tool
-    calls in its log: Read, and Bash readers such as cat or sed. Shell text is read as the guard reads it."""
-    base, diff, read = os.path.realpath(root), False, set()
-
-    def rel(path, here):
-        try:
-            full = os.path.realpath(os.path.join(here, os.path.expanduser(path)))
-        except (ValueError, OSError):  # a NUL in the path and the like: not a file it read
-            return None
-        return Path(full).relative_to(base).as_posix() if full.startswith(base + os.sep) else None
-    for line in lines:
-        content = line["message"].get("content")
-        for c in content if isinstance(content, list) else []:
-            inp = c.get("input") if isinstance(c, dict) and c.get("type") == "tool_use" else None
-            if not isinstance(inp, dict):
-                continue
-            if c.get("name") == "Read" and isinstance(inp.get("file_path"), str) and inp["file_path"]:
-                read.add(rel(inp["file_path"], cwd))
-            elif c.get("name") == "Bash" and isinstance(inp.get("command"), str):
-                here = cwd
-                for words in _segments(inp["command"]):
-                    name = Path(words[0]).name
-                    if name in ("cd", "pushd") and len(words) > 1:
-                        here = os.path.normpath(os.path.join(here, os.path.expanduser(words[1])))
-                    elif name == "git":
-                        diff = diff or _shows_change(words, here)
-                    elif name in READERS:
-                        read |= {rel(w, here) for w in words[1:] if not w.startswith("-")}
-    read.discard(None)
-    return diff, read
-
-
-def bad_refs(root, text):
-    """The `path:line` references of a report whose file is not in the repository or whose line is past its end."""
-    tops = list(dict.fromkeys(os.path.realpath(t) for t in (root, toplevel(root))))
-    files = None  # the repository's files, listed once, for a path given without its folders (herd.py:5)
-    out = []
-    for m in REF.finditer(text or ""):
-        path, first, last = m[1], int(m[2]), int(m[3] or m[2])
-        found = [f for t in tops if (f := os.path.realpath(os.path.join(t, path))).startswith(t + os.sep)
-                 and os.path.isfile(f)][:1]
-        if not found and not path.startswith(("/", "../")):
-            if files is None:
-                files = _git(root, "ls-files", "--cached", "--others", "--exclude-standard").decode().splitlines()
-            found = [os.path.join(root, f) for f in files if f == path or f.endswith("/" + path)]
-        sizes = []
-        for f in found:
-            try:
-                sizes.append(len(Path(f).read_bytes().splitlines()))
-            except OSError:
-                pass
-        why = ("no such file in the repository" if not sizes else None if any(1 <= first <= last <= n for n in sizes)
-               else "lines start at 1" if first < 1
-               else f"{path} has {max(sizes)} line{'s' if max(sizes) != 1 else ''}")
-        if why and f"{m[0]} ({why})" not in out:
-            out.append(f"{m[0]} ({why})")
-    return out[:MAX_REFS]
-
-
-def untracked(root):
-    """Paths (relative to root) git does not track yet and does not ignore: in no `git diff`."""
-    return set(_git(root, "ls-files", "--others", "--exclude-standard").decode().splitlines())
-
-
-def review_files(root, slug):
-    """(the changed files a reviewer must read unless it prints the diff, or None when the changes cannot be told;
-    whether they are every changed file because no code file changed). The review hook counts against this list,
-    and `herd review-brief` prints it, so the brief and the check agree."""
-    start = _state(_dir(root, slug) / "start.json", {})
-    mine = task_changes(root, start, changed_since(root, start.get("head")))
-    code = None if mine is None else [f for f in mine if is_code(f, root)]
-    files = [f for f in mine or [] if not (f.lower().endswith(BUILT_EXT) or BUILT_DIRS & set(Path(f).parts))]
-    any_file = code == [] and bool(files)  # no code changed (tests, config, CI): every changed file but build output
-    return (files if any_file else code), any_file
-
-
-def pass_hint(root, slug, ev, notes):
-    """One line once a review that counts is recorded for this content: stop working, commit, `herd done`; and what
-    the review rule does with later edits at this risk. None otherwise."""
-    if (not ev or not review_needed(ev) or ev["summary"]["failing"] or _stale(root, slug, ev)
-            or not review_state(root, slug, ev, notes)[0]):
-        return None
-    later = ("at high risk any file you change after it needs another review (a commit alone does not)"
-             if (ev.get("risk") or {}).get("effective") == "high" else
-             "at medium risk it keeps counting after edits unless the risk rises to high, but no reviewer sees them")
-    return (f"Review passed and counts: fix only Blocker and Major findings, start no new work, commit and run "
-            f"`herd done`; {later}")
-
-
-def review_brief(root, slug):
-    """The reviewer's brief, assembled from Herd's records, for the builder to pass to herd-reviewer as it is: the
-    goal, the criteria with their checks, test_budget, known_limits, the request verbatim, the inputs, the files the
-    review hook will check were read, and the diff command from the commit `herd init` started from."""
-    task, d = load_task(root, slug), _dir(root, slug)
-    head = _state(d / "start.json", {}).get("head")
-    req = (d / "request.md").read_text() if (d / "request.md").exists() else None
-    files, any_file = review_files(root, slug)
-    out = ["Review this finished change for Herd. Judge only what you read and run.", "", f"Goal: {task.get('goal', '')}",
-           "", "Criteria (id, source, text, check):"]
-    out += [f"- {c.get('id', '?')} ({c.get('source', '?')}): {c.get('text', '')}"
-            + (f" Check: `{c['check']}`" if str(c.get("check") or "").strip() else " Check: none (unchecked)")
-            for c in task.get("criteria", []) if isinstance(c, dict)]
-    out += ["", f"Test budget: {task.get('test_budget') or 'none stated'}",
-            f"Known limits: {task.get('known_limits') or 'none stated'}"]
-    if isinstance(task.get("inputs"), list) and any(isinstance(x, dict) for x in task["inputs"]):
-        out.append(inputs_line(task["inputs"]))
-    out += ["", "The human's request, word for word:", req.strip() if req else "(none recorded)", ""]
-    if files is None:
-        out.append("Changed files: unknown (no commit at `herd init`): read the diff with `git diff HEAD` and "
-                   "`git status`.")
-    else:
-        what = "changed files (no code file changed)" if any_file else "changed code files"
-        out.append(f"Read every one of these {len(files)} {what} with Read before you judge, or print the whole diff:")
-        out += [f"- {f}" for f in files] or ["- (none)"]
-        out.append(f"Diff, committed and not: `git diff {head}`")
-        new = [f for f in files if f in untracked(root)]
-        if new:  # no git diff shows a file git does not track: the review hook needs these read either way
-            out.append("New files, in no `git diff`: read each one with Read: " + ", ".join(new))
-    return "\n".join(out) + "\n"
-
-
-def review_hook(root, hook):
-    """SubagentStop hook for the herd-reviewer agent: record its review from the session logs, never from what
-    an agent writes. Never blocks and prints nothing; other agents and stops with no active task do nothing."""
-    if not isinstance(hook, dict) or hook.get("agent_type") != REVIEWER:
-        return
-    slug = active_slug(root)
-    if not slug or not _dir(root, slug).exists() or cancelled(root, slug):
-        return
-    tiers, _ = review_tiers(root, slug)
-    main, rev = hook.get("transcript_path"), hook.get("agent_transcript_path")
-    try:  # where Claude Code keeps a subagent's log (spike S3): <session>.jsonl and <session>/subagents/agent-<id>.jsonl
-        home = Path(main).parent / Path(main).stem / "subagents" / f"agent-{hook.get('agent_id')}.jsonl"
-        placed = Path(os.path.realpath(home)) == Path(os.path.realpath(rev))
-    except (TypeError, ValueError):
-        placed = False
-    lines = _assistant_lines(rev) if placed else []
-    model = next((m for m in map(_model, reversed(lines)) if m), None)
-    text = _final_text(_assistant_lines(rev, last_turn=True)) if placed else None
-    if text is None and isinstance(hook.get("last_assistant_message"), str):
-        text = hook["last_assistant_message"]
-    last = next((line for line in reversed((text or "").splitlines()) if line.strip()), "")
-    found = VERDICT.fullmatch(last.strip().strip("`*_"))  # Markdown around the line is formatting, not a new verdict
-    tier = tier_of(model, tiers)
-    started = _dir(root, slug) / "started"
-    since = started.read_text().strip() if started.exists() else None
-    sessions = _state(_dir(root, slug) / "start.json", {}).get("sessions") or []
-    known = {os.path.realpath(x) for x in sessions if isinstance(x, str)}
-    if isinstance(main, str) and os.path.realpath(main) in known:
-        btier, bwhy = builder_tier(main, since, tiers)
-    else:  # logs the agent wrote itself, handed to a copy of this hook: not a session Claude Code ran
-        btier, bwhy = None, ("the main session log is not one Herd saw (only the pre-init hook, the guard and the "
-                             "Stop gate record sessions)")
-    unread = (f"the reviewer's log is not where Claude Code keeps it ({rev})" if not placed
-              else None if tier else f"{model} matches no tier" if model else f"no model in the reviewer's log {rev}")
-    diff, read = reviewer_saw(root, str(hook.get("cwd") or root), lines)
-    code, any_file = review_files(root, slug)
-    new = [f for f in code or [] if f in untracked(root) and f not in read]  # in no git diff: must be read
-    extra = {"source": "hook", "tier": tier, "builder_tier": btier, "top": tier == tiers[-1],
-             "verdict": found[1] if found else "none", "unread": unread or bwhy,
-             # what the reviewer saw (0.10.0): it counts only if it printed the diff or read every changed code file
-             "diff_seen": diff, "code_total": None if code is None else len(code),
-             "code_read": None if code is None else sum(f in read for f in code),
-             "code_unread": [f for f in code or [] if f not in read][:MAX_REFS], "any_file": any_file,
-             "new_unread": new[:MAX_REFS], "bad_refs": bad_refs(root, text),
-             "saw": code is None or all(f in read for f in code) or (diff and not new)}
-    # a round, for escalation and the report: after all checks first passed, by a reviewer whose tier would count
-    extra["round"] = (_dir(root, slug) / "green.json").exists() and _tier_rule(root, slug, dict(extra, verdict="PASS"))[0]
-    if len(_reviews_since_pass(load_notes(root, slug))) >= MAX_REVIEW_ROUNDS:  # recorded, but it cannot pass or reset
-        extra.update(over_cap=True, round=False)
-    add_review(root, slug, by=model or "an unknown model", text=_clip((text or "").strip() or "(no report)", REVIEW_CHARS),
-               extra=extra)
 
 
 def _refusals_not_run(ev):
@@ -1717,7 +1340,7 @@ def _refusals_not_run(ev):
 
 
 def final_report(root, slug, ev, notes):
-    """The run skill's seven-line final report, filled from the evidence and the notes."""
+    """The run skill's six-line final report, filled from the evidence and the notes."""
     results = ev["results"]
     proven = [r for r in results if r["status"] == "passing" and not r.get("zero_tests")]
     branch = _branch(root) or "no branch"
@@ -1728,9 +1351,6 @@ def final_report(root, slug, ev, notes):
     gaps = [f"{r['id']} {r['status']}" for r in results if r["status"] != "passing"]
     gaps += [f"{r['id']} ran zero tests" for r in results if r.get("zero_tests")]
     gaps += [n["text"] for n in notes if n["kind"] == "open"] + _refusals_not_run(ev) + _rule_lines(ev, notes)
-    review = _review(notes)
-    if ev.get("route") != "quick" and (review is None or review.startswith("skipped:")):
-        gaps.append("unreviewed")
     caveats = [f"{n['kind']}" + (f" at {fmt_duration(n['elapsed_s'])}" if n.get("elapsed_s") is not None else "")
                + f": {n['text']}" for n in notes if n["kind"] in ("found", "fixed")]
     stop = load_stop(root, slug)
@@ -1742,8 +1362,7 @@ def final_report(root, slug, ev, notes):
             f"Not proven: {'; '.join(gaps) if gaps else 'nothing open'}.",
             f"Caveats: {'; '.join(caveats) if caveats else 'none'}.",
             f"Decisions: {' | '.join(decisions) if decisions else 'none recorded'}.",
-            f"Limits: {(ev.get('known_limits') or 'none stated').rstrip('.')}.",
-            f"Review: {review or ('not needed (quick route)' if ev.get('route') == 'quick' else 'none recorded')}".rstrip('.') + "."]
+            f"Limits: {(ev.get('known_limits') or 'none stated').rstrip('.')}."]
 
 
 def load_notes(root, slug):
@@ -1807,73 +1426,10 @@ def _attack_line(notes, attacks):
 
 
 def _first_line(text, limit=200):
-    """A review report's first line that is not its verdict, for the one-line report; the notes keep the rest."""
-    line = next((x.strip() for x in str(text).splitlines() if x.strip() and not VERDICT.fullmatch(x)), "(no report)")
+    """For a review note of a 0.12.x task: its first line that is not the verdict; the notes keep the rest."""
+    line = next((x.strip() for x in str(text).splitlines()
+                 if x.strip() and not x.strip().startswith("HERD-REVIEW:")), "(no report)")
     return _clip(line, limit)
-
-
-def _failed_rounds(notes):
-    """Review rounds (see review_hook) without PASS since the last PASS, before the latest review."""
-    rv = [n for n in notes if n["kind"] == "review" and n.get("round")]
-    rv = rv[:-1] if rv and notes and rv[-1] is [n for n in notes if n["kind"] == "review"][-1] else rv
-    return len(rv) - next((i + 1 for i in range(len(rv) - 1, -1, -1) if rv[i].get("verdict") == "PASS"), 0)
-
-
-MAX_REVIEW_ROUNDS = 2  # reviewer runs since the last PASS that counts; the next one is refused (issue #45)
-LIMIT_RESET = "review limit"  # a `herd note --decision` starting with these words, from the human, resets the count
-OPEN_FINDING = re.compile(r"^\W*(Blocker|Major)\b", re.I)
-
-
-def _reviews_since_pass(notes):
-    """Reviews the hook recorded since the last PASS that counts as a round, or the last reset decision note."""
-    start = 0
-    for i, n in enumerate(notes):
-        if (n.get("kind") == "review" and n.get("round") and n.get("verdict") == "PASS") or (
-                n.get("kind") == "decision" and str(n.get("text", "")).lower().startswith(LIMIT_RESET)):
-            start = i + 1
-    return [n for n in notes[start:] if n.get("kind") == "review" and n.get("source") == "hook"]
-
-
-def review_limit(notes):
-    """The message once MAX_REVIEW_ROUNDS reviews ran since the last PASS (every run counts, round or not): stop and
-    ask the human, with the open Blocker and Major lines of the last review. None below the limit."""
-    rv = _reviews_since_pass(notes)
-    if len(rv) < MAX_REVIEW_ROUNDS:
-        return None
-    open_ = [x.strip() for x in str(rv[-1].get("text", "")).splitlines() if OPEN_FINDING.match(x)]
-    return (f"review limit reached: {len(rv)} reviews since the last PASS (limit {MAX_REVIEW_ROUNDS}). Run no more "
-            "reviews: stop and ask the human one question. Open Blocker and Major findings from the last review: "
-            + ("; ".join(open_) if open_ else "none listed")
-            + ". The human lifts the limit with `herd note --decision \"Review limit: <what the human said>\"`.")
-
-
-def _seen(n):
-    """How much of the change a hook-recorded reviewer saw, from its log: `ran git diff or git show, read 2 of 3
-    changed code files`; empty for a review recorded before 0.10.0."""
-    if n.get("saw") is None:
-        return ""
-    total = n.get("code_total")
-    return ("; " + ("ran git diff or git show" if n.get("diff_seen") else "no git diff or git show") + ", "
-            + (f"read {n.get('code_read')} of {total} changed {'' if n.get('any_file') else 'code '}file{'s' if total != 1 else ''}"
-               if isinstance(total, int) else "changed files unknown"))
-
-
-def _review(notes):
-    """The latest review note as one phrase: "<who>: <what>", "skipped: <why>", or None."""
-    rv = [n for n in notes if n["kind"] == "review"]
-    if not rv:
-        return None
-    n = rv[-1]
-    if n.get("skipped"):
-        return f"skipped: {n['text']}"
-    if n.get("source") == "hook":
-        same = "; same tier" if n.get("top") and n.get("tier") == n.get("builder_tier") else ""
-        failed = _failed_rounds(notes)
-        after = f", after {failed} round{'s' if failed != 1 else ''} without PASS" if failed else ""
-        return (f"{n.get('by', 'reviewer')} ({n.get('tier') or 'unknown tier'}, builder on "
-                f"{n.get('builder_tier') or 'an unknown tier'}{same}; {n.get('verdict', 'none')}{after}{_seen(n)}): "
-                f"{_first_line(n['text'])}")
-    return f"{n.get('by', 'reviewer')}: {n['text']}"
 
 
 def _early_code(ev):
@@ -1884,7 +1440,7 @@ def _early_code(ev):
 
 
 def _rule_lines(ev, notes):
-    """What the run-rule checks found, one line each: red first, criteria changes, review, warnings."""
+    """What the run-rule checks found, one line each: red first, criteria changes, warnings."""
     out = []
     code = _early_code(ev)
     if ev.get("red") and ev["red"].get("code_before") is None:
@@ -1911,11 +1467,6 @@ def _rule_lines(ev, notes):
         out.append("Red first not proven: a git stash was made on this branch before the first verify")
     out += [f"Human criterion changed with the human's words, for you to confirm: {n['text']}"
             for n in notes if n["kind"] == "human-change"]
-    rv = [n for n in notes if n["kind"] == "review" and not n.get("skipped")]
-    if rv and rv[-1].get("content") and rv[-1]["content"] != ev.get("content"):
-        out.append("The code changed after the review")
-    if rv and rv[-1].get("bad_refs"):  # recorded, never refused: an old line number can be the diff's left side
-        out.append("The review cites lines not in the repository now: " + "; ".join(rv[-1]["bad_refs"]))
     return out
 
 
@@ -1948,8 +1499,6 @@ def report(ev, notes=None):  # noqa: C901
     if ev.get("risk"):
         rk = ev["risk"]
         lines.append(f"Risk: {rk['effective']}" + (f" (changed files match {', '.join(rk['rules'])})" if rk["rules"] else ""))
-    if ev.get("route") != "quick":
-        lines.append(f"Review: {_review(notes) or 'none recorded'}")
     lines += _rule_lines(ev, notes)
     if ev.get("warnings"):
         lines += ["", "Warnings from herd check:"] + [f"- {w}" for w in ev["warnings"]]
@@ -2087,12 +1636,6 @@ def pr_body(root, slug):  # noqa: C901
     guarded = guard_line(notes)
     if guarded:
         gaps.append(f"- {guarded}: the agent tried these; check that nothing was done another way")
-    review = _review(notes)
-    if ev.get("route") != "quick" and (review is None or review.startswith("skipped:")):
-        gaps.append(f"- The change is unreviewed: {review[len('skipped: '):] if review else 'no review recorded'}")
-    if _failed_rounds(notes):
-        gaps.append(f"- {_failed_rounds(notes)} review round{'s' if _failed_rounds(notes) != 1 else ''} found Blocker "
-                    "or Major issues before the PASS: read them in the caveat log")
     if ev.get("warnings"):
         w = ev["warnings"]
         gaps.append(f"- {len(w)} `herd check` warning{'s' if len(w) != 1 else ''}"
@@ -2251,22 +1794,17 @@ NEXT_STEPS = ((re.compile(r"^(.+?) is failing: "), "fix {0}, then run `herd veri
                "add top-level `[[inputs]]` tables with `human` and `program` to task.toml, then run `herd verify`"),
               (re.compile(r"^coverage of human criterion (\S+) is empty"),
                "add `coverage` to human criterion {0}, then run `herd verify`"),
-              (re.compile(r"^review missing.*?Spawn the herd-reviewer subagent with model ([\w.-]+)"),
-               "spawn herd-reviewer with model {0}, then run `herd verify`"),
-              (re.compile(r"^review missing"), "spawn herd-reviewer one tier above the builder, then run `herd verify`"),
               (re.compile(r"^adversarial pass incomplete"), "log each missing standard attack with `herd note --tried "
                                                             "--attack <name> --check \"<command>\"`, then run `herd verify`"))
 
 
 def _escalations(root, slug):
-    """Why the agent must ask the human now: criteria that failed ESCALATE_AFTER verifies in a row, and the
-    review limit (MAX_REVIEW_ROUNDS reviews since the last PASS)."""
+    """Why the agent must ask the human now: criteria that failed ESCALATE_AFTER verifies in a row."""
     try:
-        out = [f"{cid} failed {ESCALATE_AFTER} times in a row" for cid in (load_evidence(root, slug) or {}).get("escalate") or []]
-        limit = review_limit(load_notes(root, slug))
+        return [f"{cid} failed {ESCALATE_AFTER} times in a row"
+                for cid in (load_evidence(root, slug) or {}).get("escalate") or []]
     except STATE_ERRORS:
         return []
-    return out + ([f"review limit reached (limit {MAX_REVIEW_ROUNDS} reviews since the last PASS)"] if limit else [])
 
 
 def next_step(probs):
@@ -2286,7 +1824,7 @@ def write_stop(root, slug, reason, detail=""):  # noqa: C901
     if reason not in STOP_REASONS:
         raise ValueError(f"stop reason must be one of {STOP_REASONS}")
     d = _dir(root, slug)
-    ev, notes, probs, lost = None, [], [], False
+    ev, probs, lost = None, [], False
     try:
         ev = load_evidence(root, slug)
         if ev is not None and not isinstance(ev, dict):
@@ -2294,20 +1832,14 @@ def write_stop(root, slug, reason, detail=""):  # noqa: C901
     except STATE_ERRORS as e:
         ev, probs, lost = None, [f"evidence.json is unreadable: {e}"], True
     try:
-        notes = load_notes(root, slug)
+        load_notes(root, slug)
     except STATE_ERRORS as e:
         probs.append(f"notes.jsonl is unreadable: {e}")
         lost = True
-    review = evidence = None
+    evidence = None
     if not probs:
         try:
             probs = problems(root, slug)
-            if ev:
-                ok, why = review_state(root, slug, ev, notes)
-                latest = _review(notes)
-                review = {"needed": (review_need(root, slug)[0] or "one tier above the builder")
-                          if review_needed(ev) else None,
-                          "latest": None if latest is None else _clip(latest, 200) + ("" if ok else f" (does not count: {why})")}
         except STATE_ERRORS as e:  # valid JSON of the wrong shape, a deleted task.toml
             probs, lost = [f"a state file is unreadable or has the wrong shape: {e!r}"], True
     try:  # kept when only notes.jsonl is bad
@@ -2333,7 +1865,7 @@ def write_stop(root, slug, reason, detail=""):  # noqa: C901
     except (OSError, ValueError):  # missing or hand-edited: the rest of the record still counts
         elapsed = None
     rec = {"at": now(), "reason": reason, "detail": detail, "problems": probs,
-           "evidence": evidence, "review": review,
+           "evidence": evidence,
            # blocked stop attempts: on problems, or reminders to run `herd done` (done_refused)
            "elapsed_s": elapsed, "gate_blocks": max(_count(d / "gate_blocks"), _count(d / "done_blocks")),
            "resumable": resumable, "next": step}
@@ -2362,7 +1894,7 @@ def stop_line(rec):
 
 # ---- guard hook -----------------------------------------------------------
 
-# Herd's state files, written only by the herd CLI: the design's list (G3), plus `started` (the review window),
+# Herd's state files, written only by the herd CLI: the design's list (G3), plus `started`,
 # `request.md` (the human's words) and `.herd/active` (removing it switches the gate off). task.toml is the agent's.
 GUARD_STATE = ("evidence.json", "notes.jsonl", "start.json", "red.json", "frozen.json", "green.json", "fails.json",
                "stopped.json", "gate_blocks", "done_blocks", "cancelled", "started", "request.md", "base", "pr")
@@ -2388,7 +1920,7 @@ WRAPPERS = {"env": ("-u", "-C", "-S", "--unset", "--chdir", "--split-string"),
             "command": (), "time": (), "nohup": (), "exec": ("-a",), "nice": ("-n",),
             "timeout": ("-s", "-k", "--signal", "--kill-after"),  # then a duration
             "xargs": ("-n", "-I", "-P", "-L", "-d", "-s", "-E", "-a")}
-HOOK_COMMANDS = ("gate", "preinit", "guard", "review-hook")  # Claude Code runs these; the agent never needs to
+HOOK_COMMANDS = ("gate", "preinit", "guard")  # Claude Code runs these; the agent never needs to
 SUBST = re.compile(r"\$\(([^()]*)\)|`([^`]*)`")  # command substitution, which runs inside double quotes too
 KEYWORDS = ("if", "then", "do", "else", "elif", "while", "until", "!", "{", "}")
 SEPARATORS = {"&&", "||", ";", ";;", "|", "|&", "&", "(", ")"}
@@ -2634,9 +2166,6 @@ def guard(root, hook):  # noqa: C901
     slug = active_slug(root)
     if not slug or not _dir(root, slug).exists() or cancelled(root, slug):
         return None
-    if "agent_id" not in hook:  # a subagent's own call: the main session is what the review hook asks about
-        # issue #40: `herd init` through $H or an alias is unreadable to the pre-init hook
-        _see_session(root, slug, hook.get("transcript_path"))
     tool, inp = hook.get("tool_name"), hook.get("tool_input")
     inp, cwd = inp if isinstance(inp, dict) else {}, str(hook.get("cwd") or root)
     globs, commands = guard_config(root)
@@ -2650,13 +2179,13 @@ def guard(root, hook):  # noqa: C901
     if plugin and (project == plugin or project.startswith(plugin + os.sep) or plugin.startswith(project + os.sep)):
         plugin = None  # developing Herd with Herd: the plugin is the project
 
-    def _session_log(path):  # the session logs (*.jsonl, subagents/), which the review hook reads; memory/ stays free
+    def _session_log(path):  # the session logs (*.jsonl, subagents/), which the pre-init hook reads; memory/ stays free
         full = os.path.realpath(os.path.join(here if tool == "Bash" else cwd, os.path.expanduser(path)))
         if plugin and (full == plugin or full.startswith(plugin + os.sep)):
-            return "Herd plugin", ("Herd guard: the installed Herd plugin (its hooks and the herd-reviewer agent) is "
+            return "Herd plugin", ("Herd guard: the installed Herd plugin (its hooks and skills) is "
                                    "not edited during a task. Ask the human one question and stop.")
         return logs and full.startswith(logs + os.sep) and (full.endswith(".jsonl") or f"{os.sep}subagents{os.sep}" in full) and (
-            "session log", "Herd guard: Claude Code's session logs are read by the review hook and written only by "
+            "session log", "Herd guard: Claude Code's session logs are read by Herd and written only by "
             "Claude Code. Ask the human one question and stop.")
     here = cwd
     if tool in EDIT_TOOLS:
@@ -2671,8 +2200,7 @@ def guard(root, hook):  # noqa: C901
                            if words[i + 1] in HOOK_COMMANDS and "herd" in w.lower()), None)
             if hooked:
                 hit = f"herd {hooked}", (f"Herd guard: `herd {hooked}` runs only as a Claude Code hook, with Claude "
-                                         "Code's own input. For a review, spawn the herd-reviewer subagent; the hook "
-                                         "records it.")
+                                         "Code's own input.")
                 break
             unstage = UNSTAGE[0] & set(words) and not UNSTAGE[1] & set(words)
             dry = DRY_RUN & set(words[1:]) or ("clean" in words and any(SHORT.fullmatch(w) and "n" in w for w in words))
@@ -2706,7 +2234,7 @@ def guard_line(notes):
 
 def missing_programs(ev):
     """At medium and high risk, the attacks whose latest note lacks its --refuses or --example (n/a needs none)."""
-    if not review_needed(ev):
+    if not full_rules(ev):
         return []
     latest = {a["attack"]: a for a in ev.get("attacks") or []}
     return [f"{name} has no --{flag}: log it again with `herd note --tried --attack {name} --check \"<tests>\" "
@@ -2775,38 +2303,15 @@ def problems(root, slug):  # noqa: C901
             "and put your own scenario in an agent-proposed criterion; if the human reworded it or wrote it elsewhere "
             f"(a file they named), record their words with `herd note --human-change \"{cid}: <their words>\"`"
             for cid in ev.get("human_not_verbatim") or []]  # None: no request recorded, so nothing to quote
-    if review_needed(ev):  # the standard route at medium and high risk: only absence is refused, the words are yours
+    if full_rules(ev):  # the standard route at medium and high risk: only absence is refused, the words are yours
         out += [f"{key} is empty: add to task.toml `{key} = \"{what}\"`" for key, what in REQUIRED.items()
                 if not str(ev.get(key) or "").strip()]
         out += [f"coverage of human criterion {r['id']} is empty: add `coverage = \"<what its check proves and what "
                 "it does not>\"` to it" for r in ev["results"] if r["source"] == "human" and not str(r.get("coverage") or "").strip()]
         out += ev.get("inputs_left") or []  # structure only: missing, misplaced inside a criterion, or incomplete
-    risk = (ev.get("risk") or {}).get("effective")
-    ok, why = review_state(root, slug, ev, notes)
-    if review_needed(ev) and not ok and review_limit(notes):
-        out.append(review_limit(notes))  # at the limit: stop and ask, never "spawn another reviewer"
-    elif review_needed(ev) and not ok:
-        need, _ = review_need(root, slug)
-        model = (re.search(r"Spawn herd-reviewer with model ([\w.-]+)", why or "") or [None, need])[1]
-        out.append(f"review missing ({why}): risk is {risk}. Spawn the herd-reviewer subagent "
-                   + (f"with model {model}" if model else "one tier above yours")
-                   + ", giving it only what `herd review-brief` prints; the review hook records it")
     if ev.get("route") != "quick":
         out += attack_problems(root, slug, ev)
     return out
-
-
-def _see_session(root, slug, log):
-    """Record a session log the Stop gate or the guard saw (from Claude Code's own hook input; `herd gate` and
-    `herd guard` are denied to the agent): the review hook counts only reviews from sessions recorded here or by
-    the pre-init hook, and `herd status` reads the latest."""
-    start = _state(_dir(root, slug) / "start.json", None)
-    if not (isinstance(log, str) and log and start is not None):
-        return
-    seen = [x for x in start.get("sessions") or [] if isinstance(x, str)]
-    if start.get("transcript") != log or log not in seen:
-        (_dir(root, slug) / "start.json").write_text(json.dumps(
-            dict(start, transcript=log, sessions=[x for x in seen if x != log] + [log])) + "\n")
 
 
 def _count(path):
@@ -2824,7 +2329,6 @@ def gate(root, hook):
     if not slug or not _dir(root, slug).exists() or cancelled(root, slug):
         return None
     counter = _dir(root, slug) / "gate_blocks"
-    _see_session(root, slug, hook.get("transcript_path") if isinstance(hook, dict) else None)
     try:
         probs = problems(root, slug)
     except STATE_ERRORS as e:  # a corrupt or hand-edited state file: block and say so, never crash the hook
@@ -2852,8 +2356,6 @@ def gate(root, hook):
     causes = _escalations(root, slug)
     if causes:
         _stop(root, slug, "escalated", "; ".join(causes))
-        if any(c.startswith("review limit") for c in causes):  # the agent must ask, not loop: release the stop
-            return None
     esc = [f"{c}: ask the human one question" for c in causes]
     reason = (f"Herd task `{slug}` is not done ({n + 1}/{MAX_BLOCKS} stop attempts blocked). "
               + "; ".join(probs + esc) + f". Run `{cmd}` after fixing. If you are stuck, ask the human one question and stop."
@@ -2888,10 +2390,6 @@ USAGE = {
     "init": 'herd init <slug> "<goal>" [--request "<message>"] [--quick "<check>"] [--worktree]',
     "check": "herd check [slug]",
     "note": 'herd note --found|--fixed|--open|--decision|--late-red|--human-change|--tried [--attack bad-input|collision|one-bad-part|recount|refusal|other-reading --check "<command>" [--refuses|--example "<command>"] [--timeout S]] "text"',
-    "review": 'herd review --by "<reviewer>" "<what they found>"   (a note; at medium and high risk only the review hook counts)',
-    "review-hook": "herd review-hook   (the SubagentStop hook for herd-reviewer: records its review from the session logs)",
-    "review-brief": "herd review-brief [slug]   (the brief to pass to herd-reviewer as it is: criteria, request, "
-                    "inputs, the files it must read, the diff command)",
     "detect": "herd detect",
     "lint": "herd lint [--suggest]   (without --suggest: the PostToolUse hook, reads hook JSON on stdin)",
     "verify": "herd verify [slug] [--verbose] [--only <id>]   (--only: run one criterion or attack, write nothing)",
@@ -2947,7 +2445,7 @@ def main(argv):  # noqa: C901
     try:
         root = find_root(Path.cwd())
     except FileNotFoundError:  # the folder was deleted under the process: a hook must still exit 0
-        return 0 if argv[:1] in (["gate"], ["lint"], ["preinit"], ["guard"], ["review-hook"]) else 1
+        return 0 if argv[:1] in (["gate"], ["lint"], ["preinit"], ["guard"]) else 1
     cmd, args = (argv[0], argv[1:]) if argv else ("status", [])
     if cmd in ("help", "-h", "--help"):
         print(__doc__ + "\nCommands:\n" + "\n".join(f"  {u}" for u in USAGE.values()))
@@ -3026,12 +2524,6 @@ def main(argv):  # noqa: C901
                           + (" (and more: `herd check` lists them)" if len(w) > 1 else ""))
                 for cid in ev.get("escalate") or []:
                     print(f"  {cid} failed {ESCALATE_AFTER} times in a row: ask the human one question (see the run skill)")
-                limit = review_limit(load_notes(root, ev["task"]))
-                if limit:
-                    print(f"  {limit}")
-                hint = pass_hint(root, ev["task"], ev, load_notes(root, ev["task"]))
-                if hint:
-                    print(f"  {hint}")
                 return 1 if s["failing"] or any(st == "failing" for st, _ in states.values()) else 0
         elif cmd == "status":
             as_json = "--json" in args
@@ -3052,38 +2544,8 @@ def main(argv):  # noqa: C901
             if c:
                 print(f"cancelled at {c['at']}" + (f": {c['reason']}" if c["reason"] else ""))
                 return 0
-            if ev and review_needed(ev):
-                hint = pass_hint(root, slug, ev, load_notes(root, slug))
-                need, builder = review_need(root, slug)
-                print(hint if hint else f"Review: needs {need} or higher (builder on {builder})" if need
-                      else f"Review: needs a reviewer one tier above the builder ({builder})")
             probs = problems(root, slug)
             print("not done: " + "; ".join(probs) if probs else "done: evidence is fresh and passing")
-        elif cmd == "review":
-            if "--skipped" in args:
-                raise ValueError("`herd review --skipped` was removed in 0.7.0: a review is required at medium and "
-                                 "high risk. Spawn the herd-reviewer subagent (`herd status` names its model); if no "
-                                 "reviewer can run, say so and stop: Herd records why")
-            by, args = _opt(args, "--by")
-            if by is None or len(args) != 1:
-                raise UsageError
-            add_review(root, _slug_arg(root, []), by=by, text=args[0])
-            print(f"review recorded by {by}: a note; at medium and high risk only a review the hook records counts")
-        elif cmd == "review-brief":
-            slug = _slug_arg(root, args)
-            limit = review_limit(load_notes(root, slug))
-            if limit:
-                print(limit)
-                return 1
-            print(review_brief(root, slug), end="")
-        elif cmd == "review-hook":  # SubagentStop hook: never blocks the session
-            try:
-                raw = sys.stdin.read() if not sys.stdin.isatty() else ""
-                hook = json.loads(raw) if raw.strip() else {}
-                if isinstance(hook, dict):  # the task, found as the guard finds it
-                    review_hook(guard_root(hook) or find_root(Path(hook.get("cwd") or root)), hook)
-            except Exception as e:  # noqa: BLE001 - a hook must never break the session
-                print(f"herd review-hook: nothing recorded after an error: {e!r}"[:300].replace("\n", " "), file=sys.stderr)
         elif cmd == "done":
             verbose = "--verbose" in args
             slug = _slug_arg(root, [a for a in args if a != "--verbose"])

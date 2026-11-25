@@ -18,10 +18,10 @@
 
 <p align="center">
   <img src="assets/demo.gif" alt="A real /herd:run session in Claude Code, with a panel above it lighting the current step: intake, criteria, red first, build, break it, review, verify, evidence" width="860">
-  <br><sub>A real session with Herd 0.3.2 and Claude Sonnet 5.5, sped up: one message, then intake, criteria, red first, build, break it, review, verify and evidence. The Stop gate blocks one early finish.</sub>
+  <br><sub>A real session with Herd 0.3.2 and Claude Sonnet 5.5, sped up: one message, then intake, criteria, red first, build, break it, review, verify and evidence. The Stop gate blocks one early finish. Since 0.13.0 there is no review step.</sub>
 </p>
 
-Herd is a lightweight [Claude Code](https://claude.com/claude-code) plugin that runs a task end to end with as little human input as possible. You give it a goal and, if you like, success criteria. The agent plans, builds, tries to break its own work, verifies and gets a review. It only stops when **runnable checks prove the criteria pass**, and it only asks you something when an action is irreversible or a real trade-off needs a human.
+Herd is a lightweight [Claude Code](https://claude.com/claude-code) plugin that runs a task end to end with as little human input as possible. You give it a goal and, if you like, success criteria. The agent plans, builds, tries to break its own work, and verifies. It only stops when **runnable checks prove the criteria pass**, and it only asks you something when an action is irreversible or a real trade-off needs a human.
 
 ## The problem
 
@@ -65,15 +65,12 @@ flowchart LR
     D -->|quick route| F
     X --> F[herd verify<br/>criteria and attack commands]
     F -->|failing| D
-    F -->|passing, standard route, medium or high risk| E[Fresh-eyes review<br/>at most 2 without a PASS]
-    E -->|Blocker or Major: fix, verify again| D
-    E -->|PASS that counts| G[herd done<br/>evidence report]
-    F -->|passing, low risk or quick route| G
+    F -->|passing| G[herd done<br/>evidence report]
     S[Stop hook] -.->|blocks finishing until the conditions hold| G
     G -->|opt-in| P[herd pr<br/>PR with the evidence]
 ```
 
-Every criterion has a `check`, a shell command where exit 0 means pass. Before any code, the agent also logs six standard attacks, so they shape the design. The checks run once before any work and should fail. Untrusted input is refused, not tolerated: contradictory entries, or a broken entry that could change a requested answer, end in an error, not a warning with exit 0. The agent then builds, tries to break the result, verifies, and at medium and high risk gets a fresh-context review. `herd done` writes the evidence report. With `herd pr` (opt-in) that report is the pull request description; Herd never merges.
+Every criterion has a `check`, a shell command where exit 0 means pass. Before any code, the agent also logs six standard attacks, so they shape the design. The checks run once before any work and should fail. Untrusted input is refused, not tolerated: contradictory entries, or a broken entry that could change a requested answer, end in an error, not a warning with exit 0. The agent then builds, tries to break the result and verifies. No second model reviews the change: bugs outside the attacks and criteria are not caught. `herd done` writes the evidence report. With `herd pr` (opt-in) that report is the pull request description; Herd never merges.
 
 ## Settings
 
@@ -82,7 +79,6 @@ All optional, in `herd.toml` at the project root. Without it, Herd uses these de
 | Table | Default | What it does |
 | --- | --- | --- |
 | `[floor]` | `high`: `migrations/**`, `auth/**`, `billing/**`, `herd.toml`; `medium`: `api/**`; any other path is medium | Risk floor by path; a high floor means one approval question and no quick route |
-| `[review]` | `tiers = ["haiku", "sonnet", "opus"]`, `step = 1` | The reviewer is `step` tiers above the builder, capped at `sonnet`, never below the builder |
 | `[worktree] required = true` | off | Every task starts in its own git worktree |
 | `[pr] open = true` | off | Herd may push the task branch and open its pull request |
 
@@ -92,14 +88,14 @@ All settings: [Settings](https://github.com/Beovulfo/herd-sdlc/wiki/Settings).
 
 - [How Herd works](https://github.com/Beovulfo/herd-sdlc/wiki/How-Herd-works): the steps, parallel tasks, architecture, autonomy rules
 - [Example](https://github.com/Beovulfo/herd-sdlc/wiki/Example): a task, its evidence and its pull request
-- [Attacks](https://github.com/Beovulfo/herd-sdlc/wiki/Attacks), [Review](https://github.com/Beovulfo/herd-sdlc/wiki/Review), [Hooks and guard](https://github.com/Beovulfo/herd-sdlc/wiki/Hooks-and-guard)
+- [Attacks](https://github.com/Beovulfo/herd-sdlc/wiki/Attacks), [Hooks and guard](https://github.com/Beovulfo/herd-sdlc/wiki/Hooks-and-guard)
 - [Commands](https://github.com/Beovulfo/herd-sdlc/wiki/Commands) and [Settings](https://github.com/Beovulfo/herd-sdlc/wiki/Settings)
 - [Benchmark](https://github.com/Beovulfo/herd-sdlc/wiki/Benchmark): one task, with and without Herd, with its limits
 - [Design and roadmap](https://github.com/Beovulfo/herd-sdlc/wiki/Design-and-roadmap), [requirements](docs/PRD.md), [changelog](CHANGELOG.md)
 
 ## Status
 
-Version 0.12.14 (see the [changelog](CHANGELOG.md)). The local autopilot works and has unit tests that CI runs on Python 3.13. Not yet done: many live runs across project types, and issue-to-pull-request automation on GitHub. Checks run as shell commands with your permissions: read a task file as you read code.
+Version 0.13.0 (see the [changelog](CHANGELOG.md)). The local autopilot works and has unit tests that CI runs on Python 3.13. Not yet done: many live runs across project types, and issue-to-pull-request automation on GitHub. Checks run as shell commands with your permissions: read a task file as you read code.
 
 ## License
 

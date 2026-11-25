@@ -72,92 +72,6 @@ def run_herd(cwd, *args, input=None):
     return subprocess.CompletedProcess(args, code or 0, out.getvalue(), err.getvalue())
 
 
-def late_review(root, slug="t1"):
-    """A review that counts whatever comes next: for tests that are not about when the review happens.
-
-    A real review counts only after all checks first passed and at the risk it saw (see TestReviewFindings);
-    this one is placed as if the checks had passed before it, at the highest risk, as the review hook records
-    it (0.7.0): a top-tier reviewer for a top-tier builder."""
-    d = herd._dir(root, slug)
-    (d / "green.json").write_text(json.dumps({"at": herd.now(), "notes": 0}))
-    with (d / "notes.jsonl").open("a") as f:
-        f.write(json.dumps({"at": herd.now(), "kind": "review", "text": "no Blocker or Major",
-                            "by": "a fresh subagent", "risk": "high", "source": "hook", "tier": "opus",
-                            "builder_tier": "opus", "top": True, "verdict": "PASS", "saw": True,
-                            "diff_seen": True, "code_total": 0, "code_read": 0}) + "\n")
-
-
-_LOGS = [0]
-
-
-def transcript(root, models, name="main", text="done", model="claude-{}-5-5", before_start=False,
-               synthetic_last=False, handback=False, path=None, saw=True, reads=()):
-    """A Claude Code session log like the ones in spike S3: one assistant line per tier name in models, the last
-    one carrying text (or, with handback, a SubagentHandback report; with text None, no text at all), after a
-    `git diff` call unless saw is False. It lives under .herd/, which the evidence fingerprint ignores."""
-    models = [models] if isinstance(models, str) else models
-    _LOGS[0] += 1
-    path = Path(path) if path else Path(root) / ".herd" / "logs" / f"{name}-{_LOGS[0]}.jsonl"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    from datetime import datetime, timezone
-    ts = "2000-01-01T00:00:00.000Z" if before_start else datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
-    rows = [{"type": "user", "timestamp": ts, "message": {"role": "user", "content": "go"}},
-            {"type": "assistant", "timestamp": ts, "message": {"model": model.format(models[0]) if models else "x",
-                                                                 "content": [{"type": "text", "text": "HERD-REVIEW: PASS"}]}},
-            {"type": "user", "timestamp": ts, "message": {"role": "user", "content": "next turn"}}][:1 if not models else 3]
-    for i, tier in enumerate(models):
-        last = i == len(models) - 1
-        content = [{"type": "text", "text": "working"}]
-        if last and text is None:
-            content = [{"type": "tool_use", "name": "Bash", "input": {"command": "git diff"}}]
-        elif last and handback:
-            content = [{"type": "tool_use", "name": "SubagentHandback", "input": {"message": text}}]
-        elif last:
-            content = [{"type": "text", "text": text}]
-        if last and saw:
-            content = ([{"type": "tool_use", "name": "Bash", "input": {"command": "git diff"}}]
-                       + [{"type": "tool_use", "name": "Read", "input": {"file_path": str(r)}} for r in reads] + content)
-        rows.append({"type": "assistant", "timestamp": ts, "message": {"model": model.format(tier), "content": content}})
-    if synthetic_last:
-        rows.append({"type": "assistant", "timestamp": ts, "message": {"model": "<synthetic>", "content": []}})
-    path.write_text("".join(json.dumps(r) + "\n" for r in rows))
-    return path
-
-
-def hook_review(root, slug="t1", builder="opus", reviewer="opus", text="No Blocker or Major.\nHERD-REVIEW: PASS",
-                model="claude-{}-5-5", agent_type="herd:herd-reviewer", reviewer_path=None, builder_path=None,
-                reviewer_lines=None, builder_before_start=False, synthetic_last=False, handback=False,
-                last_message=None, seen=True, saw=True):
-    """Run the SubagentStop review hook as Claude Code would at the end of a herd-reviewer subagent, with the
-    logs where spike S3 found them: <session>.jsonl and <session>/subagents/agent-<id>.jsonl."""
-    _LOGS[0] += 1
-    sid, aid = f"s{_LOGS[0]}", f"a{_LOGS[0]}"
-    if builder_path == "missing":  # a log that does not exist, inside the test's own folder
-        builder_path = Path(root) / ".herd" / "logs" / f"missing-{sid}.jsonl"
-    main = Path(builder_path) if builder_path else transcript(
-        root, builder, model=model, before_start=builder_before_start, path=Path(root) / ".herd" / "logs" / f"{sid}.jsonl")
-    sid = main.stem
-    rev = main.parent / sid / "subagents" / f"agent-{aid}.jsonl"
-    if reviewer_path == "missing":
-        pass
-    elif reviewer_lines is not None:
-        rev.parent.mkdir(parents=True, exist_ok=True)
-        rev.write_text("".join(line + "\n" for line in reviewer_lines))
-    else:
-        files, _ = herd.review_files(Path(root), slug) if (herd._dir(root, slug) / "start.json").exists() else ([], 0)
-        new = [Path(root) / f for f in files or [] if f in herd.untracked(Path(root))]  # in no git diff (0.12.1)
-        transcript(root, reviewer, text=text, model=model, synthetic_last=synthetic_last, handback=handback, path=rev,
-                   saw=saw, reads=new if saw else ())
-    hook = {"session_id": sid, "transcript_path": str(main), "cwd": str(root), "agent_id": aid,
-            "agent_type": agent_type, "agent_transcript_path": str(rev), "hook_event_name": "SubagentStop",
-            "stop_hook_active": False}
-    if last_message is not None:
-        hook["last_assistant_message"] = last_message
-    if seen:  # as the Stop gate does: only it and the pre-init hook record which sessions are real
-        herd._see_session(Path(root), slug, str(main))
-    herd.review_hook(Path(root), hook)
-
-
 class Base(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -192,10 +106,9 @@ class Base(unittest.TestCase):
             self.attacks()
 
     def attacks(self, slug="t1", root=None):
-        """Record the standard attacks and a review, which `herd done` needs on the standard route."""
+        """Record the standard attacks, which `herd done` needs on the standard route."""
         for a in herd.ATTACKS:
             herd.add_note(root or self.root, slug, "tried", f"{a} attack", attack=a, check=OK, **PROGRAMS.get(a, {}))
-        late_review(root or self.root, slug)
 
 
 class TestTask(Base):
@@ -919,12 +832,26 @@ class TestCli(Base):
         rc, out, _ = self.run_cli("verify")
         self.assertEqual(rc, 0)
         self.assertIn("1 passing", out)
-        hook_review(self.root)  # the review hook records the herd-reviewer subagent's review
         rc, out, _ = self.run_cli("done")
         self.assertEqual(rc, 0)
         self.assertFalse((self.root / ".herd/active").exists())
         self.assertTrue((self.root / ".herd/tasks/t1/evidence.md").exists())
         self.assertIn("done: evidence is fresh and passing", out)
+
+    def test_done_without_review_at_medium_and_high_risk(self):
+        for risk in ("medium", "high"):
+            with self.subTest(risk=risk):
+                shutil.rmtree(self.root / ".herd", ignore_errors=True)
+                (self.root / "greet.txt").unlink(missing_ok=True)
+                (self.root / "herd.toml").write_text(f'[floor]\n{risk} = ["greet.txt"]\n')
+                self.task()
+                (self.root / ".herd/active").write_text("t1\n")
+                herd.verify(self.root, "t1")  # red
+                (self.root / "greet.txt").write_text("hello")
+                self.attacks()
+                self.assertEqual(herd.verify(self.root, "t1")["risk"]["effective"], risk)
+                self.assertEqual(herd.problems(self.root, "t1"), [])
+                self.assertEqual(self.run_cli("done")[0], 0)
 
     def test_done_refuses_when_not_passing(self):
         self.run_cli("init", "t1", "g")
@@ -1106,7 +1033,6 @@ class TestAttacks(Base):
         self.assertIn("collision", probs)
         for a in ("collision", "one-bad-part", "recount", "refusal", "other-reading"):
             self.assertEqual(self.run_cli("note", "--tried", "--attack", a, f"n/a: {a} explained").returncode, 0)
-        hook_review(self.root)
         herd.verify(self.root, "t1")
         self.assertEqual(herd.problems(self.root, "t1"), [])
         self.assertEqual(self.run_cli("done").returncode, 0)
@@ -1253,7 +1179,6 @@ class TestAttackChecks(Base):
 
     def ready(self):
         self.task()
-        late_review(self.root)  # these tests are about attacks
         (self.root / "greet.txt").write_text("hello")
 
     def test_attack_needs_a_command(self):
@@ -1262,7 +1187,7 @@ class TestAttackChecks(Base):
             p = self.cli("note", "--tried", "--attack", a, "tried it")
             self.assertEqual(p.returncode, 1, a)
             self.assertIn("--check", p.stderr)
-        self.assertEqual([n for n in herd.load_notes(self.root, "t1") if n["kind"] != "review"], [])
+        self.assertEqual(herd.load_notes(self.root, "t1"), [])
         p = self.cli("note", "--tried", "--attack", "bad-input", "--check", "test -f greet.txt", "malformed map")
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(herd.load_notes(self.root, "t1")[-1]["check"], "test -f greet.txt")
@@ -1939,9 +1864,9 @@ class TestBudgets(Base):
         self.cli("verify")
         rc, out = self.cli("done")
         self.assertEqual(rc, 0)
-        self.assertLessEqual(len(out), 11)  # 0.4.0: the result, the report path and the seven-line final report
+        self.assertLessEqual(len(out), 10)  # 0.4.0: the result, the report path and the final report (six lines)
         self.assertEqual(sum(line.startswith(("Done:", "Proven:", "Not proven:", "Caveats:", "Decisions:",
-                                              "Limits:", "Review:")) for line in out), 7, out)
+                                              "Limits:")) for line in out), 6, out)
         self.assertIn("evidence.md", " ".join(out))
         self.assertIn("2 of 2", " ".join(out))
         self.assertIn("# Evidence: t1", (self.root / ".herd/tasks/t1/evidence.md").read_text())
@@ -2004,7 +1929,7 @@ class TestBudgets(Base):
         herd.verify(self.root, "t1")
         body = herd.pr_body(self.root, "t1")
         visible = re.sub(r"<details>.*?</details>", "", body, flags=re.S)
-        self.assertLessEqual(words(visible), 200, visible)  # 0.4.0: + unreviewed and `herd check` warning lines
+        self.assertLessEqual(words(visible), 200, visible)  # 0.4.0: + `herd check` warning lines
         self.assertIn("unicode names not tried", visible)  # open caveats stay in view
         for kept in ("fed it an empty name", "empty names now rejected", "test -f greet.txt", "Route: standard"):
             self.assertIn(kept, body)
@@ -2154,9 +2079,9 @@ class TestVerifyOnly(Base):
 
     def test_skill_verify_points(self):
         text = (Path(herd.__file__).parent.parent / "skills/run/SKILL.md").read_text()
-        step = re.search(r"^8\. \*\*Verify\.\*\*.*$", text, re.M).group(0)
+        step = re.search(r"^7\. \*\*Verify\.\*\*.*$", text, re.M).group(0)
         self.assertNotIn("after every change", step)
-        self.assertIn("once the work is done and after each review fix", step)
+        self.assertIn("once the work is done", step)
         self.assertIn("herd verify --only", step)
 
     def test_only_bad_input_ends_with_a_message(self):

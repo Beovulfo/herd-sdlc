@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 
 from scripts import herd
-from tests.test_herd_cli import PROGRAMS, hook_review, late_review, run_herd
+from tests.test_herd_cli import PROGRAMS, run_herd
 
 OK = "python3 -c \"import json\""  # an attack command that passes and is not vacuous
 REQUEST = "Add f() to app.py. It must return 1 for any call."
@@ -83,10 +83,9 @@ class Base(unittest.TestCase):
         (self.root / "app.py").write_text("def f():\n    return 1\n")
         return ev  # the first verify
 
-    def attacks_and_review(self):
+    def log_attacks(self):
         for a in herd.ATTACKS:
             herd.add_note(self.root, "t1", "tried", f"{a} attack", attack=a, check=OK, **PROGRAMS.get(a, {}))
-        late_review(self.root)
 
 
 class TestRedFirst(Base):
@@ -98,7 +97,7 @@ class TestRedFirst(Base):
         ev = herd.verify(self.root, "t1")
         self.assertEqual(ev["red"]["code_before"], ["app.py"])
         self.assertIn("Red first not proven: app.py changed before the first verify", herd.report(ev))
-        self.attacks_and_review()
+        self.log_attacks()
         herd.verify(self.root, "t1")
         self.assertIn("red first not proven", " ".join(herd.problems(self.root, "t1")))
         self.assertEqual(self.cli("note", "--late-red", "wrote the code to explore the API first").returncode, 0)
@@ -158,53 +157,11 @@ class TestRiskAndReview(Base):
         self.assertIn("migrations/**", ev["risk"]["rules"])
         self.assertIn("Risk: high", herd.report(ev))
 
-    def test_done_needs_a_review_the_hook_recorded(self):  # 0.7.0: no skip, no hand-recorded review
-        self.start()
-        self.red_then_build()
-        for a in herd.ATTACKS:
-            herd.add_note(self.root, "t1", "tried", a, attack=a, check=OK, **PROGRAMS.get(a, {}))
-        herd.verify(self.root, "t1")
-        self.assertIn("review", " ".join(herd.problems(self.root, "t1")))
-        self.assertEqual(self.cli("review", "a fresh subagent").returncode, 1)  # --by names who reviewed
-        self.assertEqual(self.cli("review", "--skipped", "no subagent can be spawned here").returncode, 1)
-        self.assertIn("unreviewed", herd.pr_body(self.root, "t1"))
-        hook_review(self.root, builder="haiku", reviewer="sonnet")
-        self.assertEqual(herd.problems(self.root, "t1"), [])
-        self.assertIn("Review: claude-sonnet-5-5 (sonnet, builder on haiku; PASS; ran git diff or git show, read 1 of 1 changed code file)", herd.report(herd.verify(self.root, "t1")))
-
-    def test_review_by_a_named_reviewer_is_recorded(self):
-        self.start()
-        self.red_then_build()
-        self.attacks_and_review()
-        ev = herd.verify(self.root, "t1")
-        self.assertEqual(herd.problems(self.root, "t1"), [])
-        self.assertIn("Review: a fresh subagent (opus, builder on opus; same tier; PASS; ran git diff or git show, read 0 of 0 changed code files): no Blocker or Major",
-                      herd.report(ev))
-
-    def test_the_latest_of_several_reviews_is_the_one_reported(self):
-        self.start()
-        self.red_then_build()
-        herd.add_review(self.root, "t1", by="me", text="a note, not a review that counts")
-        hook_review(self.root, text="One Major, fixed.\nHERD-REVIEW: PASS")
-        self.assertIn("(opus, builder on opus; same tier; PASS; ran git diff or git show, read 1 of 1 changed code file): One Major, fixed.",
-                      herd.report(herd.verify(self.root, "t1")))
-        self.assertNotIn("unreviewed", herd.pr_body(self.root, "t1"))
-        with open(self.root / ".herd/tasks/t1/notes.jsonl", "a") as f:  # a skipped review from before 0.7.0
-            f.write(json.dumps({"at": herd.now(), "kind": "review", "text": "the reviewer crashed", "skipped": True}) + "\n")
-        self.assertIn("unreviewed: the reviewer crashed", herd.pr_body(self.root, "t1"))
-
-    def test_quick_route_needs_no_review(self):
-        herd.init_task(self.root, "q1", "Fix typo", quick_check=APP_CHECK)
-        (self.root / "app.py").write_text("def f():\n    return 1\n")
-        herd.verify(self.root, "q1")
-        self.assertEqual([p for p in herd.problems(self.root, "q1") if "review" in p], [])
-
-
 class TestFrozenHumanCriteria(Base):
     def test_a_human_criterion_changed_or_removed_after_the_first_verify_blocks_done(self):
         self.start()
         self.red_then_build()
-        self.attacks_and_review()
+        self.log_attacks()
         narrowed = TASK.replace('text = "It must return 1 for any call"', 'text = "It must return 1 for one call"')
         (self.root / ".herd/tasks/t1/task.toml").write_text(narrowed)
         herd.verify(self.root, "t1")
@@ -220,7 +177,7 @@ class TestFrozenHumanCriteria(Base):
     def test_a_changed_check_is_reported_not_blocked(self):
         self.start()
         self.red_then_build()
-        self.attacks_and_review()
+        self.log_attacks()
         changed = TASK.replace("app.f\\\"", "app.f()\\\"")
         self.assertNotEqual(changed, TASK)
         (self.root / ".herd/tasks/t1/task.toml").write_text(changed)
@@ -238,21 +195,20 @@ class TestFinalReport(Base):
         herd.add_note(self.root, "t1", "fixed", "f() now returns 1")
         self.assertEqual(self.cli("note", "--decision", "f takes no arguments; the request named none; "
                                   "add parameters in app.py").returncode, 0)
-        self.attacks_and_review()
+        self.log_attacks()
         git(self.root, "add", "-A")
         git(self.root, "commit", "-qm", "add f")
         herd.verify(self.root, "t1")
         p = self.cli("done")
         self.assertEqual(p.returncode, 0, p.stderr)
         lines = p.stdout.splitlines()
-        for start in ("Done:", "Proven:", "Not proven:", "Caveats:", "Decisions:", "Limits:", "Review:"):
+        for start in ("Done:", "Proven:", "Not proven:", "Caveats:", "Decisions:", "Limits:"):
             self.assertEqual(sum(line.startswith(start) for line in lines), 1, (start, p.stdout))
         out = p.stdout
         self.assertIn("Proven: 2 of 2 criteria", out)
         self.assertIn("f takes no arguments; the request named none; add parameters in app.py", out)
         self.assertIn("f() returned None for no arguments", out)
         self.assertIn("Limits: Repeated calls are not timed.", out)
-        self.assertIn("Review: a fresh subagent (opus, builder on opus; same tier; PASS; ran git diff or git show, read 0 of 0 changed code files): no Blocker or Major", out)
         self.assertIn("Not proven: nothing open", out)
         self.assertIn(".herd/tasks/t1/evidence.md", out)
 
@@ -263,7 +219,7 @@ class TestFinalReport(Base):
         for i in range(3):
             herd.add_note(self.root, "t1", "found", f"finding {i}")
         herd.add_note(self.root, "t1", "fixed", "fix 0")
-        self.attacks_and_review()
+        self.log_attacks()
         herd.verify(self.root, "t1")
         ev = json.loads((self.root / ".herd/tasks/t1/evidence.json").read_text())
         notes = [json.loads(x) for x in (self.root / ".herd/tasks/t1/notes.jsonl").read_text().splitlines()]
@@ -301,7 +257,7 @@ class TestCommitBeforeDone(Base):
     def ready(self):
         self.start()
         self.red_then_build()
-        self.attacks_and_review()
+        self.log_attacks()
         herd.verify(self.root, "t1")
 
     def test_uncommitted_work_is_refused_when_prs_are_on(self):
@@ -351,42 +307,10 @@ class TestReviewFindings(Base):
         self.assertEqual(ev["red"]["code_hidden"], ["app.py"])
         self.assertIn("red first not proven", " ".join(herd.problems(self.root, "t1")))
 
-    def test_a_review_before_all_checks_pass_does_not_count(self):
-        self.start()
-        self.red_then_build()
-        for a in herd.ATTACKS:
-            herd.add_note(self.root, "t1", "tried", f"{a} attack", attack=a, check=OK, **PROGRAMS.get(a, {}))
-        hook_review(self.root, text="Looked at the plan.\nHERD-REVIEW: PASS")
-        herd.verify(self.root, "t1")  # all checks pass for the first time, after the review
-        self.assertIn("recorded before all checks first passed", " ".join(herd.problems(self.root, "t1")))
-        hook_review(self.root)
-        self.assertEqual(herd.problems(self.root, "t1"), [])
-
-    def test_a_review_at_a_lower_risk_does_not_count_once_the_risk_rises(self):
-        self.start()
-        self.red_then_build()
-        for a in herd.ATTACKS:
-            herd.add_note(self.root, "t1", "tried", f"{a} attack", attack=a, check=OK, **PROGRAMS.get(a, {}))
-        herd.verify(self.root, "t1")
-        hook_review(self.root)
-        self.assertEqual(herd.problems(self.root, "t1"), [])
-        (self.root / "auth").mkdir()
-        (self.root / "auth/session.py").write_text("x = 1\n")  # a high-risk path
-        herd.verify(self.root, "t1")
-        self.assertIn("the risk rose to high after the review", " ".join(herd.problems(self.root, "t1")))
-
-    def test_code_changed_after_the_review_is_reported(self):
-        self.start()
-        self.red_then_build()
-        herd.verify(self.root, "t1")
-        hook_review(self.root)
-        (self.root / "app.py").write_text("def f():\n    return 1  # tweak\n")
-        self.assertIn("The code changed after the review", herd.report(herd.verify(self.root, "t1")))
-
     def test_the_humans_own_change_is_accepted_with_their_words_and_shown(self):
         self.start()
         self.red_then_build()
-        self.attacks_and_review()
+        self.log_attacks()
         narrowed = TASK.replace('text = "It must return 1 for any call"', 'text = "It must return 1 for one call"')
         (self.root / ".herd/tasks/t1/task.toml").write_text(narrowed)
         herd.verify(self.root, "t1")
@@ -409,7 +333,7 @@ class TestReviewFindings(Base):
     def test_an_unreadable_red_file_blocks_instead_of_switching_the_rules_off(self):
         self.start()
         self.red_then_build()
-        self.attacks_and_review()
+        self.log_attacks()
         (self.root / ".herd/tasks/t1/red.json").write_text("{broken")
         ev = herd.verify(self.root, "t1")
         self.assertTrue(ev["red_unreadable"])
@@ -428,7 +352,7 @@ class TestSecondReview(Base):
     def ready(self, text=TASK):
         self.start(text)
         self.red_then_build()
-        self.attacks_and_review()
+        self.log_attacks()
         herd.verify(self.root, "t1")
         self.assertEqual(herd.problems(self.root, "t1"), [])
 
@@ -436,7 +360,7 @@ class TestSecondReview(Base):
         self.start()
         (self.root / ".herd/tasks/t1/start.json").unlink()
         (self.root / "app.py").write_text("def f():\n    return 1\n")
-        self.attacks_and_review()
+        self.log_attacks()
         herd.verify(self.root, "t1")
         self.assertIn("start.json", " ".join(herd.problems(self.root, "t1")))
 
@@ -485,7 +409,7 @@ class TestSecondReview(Base):
         git(self.root, "stash", "push", "-q", "-u", "--", "app.py")
         herd.verify(self.root, "t1")
         git(self.root, "stash", "pop", "-q")
-        self.attacks_and_review()
+        self.log_attacks()
         herd.verify(self.root, "t1")
         self.assertIn("a git stash was made", " ".join(herd.problems(self.root, "t1")))
 
@@ -501,27 +425,13 @@ class TestSecondReview(Base):
         self.assertTrue(herd.is_code("bin/deploy", self.root))
         self.assertFalse(herd.is_code("Makefile", self.root))
 
-    def test_at_high_risk_a_review_counts_only_for_the_code_it_saw(self):
-        (self.root / "auth").mkdir()
-        self.start()
-        self.red_then_build()
-        (self.root / "auth/session.py").write_text("x = 1\n")
-        for a in herd.ATTACKS:
-            herd.add_note(self.root, "t1", "tried", f"{a} attack", attack=a, check=OK, **PROGRAMS.get(a, {}))
-        herd.verify(self.root, "t1")
-        hook_review(self.root)
-        self.assertEqual(herd.problems(self.root, "t1"), [])
-        (self.root / "auth/session.py").write_text("x = 2\n")
-        herd.verify(self.root, "t1")
-        self.assertIn("the code changed after the review", " ".join(herd.problems(self.root, "t1")))
-
     def test_a_task_verified_by_an_older_herd_is_not_blocked_after_the_upgrade(self):
         self.start()
         d = self.root / ".herd/tasks/t1"
         (d / "start.json").unlink()  # as 0.3.x left it: no start.json, no frozen.json, evidence without risk
         (d / "evidence.json").write_text(json.dumps({"task": "t1", "results": []}))
         (self.root / "app.py").write_text("def f():\n    return 1\n")
-        self.attacks_and_review()
+        self.log_attacks()
         herd.verify(self.root, "t1")
         self.assertIn("start.json is missing", " ".join(herd.problems(self.root, "t1")))  # say why, then go on
         herd.add_note(self.root, "t1", "late-red", "the task started with Herd 0.3.2")
@@ -551,29 +461,15 @@ class TestThirdReview(Base):
         d = self.root / ".herd/tasks/t1"
         (d / "start.json").unlink()
         (d / "evidence.json").write_text(json.dumps({"task": "t1", "results": []}))
-        self.attacks_and_review()
+        self.log_attacks()
         ev = herd.verify(self.root, "t1")
         self.assertEqual(ev["risk"]["effective"], "high")
         self.assertIn("start.json is missing", " ".join(herd.problems(self.root, "t1")))
 
-    def test_a_commit_after_a_high_risk_review_keeps_the_review(self):
-        (self.root / "auth").mkdir()
-        self.start()
-        self.red_then_build()
-        (self.root / "auth/session.py").write_text("x = 1\n")
-        for a in herd.ATTACKS:
-            herd.add_note(self.root, "t1", "tried", f"{a} attack", attack=a, check=OK, **PROGRAMS.get(a, {}))
-        herd.verify(self.root, "t1")
-        hook_review(self.root)
-        git(self.root, "add", "-A", "--", ".", ":!.herd")
-        git(self.root, "commit", "-q", "-m", "the reviewed change")
-        herd.verify(self.root, "t1")
-        self.assertEqual(herd.problems(self.root, "t1"), [])
-
     def test_a_used_rewording_note_cannot_drop_the_criterion_later(self):
         self.start()
         self.red_then_build()
-        self.attacks_and_review()
+        self.log_attacks()
         narrowed = TASK.replace('text = "It must return 1 for any call"', 'text = "It must return 1 for one call"')
         (self.root / ".herd/tasks/t1/task.toml").write_text(narrowed)
         herd.add_note(self.root, "t1", "human-change", "C1: the human said: It must return 1 for one call")
@@ -612,7 +508,7 @@ class TestThirdReview(Base):
     def test_passing_again_after_a_failure_reminds_about_herd_done_again(self):
         self.start()
         self.red_then_build()
-        self.attacks_and_review()
+        self.log_attacks()
         herd.verify(self.root, "t1")
         for _ in range(herd.MAX_BLOCKS):
             herd.gate(self.root, {})
@@ -638,7 +534,7 @@ class TestNarrowedClaims(Base):
                                 'known_limits = "Repeated calls are not timed. Calls with arguments are rejected."')
         self.start(narrowed)
         self.red_then_build()
-        self.attacks_and_review()
+        self.log_attacks()
         herd.add_note(self.root, "t1", "open", "only the first call is cached")
         ev = herd.verify(self.root, "t1")
         line = "C1 says 'any'; narrowed by: Calls with arguments are rejected."
@@ -814,18 +710,22 @@ class TestPreInitEdits(Base):
             herd.cancel_task(self.root, "t1")
             shutil.rmtree(self.root / ".herd/tasks/t1")
 
+    def test_a_variable_in_the_init_command_is_not_read(self):  # issue #40, a headless run
+        self.assertIsNone(herd._init_target(
+            'H="python3 /p/scripts/herd.py"; $H init calc "Add add(a, b)" --request "r" 2>&1; echo ---', self.root))
+
     def test_the_hook_is_registered_and_safe_on_old_python(self):
         hooks = json.loads((Path(herd.__file__).parent.parent / "hooks/hooks.json").read_text())["hooks"]
         pre = [h for g in hooks["PreToolUse"] if g.get("matcher") == "Bash" for h in g["hooks"]]
         self.assertEqual(len(pre), 1)
         self.assertIn('herd.py\" preinit', pre[0]["command"])
         src = Path(herd.__file__).read_text()
-        self.assertIn('sys.argv[1:2] in (["gate"], ["lint"], ["preinit"], ["guard"], ["review-hook"])', src)  # exits 0 before 3.11 code runs
+        self.assertIn('sys.argv[1:2] in (["gate"], ["lint"], ["preinit"], ["guard"])', src)  # exits 0 before 3.11 code runs
 
 
 class TestStopRecord(Base):
     """Part C of docs/designs/herd-guardrails.md: stopped.json for every stop without `herd done`."""
-    FIELDS = {"at", "reason", "detail", "problems", "evidence", "review", "elapsed_s", "gate_blocks", "resumable", "next"}
+    FIELDS = {"at", "reason", "detail", "problems", "evidence", "elapsed_s", "gate_blocks", "resumable", "next"}
 
     def record(self):
         return json.loads((self.root / ".herd/tasks/t1/stopped.json").read_text())
@@ -839,7 +739,7 @@ class TestStopRecord(Base):
     def ready(self):
         self.start()
         self.red_then_build()
-        self.attacks_and_review()
+        self.log_attacks()
         herd.verify(self.root, "t1")
 
     def test_stop_record_on_release(self):
@@ -853,8 +753,6 @@ class TestStopRecord(Base):
         self.assertEqual(rec["gate_blocks"], herd.MAX_BLOCKS)
         self.assertEqual(set(rec["evidence"]), {"verified_at", "sha", "stale"})
         self.assertFalse(rec["evidence"]["stale"])
-        self.assertEqual(set(rec["review"]), {"needed", "latest"})
-        self.assertTrue(rec["review"]["needed"])  # medium risk
         self.assertIsInstance(rec["elapsed_s"], int)
         self.assertTrue(rec["resumable"])
         self.assertEqual(rec["next"], "fix C1, then run `herd verify`")
@@ -903,21 +801,15 @@ class TestStopRecord(Base):
         self.start()
         rec = herd.write_stop(self.root, "t1", "released")  # no evidence yet
         self.assertEqual((rec["resumable"], rec["next"]), (True, "run `herd verify`"))
-        self.assertEqual((rec["evidence"], rec["review"]), (None, None))
+        self.assertEqual(rec["evidence"], None)
         self.red_then_build()
-        herd.verify(self.root, "t1")  # all pass; no review and no attacks yet
-        probs = herd.problems(self.root, "t1")
-        self.assertTrue(probs[0].startswith("review missing"), probs)
-        rec = herd.write_stop(self.root, "t1", "released")
-        self.assertEqual(rec["problems"], probs)
-        self.assertTrue(rec["resumable"])
-        self.assertIn("spawn herd-reviewer", rec["next"])
-        self.assertEqual(rec["review"], {"needed": "one tier above the builder", "latest": None})
-        late_review(self.root)
-        herd.verify(self.root, "t1")
+        herd.verify(self.root, "t1")  # all pass; no attacks yet
         rec = herd.write_stop(self.root, "t1", "released")
         self.assertTrue(rec["problems"][0].startswith("adversarial pass incomplete"))
         self.assertIn("herd note --tried --attack", rec["next"])
+        self.log_attacks()
+        herd.verify(self.root, "t1")
+        self.assertEqual(herd.write_stop(self.root, "t1", "released")["problems"], [])
         (self.root / "app.py").write_text("def f():\n    return 1  # changed\n")  # stale evidence
         rec = herd.write_stop(self.root, "t1", "released")
         self.assertTrue(rec["evidence"]["stale"])
@@ -952,7 +844,7 @@ class TestStopRecord(Base):
         first = self.release()
         (self.root / "app.py").write_text("def f():\n    return 1\n")  # the code comes after the red run
         herd.verify(self.root, "t1")
-        self.attacks_and_review()
+        self.log_attacks()
         herd.verify(self.root, "t1")
         p = self.cli("done")
         self.assertEqual(p.returncode, 0, p.stderr)
@@ -1111,7 +1003,7 @@ class TestStopRecordAttacks(Base):
             herd.gate(self.root, {})
         (self.root / "app.py").write_text("def f():\n    return 1\n")
         herd.verify(self.root, "t1")
-        self.attacks_and_review()
+        self.log_attacks()
         herd.verify(self.root, "t1")
         self.assertEqual(self.cli("done").returncode, 0)
         before = self.record()
@@ -1133,7 +1025,7 @@ class TestStopRecordAttacks(Base):
     def test_done_refused_counts_its_blocks_and_a_release_keeps_the_escalation(self):
         self.start()
         self.red_then_build()
-        self.attacks_and_review()
+        self.log_attacks()
         herd.verify(self.root, "t1")
         for _ in range(herd.MAX_BLOCKS + 1):
             herd.gate(self.root, {})
@@ -1180,14 +1072,8 @@ class TestRefusalAttack(Base):
         for a in herd.ATTACKS:
             if a != "refusal":
                 herd.add_note(self.root, "t1", "tried", f"{a} attack", attack=a, check=OK, **PROGRAMS.get(a, {}))
-        late_review(self.root)
         herd.verify(self.root, "t1")
         self.assertIn("refusal (no passing command)", " ".join(herd.problems(self.root, "t1")))
-
-    def test_the_default_reviewer_tier_is_one_above_the_builders(self):  # 0.10.0; 0 in 0.8.0 and 0.9.0
-        self.assertEqual(herd.review_tiers(self.root), (list(herd.DEFAULT_TIERS), 1))
-
-
 
 class TestInputsAndRefusalFirst(Base):
     """These tests start from TASK without its `inputs = []` (NO_INPUTS)."""

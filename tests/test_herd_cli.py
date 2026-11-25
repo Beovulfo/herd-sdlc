@@ -1062,11 +1062,11 @@ class TestSimplifiedAdversarial(Base):
         self.skill = (SKILLS / "run/SKILL.md").read_text()
         self.adv = (SKILLS / "run/adversarial.md").read_text()
 
-    def step6(self):
-        return self.skill.split("6. **Break it**", 1)[1].split("\n7. ", 1)[0]
+    def break_step(self):
+        return self.skill.split("3. **Break it**", 1)[1].split("\n4. ", 1)[0]
 
-    def test_step6_points_to_the_file_without_an_inline_list(self):
-        s = self.step6()
+    def test_break_it_step_points_to_the_file_without_an_inline_list(self):
+        s = self.break_step()
         self.assertIn("[adversarial.md](adversarial.md)", s)
         self.assertIn("herd done", s)
         self.assertIn("six standard attacks", s)
@@ -2132,6 +2132,112 @@ class TestVerifyOnly(Base):
         secs = int(re.search(r"\((\d+) s\)", out).group(1))
         self.assertEqual(rc, 0)
         self.assertTrue(1 <= secs <= wall + 1, (secs, wall))
+
+
+class TestCoveredBy(Base):
+    """recount, refusal and other-reading may reuse a criterion's check instead of a command (issue #85)."""
+
+    COVERABLE = ("recount", "refusal", "other-reading")
+
+    def cli(self, *args):
+        return run_herd(self.root, *args)
+
+    def note(self, attack, cid="C1", *more):
+        return self.cli("note", "--tried", "--attack", attack, "--covered-by", cid, *more, "covers it")
+
+    def real_check(self, check=OK + " && test -f greet.txt"):
+        self.task(TASK.replace('check = "test -f greet.txt"', f"check = {json.dumps(check)}"))
+
+    def states(self, ev):
+        return {a["attack"]: a["status"] for a in ev["attacks"]}
+
+    def test_covered_by_is_accepted_and_follows_the_criterion(self):
+        self.real_check()
+        for a in self.COVERABLE:
+            p = self.note(a)
+            self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.states(herd.verify(self.root, "t1")), dict.fromkeys(self.COVERABLE, "failing"))
+        (self.root / "greet.txt").write_text("hello")
+        ev = herd.verify(self.root, "t1")
+        self.assertEqual(self.states(ev), dict.fromkeys(self.COVERABLE, "passing"))
+        self.assertIn("recount passing (`--covered-by C1`)", herd.report(ev))
+        for a in ("bad-input", "collision", "one-bad-part"):
+            herd.add_note(self.root, "t1", "tried", f"n/a: {a}", attack=a)
+        herd.add_note(self.root, "t1", "tried", "with its example", attack="other-reading", covered_by="C1",
+                      example=OK)
+        herd.verify(self.root, "t1")
+        self.assertNotIn("attack", " ".join(herd.problems(self.root, "t1")))
+        (self.root / "greet.txt").unlink()
+        herd.verify(self.root, "t1")
+        self.assertIn("recount (its command fails)", " ".join(herd.problems(self.root, "t1")))
+
+    def test_covered_by_an_unchecked_criterion_never_passes(self):
+        self.real_check()
+        self.assertEqual(self.note("recount", "C2").returncode, 0)
+        self.assertEqual(self.states(herd.verify(self.root, "t1")), {"recount": "nocheck"})
+
+    def test_covered_by_a_check_that_proves_nothing_does_not_count(self):
+        self.real_check("true")
+        self.note("recount")
+        herd.verify(self.root, "t1")
+        self.assertIn("recount (its command runs no project code)", " ".join(herd.problems(self.root, "t1")))
+
+    def test_covered_by_works_with_verify_only(self):
+        self.real_check()
+        herd.verify(self.root, "t1")
+        self.note("recount")
+        self.assertEqual(self.cli("verify", "--only", "recount").returncode, 1)
+        (self.root / "greet.txt").write_text("hello")
+        self.assertEqual(self.cli("verify", "--only", "recount").returncode, 0)
+
+    def test_covered_by_logged_after_the_last_verify_must_run(self):
+        self.real_check()
+        (self.root / "greet.txt").write_text("hello")
+        herd.add_note(self.root, "t1", "tried", "a", attack="recount", check=OK)
+        herd.verify(self.root, "t1")
+        self.note("recount")
+        self.assertIn("have not run", " ".join(herd.problems(self.root, "t1")))
+
+    def test_covered_by_refused_for_other_attacks_and_unknown_ids(self):
+        self.real_check()
+        for attack, cid in [(a, "C1") for a in ("bad-input", "collision", "one-bad-part")] + [
+                (a, c) for a in self.COVERABLE for c in ("C9", "c1", "")]:
+            p = self.note(attack, cid)
+            self.assertEqual(p.returncode, 1, (attack, cid))
+            self.assertIn("--covered-by", p.stderr)
+            self.assertNotIn("Traceback", p.stderr)
+        self.assertEqual(self.note("recount", "C1", "--check", OK).returncode, 1)
+        self.assertEqual(herd.load_notes(self.root, "t1"), [])
+
+    def test_covered_by_keeps_example(self):
+        self.real_check()
+        (self.root / "greet.txt").write_text("hello")
+        toml = (self.root / ".herd/tasks/t1/task.toml").read_text()
+        herd.cancel_task(self.root, "t1")
+        herd.init_task(self.root, "t2", "Change auth/session.py")  # high risk by path
+        (self.root / ".herd/tasks/t2/task.toml").write_text(toml)
+        herd.add_note(self.root, "t2", "tried", "no example", attack="other-reading", covered_by="C1")
+        ev = herd.verify(self.root, "t2")
+        self.assertTrue(herd.full_rules(ev))
+        missing = " ".join(herd.missing_programs(ev))
+        self.assertIn("other-reading has no --example", missing)
+        self.assertIn("--covered-by C1", missing)
+        herd.add_note(self.root, "t2", "tried", "broken", attack="other-reading", covered_by="C1", example="exit 3")
+        ev = herd.verify(self.root, "t2")
+        self.assertEqual(self.states(herd.verify(self.root, "t2"))["other-reading"], "failing")
+        herd.add_note(self.root, "t2", "tried", "ok", attack="other-reading", covered_by="C1", example=OK)
+        ev = herd.verify(self.root, "t2")
+        self.assertEqual(ev["attacks"][-1]["status"], "passing")
+        self.assertEqual(herd.missing_programs(ev), [])
+
+    def test_covered_by_before_first_verify(self):
+        self.real_check()
+        self.note("recount")
+        ev = herd.verify(self.root, "t1")
+        self.assertNotIn("recount attack", " ".join(ev["warnings"]))
+        self.note("refusal")
+        ev = herd.verify(self.root, "t1")
+        self.assertIn("refusal attack was logged after the first verify", " ".join(ev["warnings"]))
 
 
 if __name__ == "__main__":

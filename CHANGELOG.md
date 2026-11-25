@@ -2,6 +2,16 @@
 
 All notable changes to Herd. Versions follow `plugin/.claude-plugin/plugin.json`.
 
+## 0.13.1
+
+An attack may reuse a criterion's check (issue #85). On the bus task (#57), one run's attack test file was 325 lines. Its recount, refusal and other-reading attacks found nothing: the same comparison was already in its criterion check. A baseline without Herd wrote one such test and lost nothing on the hidden verifier. The owner asked: "I like the proposal but do already what you decided to leave out".
+
+- **Added:** `herd note --tried --attack <recount|refusal|other-reading> --covered-by <criterion id> "..."`. The attack passes exactly when that criterion's check passed in the latest `herd verify`; the check is not run twice. A check that ran zero tests or no project code does not count, as for `--check`. A removed criterion fails the attack.
+- **Added:** `--covered-by` is refused for `bad-input`, `collision` and `one-bad-part`, with `--check`, and for an unknown criterion id.
+- **Changed:** the run skill plans the six attacks in step 3, before Red and Build, matching the code rule of 0.12.14.
+- **Unchanged:** `other-reading` still needs `--example` at medium and high risk. A covered attack is also logged before the first `herd verify`.
+- **Known limits:** Herd checks that the criterion passed, not that its check really recomputes or compares with separate code. No model leg has measured 0.13.1.
+
 ## 0.13.0
 
 The review is removed; the plan is attacked early instead (issue #87, PR 2 of the plan in #55, after #83). The owner asked: "I want to remove the reviews from the code and focus on attacking the plan early". On the bus task (#57), review rounds were about 40% of Herd's cost, and 2 of 3 runs stopped at the review limit. On the supermarket task (#31), 4 of 6 Sonnet runs stopped the same way.

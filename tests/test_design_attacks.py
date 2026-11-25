@@ -126,10 +126,10 @@ class TestRuleText(unittest.TestCase):
         self.assertNotIn("must not reject the whole input", r)
 
     def test_the_red_step_sends_to_the_attacks(self):
-        red = self.skill.split("3. **Red.**", 1)[1].split("\n4. ", 1)[0]
-        self.assertIn("[adversarial.md](adversarial.md)", red)
-        self.assertIn("all six", red)
-        self.assertLess(red.index("all six"), red.index("`herd verify`"))
+        plan, red = self.skill.split("3. **Break it**", 1)[1].split("\n4. **Red.**", 1)
+        self.assertIn("[adversarial.md](adversarial.md)", plan)
+        self.assertIn("all six", plan)
+        self.assertIn("`herd verify` before writing code", red.split("\n5. ", 1)[0])
 
 
 if __name__ == "__main__":

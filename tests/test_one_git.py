@@ -46,6 +46,8 @@ class TestOneGitCall(unittest.TestCase):
         git(self.root, "commit", "-q", "-m", "init")
         self.herd("init", "t1", "Add a greeting")
         (self.root / ".herd/tasks/t1/task.toml").write_text(TASK)
+        for name in ("bad-input", "collision", "one-bad-part", "recount", "refusal", "other-reading"):
+            self.herd("note", "--tried", "--attack", name, "n/a: not under test")  # or the first verify refuses
 
     def tearDown(self):
         self.tmp.cleanup()

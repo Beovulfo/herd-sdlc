@@ -59,13 +59,13 @@ def build(root, risk="medium", toml=""):
         "        import app\n        self.assertEqual(app.hello(), 'hello')\n")
     for name in ("refusal", "other-reading"):
         ok(run(root, "note", "--tried", "--attack", name, "n/a: no inputs"))
-    run(root, "verify")  # red
-    (root / "app.py").write_text("def hello():\n    return 'hello'\n")
-    for name in ("bad-input", "collision", "recount", "one-bad-part"):
+    for name in ("bad-input", "collision", "recount", "one-bad-part"):  # all six before the first verify
         refuses = {"collision": "n/a: the app takes no input",
                    "one-bad-part": "python3 -c 'import app,sys; sys.exit(\"no\")'"}.get(name)
         extra = ["--refuses", refuses] if refuses else []
         ok(run(root, "note", "--tried", "--attack", name, "--check", CHECK, *extra, name))
+    run(root, "verify")  # red
+    (root / "app.py").write_text("def hello():\n    return 'hello'\n")
     ok(run(root, "verify"))
 
 

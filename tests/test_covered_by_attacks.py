@@ -33,6 +33,8 @@ def repo(root, criteria):
         subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
     assert herd(root, "init", "t", "g").returncode == 0
     write_task(root, criteria)
+    # these tests assert the exact attack list: start past the first verify, which would need all six notes (issue #94)
+    (Path(root) / ".herd/tasks/t/red.json").write_text('{"at": "2026-01-01T00:00:00Z", "notes": 1000}\n')
 
 
 def logged(root):

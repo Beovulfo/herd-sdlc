@@ -2,7 +2,7 @@
 
 Try to break your own work on exactly what the request promises. Never skip it because the demo passes. On the standard route `herd done` and the Stop gate refuse until each of the six standard attacks below has a command that `herd verify` ran and saw pass.
 
-The attacks shape the design. Before the first `herd verify`, and so before any code, read this file, decide what each attack means for your input, and log all six, each with its command (or `--covered-by`) or `n/a:`. They should fail then.
+The attacks shape the design. Before the first `herd verify`, and so before any code, read this file, decide what each attack means for your input, and log all six, each with its command (or `--covered-by`) or `n/a:`. They should fail then. On the standard route the first `herd verify` refuses while one has no note: it runs no check and writes nothing.
 
 1. Turn each quantifier or size word in the request (`any`, `every`, `whatever`, `many`, `big`, `very big`) into hostile inputs:
    - generated cases from several different shapes or families, and purely random ones you did not design;

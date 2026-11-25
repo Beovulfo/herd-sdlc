@@ -31,7 +31,7 @@ class TestLayout(unittest.TestCase):
             names = {c.name for c in installed[0].iterdir()}
             self.assertNotIn("examples", names)
             self.assertNotIn("tests", names)
-            self.assertTrue({"hooks", "agents", "skills", "scripts"} <= names, names)
+            self.assertTrue({"hooks", "skills", "scripts"} <= names, names)
             self.assertFalse(list(installed[0].rglob("examples")))
 
     def test_plugin_names_no_repo_paths(self):
@@ -51,7 +51,7 @@ class TestLayout(unittest.TestCase):
         self.assertEqual(v, top and top.group(1))  # the newest changelog entry names the plugin's version
         self.assertIn("## 0.12.2", cl)
         self.assertEqual(sorted(p.name for p in PLUGIN.iterdir() if p.name != ".DS_Store"),
-                         [".claude-plugin", "LICENSE", "NOTICE", "agents", "assets", "hooks", "scripts", "skills"])
+                         [".claude-plugin", "LICENSE", "NOTICE", "assets", "hooks", "scripts", "skills"])
 
 
 if __name__ == "__main__":

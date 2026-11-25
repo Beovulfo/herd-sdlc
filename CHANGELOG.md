@@ -2,6 +2,16 @@
 
 All notable changes to Herd. Versions follow `plugin/.claude-plugin/plugin.json`.
 
+## 0.13.0
+
+The review is removed; the plan is attacked early instead (issue #87, PR 2 of the plan in #55, after #83). The owner asked: "I want to remove the reviews from the code and focus on attacking the plan early". On the bus task (#57), review rounds were about 40% of Herd's cost, and 2 of 3 runs stopped at the review limit. On the supermarket task (#31), 4 of 6 Sonnet runs stopped the same way.
+
+- **Removed:** the `herd-reviewer` subagent and its SubagentStop hook; the commands `herd review`, `herd review-brief` and `herd review-hook` (each now exits 2); the reviewer tier rules, `[review]` config and review limit; every refusal, report line and PR line about a missing review. `herd status --json` and `stopped.json` no longer have a `review` key.
+- **Removed:** the session log records in `start.json` (`transcript`, `sessions`), which only the review used.
+- **Unchanged:** risk and triage, the required fields at medium and high risk, the human question at high risk, the guard, red first, frozen human criteria, the six attacks and escalation after 3 failing verifies.
+- A task started on 0.12.x still loads and finishes. Its review notes stay in the report. Its old `start.json` keys and `[review]` config are ignored.
+- **Known limits:** no fresh-context look at the code; bugs outside the attacks and criteria are not caught. In those Sonnet supermarket runs the review alone found real bugs. No model leg has measured 0.13.0.
+
 ## 0.12.14
 
 The attacks shape the design, and input the program cannot trust is refused, not tolerated (issue #83). In runs of two unrelated tasks (#31, #57), programs built with Herd silently dropped a requested item, or skipped a repeated unique id with exit 0. The attack text asked for that tolerance, and four attacks could be written after the code.

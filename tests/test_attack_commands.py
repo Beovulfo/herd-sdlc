@@ -4,7 +4,6 @@ from pathlib import Path
 
 from scripts import herd
 from tests.test_harness_rules import OK, Base
-from tests.test_herd_cli import late_review
 
 # a stand-in program: knows one item, written as a name or `name x2`
 PROG = '''import sys
@@ -32,7 +31,6 @@ class Attacks(Base):
             herd.add_note(self.root, "t1", "tried", f"{a} attack", attack=a, check=OK, **extra)
 
     def run_all(self):
-        late_review(self.root)
         ev = herd.verify(self.root, "t1")
         return ev, herd._attack_states(ev["attacks"]), " ".join(herd.problems(self.root, "t1"))
 
@@ -190,7 +188,7 @@ class TestRequired(Attacks):
 
     def test_quick_and_low_risk_do_not_need_them(self):
         for ev in ({"route": "standard", "risk": {"effective": "low"}}, {"route": "quick", "risk": {"effective": "medium"}}):
-            self.assertFalse(herd.review_needed(ev))
+            self.assertFalse(herd.full_rules(ev))
             self.assertEqual(herd.missing_programs(ev), [])
 
 

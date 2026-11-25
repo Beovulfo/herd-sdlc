@@ -51,7 +51,7 @@ class TestLayout(unittest.TestCase):
         self.assertEqual(v, top and top.group(1))  # the newest changelog entry names the plugin's version
         self.assertIn("## 0.12.2", cl)
         self.assertEqual(sorted(p.name for p in PLUGIN.iterdir() if p.name != ".DS_Store"),
-                         [".claude-plugin", "LICENSE", "NOTICE", "assets", "hooks", "scripts", "skills"])
+                         [".claude-plugin", "LICENSE", "NOTICE", "agents", "assets", "hooks", "scripts", "skills"])
 
 
 if __name__ == "__main__":

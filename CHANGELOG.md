@@ -2,6 +2,16 @@
 
 All notable changes to Herd. Versions follow `plugin/.claude-plugin/plugin.json`.
 
+## 0.12.14
+
+The attacks shape the design, and input the program cannot trust is refused, not tolerated (issue #83). In runs of two unrelated tasks (#31, #57), programs built with Herd silently dropped a requested item, or skipped a repeated unique id with exit 0. The attack text asked for that tolerance, and four attacks could be written after the code.
+
+- **Changed:** all six standard attacks are logged before the first `herd verify`. The first verify warns about each missing one, and a later log warns that it did not shape the design. The quick route, which has no attacks, no longer gets these warnings.
+- **Changed:** `collision` has two cases. Distinct entries that share a name, value or position all count. Input that contradicts itself is refused, unless the request says which entry wins.
+- **Changed:** `one-bad-part` skips an entry only when that cannot change a requested answer. A warning on stderr with exit 0 is never a refusal.
+- **Changed:** `--refuses` also goes with `collision`. At medium and high risk `herd done` and the Stop gate refuse without it, so a task in progress must log `collision` again. `--refuses "n/a: <reason>"` (collision only) is not run and is listed under "What is not proven".
+- **Known limits:** the agent decides what identifies an entry, whether input contradicts itself and whether a skip can change an answer. Herd checks none of these, nor that an `n/a:` reason is true. A late attack warns and does not refuse. An exact repeated entry is not covered by either collision case. No model leg has measured the new text.
+
 ## 0.12.13
 
 The first reading of each input is the human's own words (issue #67, part of #65), so the literal input form is always one of the readings.

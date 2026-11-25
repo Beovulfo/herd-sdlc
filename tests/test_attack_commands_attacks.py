@@ -58,7 +58,7 @@ class TestRefusal(Gen):
         self.assertTrue(any(want[0::2]) and not all(want[0::2]))
 
     def test_a_flag_is_refused_exactly_where_it_does_not_belong(self):
-        allowed = {("refuses", "bad-input"), ("refuses", "one-bad-part"), ("example", "other-reading")}
+        allowed = {("refuses", "bad-input"), ("refuses", "collision"), ("refuses", "one-bad-part"), ("example", "other-reading")}
         for flag in ("refuses", "example"):
             for attack in herd.ATTACKS:
                 try:

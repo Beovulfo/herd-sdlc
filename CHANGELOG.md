@@ -2,6 +2,14 @@
 
 All notable changes to Herd. Versions follow `plugin/.claude-plugin/plugin.json`.
 
+## 0.12.13
+
+The first reading of each input is the human's own words (issue #67, part of #65), so the literal input form is always one of the readings.
+
+- **Changed:** at medium and high risk on the standard route, `herd check` exits 1 and `herd done` refuses when `readings[0]` of an `[[inputs]]` entry is not a verbatim quote of the request. It is the quote rule of human criteria. A task in progress may need its readings reordered.
+- Low risk only warns. The quick route, and a task with no recorded request, are exempt.
+- **Known limits:** any phrase of the request passes, even one that does not describe the input. A request that only names a file gives little to quote. A `human-change` note does not excuse an input. Herd does not check that the `--example` command uses that form.
+
 ## 0.12.12
 
 Herd runs the program itself for two attack claims (issue #66). The owner asked: "Can you enforce any of them with code instead ?"

@@ -209,7 +209,7 @@ class TestInputsRefused(Base):
         self.assertEqual([p.split(":", 1)[0] for p in probs], ["C1 has an `inputs` key inside its [[criteria]] table"])
 
     def test_an_incomplete_or_wrong_shape_input_is_refused(self):
-        _, probs = self.ready(NO_INPUTS + '\n[[inputs]]\nhuman = "a call"\nprogram = " "\n')
+        _, probs = self.ready(NO_INPUTS + '\n[[inputs]]\nhuman = "a call"\nprogram = " "\nreadings = ["any call", "x"]\n')
         self.assertEqual([p.split(":", 1)[0] for p in probs], ["inputs #1"])
         self.tearDown()
         self.setUp()
@@ -218,7 +218,7 @@ class TestInputsRefused(Base):
 
     def test_complete_inputs_pass_and_are_shown_unchanged(self):
         ev, probs = self.ready(NO_INPUTS + '\n[[inputs]]\nhuman = "a call"\nprogram = "a call, as typed"\n'
-                               'readings = ["typed by hand", "pasted from a file"]\n')  # 0.12.9: 2 readings required
+                               'readings = ["any call", "pasted from a file"]\n')  # 0.12.9: 2 readings; 0.12.13: the first quotes
         self.assertEqual(probs, [])
         self.assertEqual(herd.problems(self.root, "t1"), [])
         self.assertIn("Inputs (as you described them -> as the program receives them): a call -> a call, as typed",

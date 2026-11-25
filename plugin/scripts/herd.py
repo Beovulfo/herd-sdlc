@@ -606,8 +606,41 @@ def input_warnings(task):
     out += [f"inputs #{i}: give `human` (the input as the human described it) and `program` (as the program "
             "receives it)" for i in bad]
     return out + [f"inputs #{i}: `readings` needs at least 2 items, the ways a person could read the human's words "
-                  f"for it, such as `readings = [\"<one reading>\", \"<another>\"]`" for i, x in enumerate(ins, 1)
+                  f"for it, such as `readings = [\"<a quote of the request>\", \"<another>\"]`" for i, x in enumerate(ins, 1)
                   if i - 1 not in [b - 1 for b in bad] and len(_readings(x)) < 2]
+
+
+def reading_quote_warnings(task, request):
+    """Inputs of a standard task whose first reading is not the human's words, by the human criteria's quote rule.
+    Refused at medium and high risk (`herd check`, `herd done`); a warning at low risk. None if no request."""
+    ins = task.get("inputs")
+    if request is None or task.get("route", "standard") == "quick" or not isinstance(ins, list):
+        return []
+    return [f"inputs #{i}: `readings[0]` is not a verbatim quote of the request: put the human's own words for this "
+            "input first, copied from the request" for i, x in enumerate(ins, 1)
+            if isinstance(x, dict) and not any(_quotes(r, request) for r in _readings(x)[:1])]
+
+
+def _check_command(root, slug):
+    """`herd check`: exit 1 for an invalid task.toml, or an unquoted first reading at medium or high risk."""
+    task = load_task(root, slug)
+    errs = validate_task(task)
+    d = _dir(root, slug)
+    request = (d / "request.md").read_text() if (d / "request.md").exists() else None
+    quotes, refused = reading_quote_warnings(task, request), False
+    if quotes:  # the risk as `herd verify` sees it: stored at init, raised by the files changed since
+        start, snap = _state(d / "start.json", {}), git_state(root, fresh=True)
+        changed = changed_since(root, start.get("head"), snap)
+        changed = changed if changed is not None else changed_since(root, "HEAD", snap)
+        refused = review_needed({"route": task.get("route", "standard"), "risk": risk_of(root, start, changed)})
+    for line in errs or ([] if refused else ["ok"]):
+        print(line)
+    for w in quotes if refused else []:
+        print(f"error: {w}", file=sys.stderr)
+    for w in (check_warnings(task, request, load_notes(root, slug)) + coverage_warnings(task) + length_warnings(task)
+              + ([] if refused else quotes)):
+        print(f"warning: {w}")
+    return 1 if errs or refused else 0
 
 
 def refusal_late(root, slug, red):
@@ -1193,7 +1226,7 @@ def verify(root, slug):  # noqa: C901
     human_checks = [cid for cid in checks_changed if frozen[cid]["source"] == "human"]
     added = [cid for cid in now_by_id if frozen and cid not in frozen]
     human_not_verbatim = human_unquoted(task, request_text, load_notes(root, slug))
-    inputs_left = input_warnings(task)
+    inputs_left = input_warnings(task) + reading_quote_warnings(task, request_text)
     warnings = (check_warnings(task, request_text, load_notes(root, slug)) + coverage_warnings(task) + length_warnings(task)
                 + inputs_left
                 + [msg for name, msg in FIRST_VERIFY_ATTACKS
@@ -2178,6 +2211,8 @@ NEXT_STEPS = ((re.compile(r"^(.+?) is failing: "), "fix {0}, then run `herd veri
                "restore human criterion {0} as the human wrote it, or record the human's change with "
                "`herd note --human-change`, then run `herd verify`"),
               (re.compile(r"^(test_budget|known_limits) is empty"), "add `{0}` to task.toml, then run `herd verify`"),
+              (re.compile(r"^inputs #\d+: `readings\[0\]`"),
+               "put a quote of the request first in that input's `readings`, then run `herd verify`"),
               (re.compile(r"^(?:no `inputs`|`inputs` must|inputs #\d+|\S+ has an `inputs` key)"),
                "add top-level `[[inputs]]` tables with `human` and `program` to task.toml, then run `herd verify`"),
               (re.compile(r"^coverage of human criterion (\S+) is empty"),
@@ -2913,15 +2948,7 @@ def main(argv):  # noqa: C901
             else:
                 print(f"created quick task {args[0]} with one criterion: run `herd verify` and expect it to fail first")
         elif cmd == "check":
-            slug = _slug_arg(root, args)
-            task = load_task(root, slug)
-            errs = validate_task(task)
-            print("\n".join(errs) if errs else "ok")
-            req_path = _dir(root, slug) / "request.md"
-            for w in (check_warnings(task, req_path.read_text() if req_path.exists() else None, load_notes(root, slug))
-                      + coverage_warnings(task) + length_warnings(task)):
-                print(f"warning: {w}")
-            return 1 if errs else 0
+            return _check_command(root, _slug_arg(root, args))
         elif cmd == "note":
             _note_command(root, args)
         elif cmd == "detect":

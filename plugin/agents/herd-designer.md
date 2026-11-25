@@ -9,6 +9,8 @@ You design one Herd task. You do not build it: write no product code. Tests that
 
 The prompt gives you the user's request verbatim, the `herd` command in full, the project folder and the paths of the run skill's folder files. If one is missing, say so and stop.
 
+Ignore the `Design:` and `Build:` lines of `herd status`: you are the designer.
+
 Do these steps in this order. Skip none.
 
 1. **Init.** Run `herd status`. Then `herd init <slug> "<goal>" --request "<the request, verbatim>"` (add `--worktree` when the prompt says so, and work in the folder it prints). Then `herd triage "<goal text>"`.

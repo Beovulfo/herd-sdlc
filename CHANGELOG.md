@@ -25,7 +25,7 @@ End to end, a Sonnet design with a Haiku build scored 39.3 of 40 stores, against
 - **Changed:** the pre-init hook also runs before `herd status`, and notes the session log in the checkout's git folder.
 - **Changed:** the builder no longer has to be Sonnet or stronger.
 - **Upgrading:** tasks started before 0.14.0 need no design. Add `[models]` only to change the defaults.
-- **Known limits:** Herd checks that a designer of the right tier ran, not that its design is right. The cost per run rises by about $0.5 on Haiku. In the end-to-end test a Sonnet second look added scope nobody asked for: two floors and an HTML replay. The build model is not enforced: `herd status` only says which one to use. A full model name works only if your Claude Code can spawn it. No live session has run the 0.14.0 hook or agents, and no model leg has measured 0.14.0.
+- **Known limits:** Herd checks that a designer of the right tier ran, not that its design is right. The cost per run rises by about $0.5 on Haiku. In the end-to-end test a Sonnet second look added scope nobody asked for: two floors and an HTML replay. The build model is not enforced: `herd status` only says which one to use. A full model name works only if your Claude Code can spawn it. One live smoke run (Haiku session, Sonnet subagent, $0.07) showed that the hook records `design.json`; no live run has done a full design with the agents, and no model leg has measured 0.14.0.
 
 ## 0.13.4
 

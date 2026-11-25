@@ -8,10 +8,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import armfile
 import judge
 import report
 import run_eval
 
+TRIO = ("control", "generic-after-red", "generic-before-attacks")
 PROMPT = "build a thing\nwith \"two\" lines and $HOME `ticks`"
 
 
@@ -42,9 +44,8 @@ class FakeClaude:
             return Proc(1)
         task.mkdir(parents=True, exist_ok=True)
         if not resumed:
-            early = log.stem == "run-2"
-            settings = json.loads((Path(run_dir) / "settings.json").read_text())
-            self.hooked.append("hooks" in settings)
+            early = "hooks" in json.loads((Path(run_dir) / "settings.json").read_text())
+            self.hooked.append(early)
             (task / "task.toml").write_text("goal = 'before'\n")
             (work / "main.py").write_text("start\n")
             written = early and "late-hold" in self.skip
@@ -75,14 +76,15 @@ class Base(unittest.TestCase):
         self.tmp = Path(tmp.name).resolve()
         self.asked = []
 
-    def ask(self, prompt):
+    def ask(self, arm, prompt):
         self.asked.append(prompt)
-        return "Context.\n" + "".join(f"{i}. question {i}\n" for i in range(1, 9))
+        return "Context.\n" + "".join(f"{i}. question {i}\n" for i in range(1, 9)), 0.002
 
     def run_eval(self, fake, runs=1):
         ns = run_eval.parse(["--runs", str(runs), "--herd-tag", "HEAD", "--poll", "0", "--timeout", "5"])
+        arms = armfile.load_arms(only=TRIO)
         env = {"HOME": str(self.tmp / "home"), "PATH": os.environ["PATH"]}
-        ev = run_eval.Eval(ns, env, self.tmp / "root", start=fake.start, stop=fake.stop, call=self.ask)
+        ev = run_eval.Eval(ns, env, self.tmp / "root", arms, start=fake.start, stop=fake.stop, call=self.ask)
         with contextlib.redirect_stdout(io.StringIO()):
             ev.run({"supermarket-route": PROMPT})
         return ev.results / "supermarket-route"
@@ -95,7 +97,7 @@ class TestRunLoop(Base):
     def test_three_arms_save_before_and_after(self):
         fake = FakeClaude()
         out = self.run_eval(fake)
-        for arm in run_eval.ARMS:
+        for arm in TRIO:
             run = out / arm / "run-1"
             self.assertEqual(self.status(out, arm), "ok")
             self.assertEqual((run / "before" / "task.toml").read_text(), "goal = 'before'\n")
@@ -115,7 +117,7 @@ class TestRunLoop(Base):
             self.assertEqual(cmd[cmd.index("--resume") + 1], "first")
             self.assertIn("--fork-session", cmd)
         # the second arm does not see the first arm's files
-        self.assertFalse((out / "after-red" / "run-1" / "after" / "files" / "control.txt").exists())
+        self.assertFalse((out / "generic-after-red" / "run-1" / "after" / "files" / "control.txt").exists())
         self.assertEqual(fake.seen_work[1], fake.seen_work[2])
 
     def test_questions_only_in_the_question_arms_and_at_most_five(self):
@@ -144,16 +146,16 @@ class TestRunLoop(Base):
         self.assertIn(str(self.tmp / "root" / "run-2"), settings["sandbox"]["filesystem"]["denyRead"])
         self.assertTrue((run_dir / "plugin" / "scripts" / "herd.py").is_file())
         self.assertEqual(fake.commands[0], run_eval.run_leg.build_command(
-            run_eval.parse(["--herd-tag", "HEAD"]), "/herd:run " + PROMPT, run_dir))
+            run_eval.parse(["--herd-tag", "HEAD"]), "/herd:run " + PROMPT, run_dir) + ["--include-partial-messages"])
 
     def test_a_session_that_never_stops_where_asked_is_recorded(self):
         out = self.run_eval(FakeClaude(skip={"session"}))
-        self.assertEqual([self.status(out, a) for a in run_eval.ARMS], ["no-start"] * 3)
+        self.assertEqual([self.status(out, a) for a in TRIO], ["no-start"] * 3)
         self.assertEqual(self.asked, [])
 
     def test_attacks_already_verified_is_a_missed_stop(self):
         out = self.run_eval(FakeClaude(skip={"early"}))
-        self.assertEqual(self.status(out, "before-attacks"), "missed-stop")
+        self.assertEqual(self.status(out, "generic-before-attacks"), "missed-stop")
         self.assertEqual(self.status(out, "control"), "ok")
 
     def test_only_the_early_first_leg_holds_attack_notes(self):
@@ -164,19 +166,19 @@ class TestRunLoop(Base):
 
     def test_an_attack_note_written_before_the_stop_is_a_missed_stop(self):
         out = self.run_eval(FakeClaude(skip={"late-hold"}))
-        self.assertEqual(self.status(out, "before-attacks"), "missed-stop")
+        self.assertEqual(self.status(out, "generic-before-attacks"), "missed-stop")
 
     def test_resume_without_a_verify_is_not_ok(self):
         out = self.run_eval(FakeClaude(skip={"verify"}))
-        self.assertEqual([self.status(out, a) for a in run_eval.ARMS], ["no-verify"] * 3)
+        self.assertEqual([self.status(out, a) for a in TRIO], ["no-verify"] * 3)
 
     def test_failed_challenger_is_recorded(self):
-        def broken(prompt):
+        def broken(arm, prompt):
             raise judge.Refused("claude call failed")
         self.ask = broken
         with contextlib.redirect_stderr(io.StringIO()):
             out = self.run_eval(FakeClaude())
-        self.assertEqual(self.status(out, "after-red"), "challenger-failed")
+        self.assertEqual(self.status(out, "generic-after-red"), "challenger-failed")
         self.assertEqual(self.status(out, "control"), "ok")
 
 
@@ -188,7 +190,8 @@ class TestWholeChain(Base):
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
             self.assertEqual(judge.label_results(results, cases, lambda p: '{"label": "shelf", "quote": ""}'), 0)
             self.assertEqual(report.main([str(results)]), 0, out.getvalue())
-        self.assertIn("shelf→shelf: 1", out.getvalue())
+        self.assertIn("| generic-after-red | 1 |", out.getvalue())
+        self.assertIn("shelf→shelf 1", out.getvalue())
 
 
 class TestStopPoints(Base):
@@ -261,7 +264,8 @@ class TestDryRun(Base):
         out = io.StringIO()
         root = self.tmp / "never"
         with contextlib.redirect_stdout(out):
-            code = run_eval.main(["--case", "supermarket-route", "--runs", "1", "--dry-run", "--root", str(root)])
+            code = run_eval.main(["--case", "supermarket-route", "--runs", "1", "--dry-run", "--root", str(root),
+                                  *[x for a in TRIO for x in ("--arm", a)]])
         text = out.getvalue()
         self.assertEqual(code, 0)
         self.assertEqual(sum("--resume" in line for line in text.splitlines()), 3)

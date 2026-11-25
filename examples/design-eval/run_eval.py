@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Design eval: do a fresh challenger's questions, answered before any code, fix design mistakes?
 
-  python3 run_eval.py [--case TASK] [--runs 12] [--root DIR] [--dry-run]
+  python3 run_eval.py [--case TASK] [--arm NAME] [--runs 12] [--parallel 1] [--root DIR] [--dry-run]
 
-Per case and run, two Herd sessions start in run_leg.py's isolation. One is stopped at its first `herd verify`
-and forked twice (arms control and after-red); one is stopped before its first attack note is written (arm before-attacks).
-Each arm resumes from that stop, answers, runs `herd verify` and is stopped again. Nothing is built.
-Then: judge.py ROOT/results, and report.py ROOT/results.
+Arms are files in arms/ (see armfile.py). Per case and run, Herd sessions start in run_leg.py's isolation: one
+is stopped at its first `herd verify` for the arms that ask after red or not at all, and one is stopped before its
+first attack note for the arms that ask before the attacks. Each arm resumes from a copy of that stop, answers,
+runs `herd verify` and is stopped again. Nothing is built. Then: judge.py ROOT/results, report.py ROOT/results.
 """
 import argparse
 import json
@@ -17,24 +17,25 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
+import threading
 import time
+import tomllib
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(HERE), str(HERE.parent / "supermarket-route" / "verifier")]
+import armfile  # noqa: E402
 import judge  # noqa: E402
 import leak_audit  # noqa: E402
+import money  # noqa: E402
 import run_leg  # noqa: E402
-from report import ARMS  # noqa: E402
 
 REPO = run_leg.EXAMPLES.parent
 MAX_QUESTIONS = 5
-CHALLENGER = (
-    "You are a challenger who has not seen any code. Read this request. First state in 2 or 3 lines the business "
-    "context: who uses this program, in what real situation, and what a wrong answer costs them. Then write at most "
-    f"{MAX_QUESTIONS} sharp questions the builder must answer before writing code. Each question must be framed in "
-    "that business context, for example: 'For a picker in this store, what should happen when ...?' Cover "
-    "ambiguities, input forms, edge cases, and what the program must accept and refuse. Numbered.")
+MAX_PARALLEL = 3  # the machine allows 4 sessions in all
+MARKER = "QUESTIONS:"  # a challenger that reasons first puts its questions after this line
 WITH_QUESTIONS = (
     "A challenger who has not seen your work wrote the questions below. They are there to help you figure out the "
     "details: do not assume you already know everything. Use each question to challenge your own understanding of "
@@ -51,30 +52,114 @@ THEN = {
 }
 
 
-def builder_message(arm, questions=None):
-    then = THEN["attacks" if arm == "before-attacks" else "red"]
-    if arm == "control":
+def builder_message(when, questions=None):
+    then = THEN["attacks" if when == "before-attacks" else "red"]
+    if when == "none":
         return NO_QUESTIONS + then
     return f"{WITH_QUESTIONS}{then}\n\n{questions}"
 
 
-def challenger_input(prompt):
-    return f"{CHALLENGER}\n\nREQUEST:\n\n{prompt}"
+def _stated(task, field):
+    """One `sees` field of a task.toml, as text."""
+    def tables(key):
+        value = task.get(key)
+        return [x for x in value if isinstance(x, dict)] if isinstance(value, list) else []
+
+    if field == "inputs_program":
+        lines = [f"- {x['program']}" for x in tables("inputs") if x.get("program")]
+    elif field == "criteria":
+        lines = [f"- {x['text']}" for x in tables("criteria") if x.get("text")]
+    else:
+        value = task.get("known_limits")
+        lines = [str(x) for x in (value if isinstance(value, list) else [value]) if x]
+    return "\n".join(lines) or "(none stated)"
+
+
+HEADINGS = {"request": "REQUEST", "inputs_program": "HOW THE PROGRAM GETS EACH INPUT, as the builder stated it",
+            "known_limits": "KNOWN LIMITS, as the builder stated them", "criteria": "SUCCESS CRITERIA"}
+
+
+def challenger_input(arm, prompt, task_toml):
+    """The instruction and what the arm sees. All but the request is read from the stopped session's task.toml."""
+    task = {}
+    if set(arm["sees"]) - {"request"}:
+        try:
+            task = tomllib.loads(Path(task_toml).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            raise judge.Refused(f"cannot read the stopped session's task.toml: {e}") from None
+    parts = [f"{HEADINGS[x]}:\n\n{prompt if x == 'request' else _stated(task, x)}" for x in arm["sees"]]
+    return "\n\n".join([arm["instruction"], *parts])
+
+
+def challenger_command(model, arm, budget):
+    """judge.py's fresh call; an arm with tools gets only those, and a stream that shows which skills it used."""
+    cmd = judge.model_command(model)
+    tools = arm.get("tools", "")
+    cmd[cmd.index("--tools") + 1] = tools
+    cmd[cmd.index("--output-format") + 1] = "stream-json"
+    cmd += ["--verbose", "--permission-mode", "dontAsk", "--max-budget-usd", f"{budget:g}"]
+    return cmd + (["--allowedTools", tools] if tools else [])
+
+
+def challenger_reply(stream, skills):
+    """(reply, USD) from the stream. The last result is the final one; its cost counts every subagent."""
+    results, used = [], set()
+    for line in stream.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        if event.get("type") == "result":
+            results.append(event)
+        content = (event.get("message") or {}).get("content") if event.get("type") == "assistant" else None
+        for block in content if isinstance(content, list) else []:
+            if block.get("type") == "tool_use" and block.get("name") == "Skill":
+                used.add(str((block.get("input") or {}).get("skill")))
+    last = results[-1] if results else {}
+    cost = last.get("total_cost_usd")
+    if last.get("is_error") or not isinstance(last.get("result"), str):
+        raise judge.Refused(f"claude call failed: {str(last.get('result') or last.get('subtype'))[:300]}")
+    unused = sorted(set(skills) - used)
+    if unused:
+        raise judge.Refused(f"the challenger never used the skill {', '.join(unused)}")
+    return last["result"], cost
+
+
+def ask_challenger(model, arm, prompt, env, budget, timeout):
+    """One fresh call from a temporary project that holds only the arm's skills."""
+    found, missing = armfile.skill_files(arm, env)
+    if missing:
+        raise judge.Refused(f"no skill file at {', '.join(missing)}")
+    with tempfile.TemporaryDirectory() as project:
+        for name, path in found:
+            dest = Path(project) / ".claude" / "skills" / name
+            dest.mkdir(parents=True)
+            shutil.copyfile(path, dest / "SKILL.md")
+        try:
+            r = subprocess.run(challenger_command(model, arm, budget), input=prompt, cwd=project, env=env,
+                               capture_output=True, text=True, timeout=timeout)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            raise judge.Refused(f"claude call failed: {e}") from None
+    return challenger_reply(r.stdout, [name for name, _ in found])
 
 
 def first_questions(reply):
-    """The reply cut before a sixth numbered question, so no run gets more than MAX_QUESTIONS."""
+    """The reply after its QUESTIONS: line, if any, cut before a sixth numbered question."""
+    reply = re.split(rf"(?m)^[ \t#*]*{MARKER}[ \t*]*$", reply)[-1]
     extra = re.search(rf"(?m)^[ \t#*]*{MAX_QUESTIONS + 1}[.)]", reply)
     return (reply[:extra.start()] if extra else reply).strip()
 
 
 def session_command(ns, prompt, run_dir):
-    return run_leg.build_command(ns, "/herd:run " + prompt, run_dir)
+    return run_leg.build_command(ns, "/herd:run " + prompt, run_dir) + ["--include-partial-messages"]
 
 
 def resume_command(ns, message, run_dir, session_id):
     """Fork, so every arm that starts from one stop continues the same untouched conversation."""
-    return run_leg.build_command(ns, message, run_dir) + ["--resume", session_id, "--fork-session"]
+    return run_leg.build_command(ns, message, run_dir) + ["--include-partial-messages", "--resume", session_id,
+                                                       "--fork-session"]
 
 
 def case_prompt(case):
@@ -216,10 +301,13 @@ def session_id(log):
 # ---- the eval
 
 class Eval:
-    def __init__(self, ns, env, root, start=run_leg.start, stop=stop_process, call=None):
+    def __init__(self, ns, env, root, arms, start=run_leg.start, stop=stop_process, call=None):
         self.ns, self.env, self.root, self.start, self.stop = ns, env, Path(root), start, stop
+        self.arms = arms
         self.results, self.logs = self.root / "results", self.root / "logs"
-        self.call = call or (lambda prompt: judge.ask(ns.challenger_model, prompt))
+        self.call = call or (lambda arm, prompt: ask_challenger(ns.challenger_model, arm, prompt, env, ns.budget,
+                                                                ns.timeout))
+        self.live, self.cancelled, self.lock = [], False, threading.Lock()
 
     def create_session(self, index, total):
         run_dir = run_leg.create_run(self.root, total, index, self.ns, self.env)
@@ -230,11 +318,17 @@ class Eval:
 
     def drive(self, cmd, run_dir, log, done):
         """Run one command until done() or its end; always leave no process behind."""
-        proc = self.start(cmd, run_dir, log, log.with_suffix(".err"), self.env)
+        with self.lock:
+            if self.cancelled:
+                raise judge.Refused("the eval was stopped")
+            proc = self.start(cmd, run_dir, log, log.with_suffix(".err"), self.env)
+            self.live.append(proc)
         try:
             return wait_for(proc, done, self.ns.timeout, self.ns.poll)
         finally:
             self.stop(proc)
+            with self.lock:
+                self.live.remove(proc)
 
     def first_leg(self, prompt, run_dir, log, early):
         """Run the session to its stop point. Returns (session id, None) or (None, why it cannot be used)."""
@@ -255,22 +349,29 @@ class Eval:
             return None, "missed-stop"
         return sid, None
 
-    def arm(self, arm, prompt, run_dir, sid, logs, out):
-        """Resume the stopped session for one arm. Returns the run's status and its audit findings."""
-        questions = None
-        if arm != "control":
+    def arm(self, name, prompt, run_dir, sid, log, out, used):
+        """Resume the stopped session for one arm. Adds to `used`; returns the status and its audit findings."""
+        arm, questions = self.arms[name], None
+        if arm["when"] != "none":
+            began = time.monotonic()
             try:
-                questions = first_questions(self.call(challenger_input(prompt)))
+                asked = challenger_input(arm, prompt, out / "before" / "task.toml")
+                (out / "challenger_input.md").write_text(asked + "\n")
+                reply, used["cost"]["challenger"] = self.call(arm, asked)
             except judge.Refused as e:
-                print(f"challenger: {e}", file=sys.stderr)
+                print(f"challenger of {name}: {e}", file=sys.stderr)
                 return "challenger-failed", []
+            used["seconds"]["challenger"] = time.monotonic() - began
+            questions = first_questions(reply)
             (out / "questions.md").write_text(questions + "\n")
-        work, log = run_dir / "work", logs[0].with_name(f"{logs[0].stem}.{arm}.jsonl")
-        since = time.time()
-        cmd = resume_command(self.ns, builder_message(arm, questions), run_dir, sid)
-        how = self.drive(cmd, run_dir, log, lambda: has_answered(work, since))
+        work, resumed = run_dir / "work", log.with_name(f"{log.stem}.{name}.jsonl")
+        since, began = time.time(), time.monotonic()
+        cmd = resume_command(self.ns, builder_message(arm["when"], questions), run_dir, sid)
+        how = self.drive(cmd, run_dir, resumed, lambda: has_answered(work, since))
+        used["seconds"]["resume"] = time.monotonic() - began
+        used["cost"]["resume"] = money.log_cost(resumed)
         snapshot(work, out / "after")
-        findings = [f for path in (*logs, log)
+        findings = [f for path in (log, resumed)
                     for f in leak_audit.audit(path, work, settings=run_dir / "settings.json")]
         found = [f"{f.tool}: {f.detail}" for f in findings if not f.blocked]
         if found:
@@ -279,66 +380,88 @@ class Eval:
 
     def session(self, task, n, arms, prompt, run_dir):
         """One first leg, then each of its arms from an identical copy of the work folder."""
-        early = arms == ("before-attacks",)
+        early = self.arms[arms[0]]["when"] == "before-attacks"
         log = self.logs / f"{run_dir.name}.jsonl"
         outs = {arm: self.results / task / arm / f"run-{n}" for arm in arms}
         for arm, out in outs.items():
             out.mkdir(parents=True)
             _record(out, task, arm, n, "incomplete", [])
+        began = time.monotonic()
         sid, why = self.first_leg(prompt, run_dir, log, early)
         if why:
             for arm, out in outs.items():
                 _record(out, task, arm, n, why, [])
                 print(f"{task} {arm} run {n}: {why}", flush=True)
             return
+        first = {"seconds": time.monotonic() - began, "cost": money.log_cost(log)}
         work, saved = run_dir / "work", self.logs / f"{run_dir.name}.start-work"
         shutil.copytree(work, saved, symlinks=True)
         for arm, out in outs.items():
             shutil.rmtree(work)
             shutil.copytree(saved, work, symlinks=True)
             snapshot(work, out / "before")
-            status, found = self.arm(arm, prompt, run_dir, sid, (log,), out)
-            _record(out, task, arm, n, status, found)
+            used = {k: {"first": first[k], "challenger": 0} for k in ("seconds", "cost")}  # each arm bears the start
+            status, found = self.arm(arm, prompt, run_dir, sid, log, out, used)
+            _record(out, task, arm, n, status, found, used)
             print(f"{task} {arm} run {n}: {status}", flush=True)
 
     def run(self, prompts):
-        plan = sessions(prompts, self.ns.runs)
+        plan = sessions(prompts, self.ns.runs, self.arms)
         self.root.parent.mkdir(parents=True, exist_ok=True)
         self.root.mkdir()
         self.results.mkdir()
         self.logs.mkdir()
-        settings = {k: getattr(self.ns, k) for k in ("model", "challenger_model", "herd_tag", "budget", "runs")}
-        (self.results / "manifest.json").write_text(json.dumps(settings, indent=2) + "\n")
-        for index, (task, n, arms) in enumerate(plan, 1):
-            run_dir = self.create_session(index, len(plan))
-            self.session(task, n, arms, prompts[task], run_dir)
+        settings = {k: getattr(self.ns, k) for k in ("model", "challenger_model", "herd_tag", "budget", "runs",
+                                                     "parallel")}
+        (self.results / "manifest.json").write_text(json.dumps({**settings, "arms": self.arms}, indent=2) + "\n")
+
+        def one(index, task, n, arms):
+            self.session(task, n, arms, prompts[task], self.create_session(index, len(plan)))
+
+        pool = ThreadPoolExecutor(max_workers=min(self.ns.parallel, MAX_PARALLEL))
+        try:
+            for future in [pool.submit(one, i, *entry) for i, entry in enumerate(plan, 1)]:
+                future.result()
+        except BaseException:  # also Ctrl-C: sessions have their own process groups, so stop them here
+            with self.lock:
+                self.cancelled = True
+            pool.shutdown(wait=False, cancel_futures=True)
+            for proc in list(self.live):
+                self.stop(proc)
+            raise
+        finally:
+            pool.shutdown()
 
 
-def _record(out, task, arm, n, status, findings):
-    data = {"case": task, "arm": arm, "run": n, "status": status, "findings": findings}
+def _record(out, task, arm, n, status, findings, used=None):
+    data = {"case": task, "arm": arm, "run": n, "status": status, "findings": findings, **(used or {})}
     (out / "run.json").write_text(json.dumps(data, indent=2) + "\n")
 
 
-def sessions(prompts, runs):
-    """(case, run number, arms) for every first leg."""
-    return [(task, n, arms) for task in prompts for n in range(1, runs + 1)
-            for arms in (ARMS[:2], ARMS[2:])]  # control and after-red share a start
+def sessions(prompts, runs, arms):
+    """(case, run number, arm names) for every first leg: arms that stop at the same point share one."""
+    groups = [tuple(n for n, a in arms.items() if (a["when"] == "before-attacks") == early) for early in (False, True)]
+    return [(task, n, group) for task in prompts for n in range(1, runs + 1) for group in groups if group]
 
 
-def dry_run(ns, prompts, root):
-    plan = sessions(prompts, ns.runs)
-    for index, (task, n, arms) in enumerate(plan, 1):
+def dry_run(ns, prompts, root, arms):
+    plan = sessions(prompts, ns.runs, arms)
+    for index, (task, n, names) in enumerate(plan, 1):
         run_dir = root / f"run-{index}"
         where = f"cd {shlex.quote(str(run_dir / 'work'))} &&"
-        stop = "first attack-note command (held before it runs)" if arms == ("before-attacks",) else "first herd verify"
-        print(f"\n# {task} run {n}: session for {', '.join(arms)}, stopped at the {stop}")
+        early = arms[names[0]]["when"] == "before-attacks"
+        stop = "first attack-note command (held before it runs)" if early else "first herd verify"
+        print(f"\n# {task} run {n}: session for {', '.join(names)}, stopped at the {stop}")
         print(f"{where} {shlex.join(session_command(ns, prompts[task], run_dir))}")
-        for arm in arms:
-            if arm != "control":
-                print(f"# {arm} challenger, prompt on stdin, from an empty folder:")
-                print(shlex.join(judge.model_command(ns.challenger_model)))
-            print(f"# {arm} resume, stopped at the verify after ANSWERS.md:")
-            message = builder_message(arm, "<the challenger's questions>").replace("\n\n", " ")
+        for name in names:
+            arm = arms[name]
+            if arm["when"] != "none":
+                skills = "".join(f", with {x} copied in" for x in arm.get("skills", []))
+                print(f"# {name} challenger, prompt on stdin, from a temporary project{skills}; "
+                      f"sees {', '.join(arm['sees'])}:")
+                print(shlex.join(challenger_command(ns.challenger_model, arm, ns.budget)))
+            print(f"# {name} resume, stopped at the verify after ANSWERS.md:")
+            message = builder_message(arm["when"], "<the challenger's questions>").replace("\n\n", " ")
             print(f"{where} {shlex.join(resume_command(ns, message, run_dir, '<session id>'))}")
     print("\ndry run: nothing started")
 
@@ -347,7 +470,10 @@ def parse(argv):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--case", action="append", help="task name; repeat for more (default: every case)")
     ap.add_argument("--cases", default=str(judge.CASES), help="folder of case files")
+    ap.add_argument("--arm", action="append", help="arm name; repeat for more (default: every arm)")
+    ap.add_argument("--arms", default=str(armfile.ARMS_DIR), help="folder of arm files")
     ap.add_argument("--runs", type=int, default=12, help="runs per arm per case")
+    ap.add_argument("--parallel", type=int, default=1, help=f"sessions at once, at most {MAX_PARALLEL}")
     ap.add_argument("--model", default="claude-haiku-5-5", help="the builder")
     ap.add_argument("--challenger-model", help="default: the builder's model")
     ap.add_argument("--herd-tag", default="v0.13.1")
@@ -357,8 +483,11 @@ def parse(argv):
     ap.add_argument("--root", help="a new folder outside HOME (default: under TMPDIR)")
     ap.add_argument("--dry-run", action="store_true")
     ns = ap.parse_args(argv)
-    if ns.runs < 1 or ns.budget <= 0 or ns.timeout <= 0 or ns.poll < 0:
-        ap.error("--runs, --budget and --timeout must be positive, and --poll not negative")
+    if ns.runs < 1 or ns.parallel < 1 or ns.budget <= 0 or ns.timeout <= 0 or ns.poll < 0:
+        ap.error("--runs, --parallel, --budget and --timeout must be positive, and --poll not negative")
+    if ns.parallel > MAX_PARALLEL:
+        print(f"--parallel {ns.parallel} capped at {MAX_PARALLEL}", file=sys.stderr, flush=True)
+        ns.parallel = MAX_PARALLEL
     ns.challenger_model = ns.challenger_model or ns.model
     return ns
 
@@ -379,6 +508,19 @@ def refusal(ns, env, root, scan_dirs):
     return None
 
 
+def usable_arms(ns, env):
+    """The asked arms, without those whose skill file is not on this machine: never run an arm without its skill."""
+    arms = armfile.load_arms(ns.arms, ns.arm)
+    for name, arm in list(arms.items()):
+        missing = armfile.skill_files(arm, env)[1]
+        if missing:
+            print(f"arm {name} skipped: no skill file at {', '.join(missing)}", file=sys.stderr, flush=True)
+            del arms[name]
+    if not arms:
+        raise judge.Refused("no arm left to run")
+    return arms
+
+
 def main(argv=None, env=None, scan_dirs=None):
     env = dict(os.environ if env is None else env)
     ns = parse(argv)
@@ -386,14 +528,15 @@ def main(argv=None, env=None, scan_dirs=None):
     root = Path(os.path.realpath(ns.root or default))
     try:
         prompts = {task: case_prompt(case) for task, case in judge.load_cases(ns.cases, ns.case).items()}
+        arms = usable_arms(ns, env)
         if ns.dry_run:
-            dry_run(ns, prompts, root)
+            dry_run(ns, prompts, root, arms)
             return 0
         why = refusal(ns, env, root, scan_dirs)
         if why:
             raise judge.Refused(why)
         print(f"root: {root}", flush=True)
-        Eval(ns, env, root).run(prompts)
+        Eval(ns, env, root, arms).run(prompts)
     except (judge.Refused, OSError) as e:
         print(f"refused: {e}", file=sys.stderr)
         return 2

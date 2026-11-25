@@ -109,9 +109,13 @@ class TestLayout(unittest.TestCase):
             self.assertNotIn(word, text)
 
     def test_hidden_files_are_named_in_run_leg_and_the_reference_is_not_imported_by_runs(self):
-        self.assertEqual(run_leg.HIDDEN["bus-transfer"], {"bus_verify.py", "bus_probe.py", "bus_reference.py"})
+        self.assertEqual(run_leg.HIDDEN["bus-transfer"],
+                         {"bus_verify.py", "bus_probe.py", "bus_reference.py", "test_bus_verify.py"})
         for f in (TASK / "verifier").glob("*.py"):
-            self.assertIn(f.name, run_leg.HIDDEN["bus-transfer"] | {"test_bus_verify.py"})
+            self.assertIn(f.name, run_leg.HIDDEN["bus-transfer"])
+
+    def test_hidden_list_names_this_test_file_so_a_copy_is_refused(self):
+        self.assertIn("test_bus_verify.py", run_leg.HIDDEN["bus-transfer"])
 
 
 class TestSolvers(unittest.TestCase):

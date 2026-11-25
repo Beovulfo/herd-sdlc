@@ -25,7 +25,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 EXAMPLES = SCRIPT_DIR.parent.parent
 # File names of each task's hidden verifier and probes: no copy may sit where a run can read it.
 HIDDEN = {"supermarket-route": {"verify_general.py", "robustness_probe.py", "probe6.py"},
-          "bus-transfer": {"bus_verify.py", "bus_probe.py", "bus_reference.py"}}
+          "bus-transfer": {"bus_verify.py", "bus_probe.py", "bus_reference.py", "test_bus_verify.py"}}
 PLANTED_NAMES = set().union(*HIDDEN.values())
 TOOLS = "Bash,Read,Write,Edit,MultiEdit,Glob,Grep,Agent,Skill"
 GITCONFIG = "[user]\n\tname = bench\n\temail = bench@example.com\n"

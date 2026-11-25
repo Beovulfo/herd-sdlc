@@ -9,7 +9,7 @@ Benchmark 2, next to [`supermarket-route`](../supermarket-route). The same promp
 | [`verifier/bus_probe.py`](verifier/bus_probe.py) | the hidden robustness probe: 6 bad inputs |
 | [`verifier/bus_reference.py`](verifier/bus_reference.py) | the reference solver and two wrong solvers, used only by the verifier and its tests |
 | [`verifier/ADAPTER_SPEC.md`](verifier/ADAPTER_SPEC.md) | what an adapter must do, given to the agent that writes one |
-| [`verifier/test_bus_verify.py`](verifier/test_bus_verify.py) | tests of the verifier itself |
+| [`verifier/test_bus_verify.py`](verifier/test_bus_verify.py) | tests of the verifier itself; hidden too, since it holds a working solver |
 
 ## Method
 

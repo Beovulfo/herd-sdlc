@@ -14,35 +14,32 @@ def late(warnings):
     return {w.split()[0] for w in warnings if "attack was logged after the first verify" in w}
 
 
-def asked(warnings):
-    return {w.split()[1] for w in warnings if w.startswith("no ") and " attack yet" in w}
-
-
 class TestFirstVerify(Attacks):
     def note(self, name):
         herd.add_note(self.root, "t1", "tried", f"{name} attack", attack=name, check=OK)
 
-    def test_generated_subsets_are_asked_for_and_late(self):
-        """refusal: which attacks are asked for or late, judged by set arithmetic, not by Herd."""
+    def test_generated_subsets_are_late(self):
+        """refusal: which attacks are late, judged by set arithmetic, not by Herd. Only a task that passed its first
+        verify without them (0.13.x, here the stubbed gate) can have a late one."""
         rng = random.Random(83)
         early = set(rng.sample(NAMES, rng.randint(1, 5)))
         self.start()
         for n in early:
             self.note(n)
-        w = self.red_then_build()["warnings"]
-        self.assertEqual(asked(w), set(NAMES) - early)
-        self.assertEqual(late(w), set())
+        self.assertEqual(late(self.red_then_build()["warnings"]), set())
         for n in NAMES:
             self.note(n)  # a second note for an early attack does not make it late
-        w = herd.verify(self.root, "t1")["warnings"]
-        self.assertEqual((asked(w), late(w)), (set(), set(NAMES) - early))
+        self.assertEqual(late(herd.verify(self.root, "t1")["warnings"]), set(NAMES) - early)
+
+
+class TestFirstVerifyRefusal(Attacks):
+    refuses_first = True
 
     def test_na_counts_as_logged(self):
         self.start()
         for n in NAMES:
             herd.add_note(self.root, "t1", "tried", "n/a: cannot apply", attack=n)
-        w = self.red_then_build()["warnings"]
-        self.assertEqual((asked(w), late(w)), (set(), set()))
+        self.assertEqual(late(self.red_then_build()["warnings"]), set())
 
 
 class TestCollisionRefuses(Attacks):

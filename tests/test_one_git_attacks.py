@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from scripts import herd
 
@@ -152,7 +153,8 @@ class TestBadInput(unittest.TestCase):
             d = root / ".herd/tasks/t1"
             d.joinpath("task.toml").write_text('goal = "g"\n[[criteria]]\nid = "C1"\ntext = "t"\nsource = "agent-proposed"\ncheck = "test -d ."\n')
             d.joinpath("start.json").write_text(json.dumps({"head": "f" * 40, "risk": "low"}))
-            ev = herd.verify(root, "t1")
+            with mock.patch.object(herd, "unlogged_attacks", return_value=[]):  # the refusal is not under test
+                ev = herd.verify(root, "t1")
             self.assertEqual(ev["head"], git(root, "rev-parse", "HEAD").strip())
             self.assertTrue(ev["content"])
 

@@ -3,7 +3,7 @@ import json
 import unittest
 
 from scripts import herd
-from tests.test_harness_rules import NO_INPUTS, OK, REQUEST, TASK, Base
+from tests.test_harness_rules import OK, REQUEST, TASK, Base
 from tests.test_herd_cli import PROGRAMS
 
 NAME = "other-reading"
@@ -73,12 +73,6 @@ class TestOtherReading(Base):
         self.log(check=None, text="n/a: the task has no inputs")
         herd.verify(self.root, "t1")
         self.assertNotIn(NAME, " ".join(herd.problems(self.root, "t1")))
-
-    def test_the_first_verify_asks_for_both_attacks(self):
-        self.start(NO_INPUTS)
-        w = self.red_then_build()["warnings"]
-        self.assertIn(herd.REFUSAL_FIRST, w)
-        self.assertIn(herd.OTHER_READING_FIRST, w)
 
     def test_logged_before_the_first_verify_is_not_late_or_asked_for(self):
         self.start()

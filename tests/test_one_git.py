@@ -82,7 +82,7 @@ class TestOneGitCall(unittest.TestCase):
         (self.root / "greet.txt").write_text("hello")
         git(self.root, "add", "-A")
         git(self.root, "commit", "-q", "-m", "greet")
-        calls = self.git_calls("verify")
+        calls = self.git_calls("verify", "--fresh")  # a full run, without the look for an unchanged tree
         self.assertEqual(len(calls), 2, calls)
         self.assertTrue(calls[0].startswith("status --porcelain=v2"), calls)
         self.assertTrue(calls[1].startswith("diff -z --name-only"), calls)
@@ -95,7 +95,7 @@ class TestOneGitCall(unittest.TestCase):
         before = json.loads((self.root / ".herd/tasks/t1/evidence.json").read_text())["content"]
         git(self.root, "add", "-A")
         git(self.root, "commit", "-q", "-m", "greet")
-        self.herd("verify")
+        self.herd("verify", "--fresh")
         after = json.loads((self.root / ".herd/tasks/t1/evidence.json").read_text())["content"]
         self.assertTrue(before)
         self.assertEqual(before, after)

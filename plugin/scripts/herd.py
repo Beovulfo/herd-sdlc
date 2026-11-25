@@ -1194,6 +1194,30 @@ def verify_only(root, slug, only):
     return False, [f"{only} failing ({secs})", *fault, a["output_tail"].rstrip()]
 
 
+def _verify_inputs(root, slug, notes):
+    """What a verify read besides the work and task.toml (those have their own hashes in the evidence): the attack
+    notes, the human-change notes (they re-freeze criteria) and Herd's state files. `pr`: a check may need the PR."""
+    d = _dir(root, slug)
+    read = [n for n in notes if n["kind"] == "human-change" or n.get("attack")]
+    state = [_file_sha(d, f) for f in ("start.json", "red.json", "frozen.json", "pr")]
+    return hashlib.sha1(json.dumps([read, state], sort_keys=True).encode()).hexdigest()
+
+
+def unchanged_evidence(root, slug):
+    """The stored evidence when a new verify would read the same inputs as the one that wrote it, else None.
+    Outside git there is no content id, so nothing is ever unchanged; anything unreadable runs the checks."""
+    try:
+        ev = load_evidence(root, slug)
+        if (ev and ev.get("content") and ev["content"] == task_content(root, slug)
+                and ev["task_sha"] == _task_sha(root, slug)
+                and ev.get("verified_inputs") == _verify_inputs(root, slug, load_notes(root, slug))):
+            report(ev)  # a hand-edited or half-written file is not reused
+            return ev
+    except STATE_ERRORS:
+        pass
+    return None
+
+
 def verify(root, slug):  # noqa: C901
     task = load_task(root, slug)
     errs = validate_task(task)
@@ -1217,7 +1241,8 @@ def verify(root, slug):  # noqa: C901
             r["zero_tests"] = r["status"] == "passing" and ran_zero_tests(out)  # advisory, the gate ignores it
         results.append(r)
     summary = {s: sum(r["status"] == s for r in results) for s in ("passing", "failing", "unchecked")}
-    attacks = run_attacks(root, load_notes(root, slug), {r["id"]: r for r in results})
+    ran_notes = load_notes(root, slug)  # a note logged while the attacks run makes the next verify run again
+    attacks = run_attacks(root, ran_notes, {r["id"]: r for r in results})
     snap = git_state(root, fresh=True)  # the one git read of this verify, after the checks changed files
     head = (snap or {}).get("oid") or "none"
     dirty = bool(snap and snap["entries"])
@@ -1315,6 +1340,7 @@ def verify(root, slug):  # noqa: C901
           "added_after_red": added,
           "warnings": warnings, "escalate": [cid for cid, n in fails.items() if n >= ESCALATE_AFTER],
           "fingerprint": fingerprint(root, snap), "content": task_content(root, slug, snap), "task_sha": _task_sha(root, slug),
+          "verified_inputs": _verify_inputs(root, slug, ran_notes),
           "results": results, "summary": summary, "attacks": attacks}
     (_dir(root, slug) / "evidence.json").write_text(json.dumps(ev, indent=2))
     return ev
@@ -1470,8 +1496,10 @@ MAX_PR_NOTES = 60  # keeps the PR description well under GitHub's 65,536-charact
 
 
 def _largest_batch(notes):
-    """Most notes whose timestamps fall inside one BATCH_S window (a sign they were logged together)."""
-    times = sorted(_secs("2000-01-01T00:00:00Z", n["at"]) for n in notes if n.get("at") and n.get("kind") != "guard")
+    """Most notes whose timestamps fall inside one BATCH_S window (a sign they were logged together). Attack notes
+    do not count: they are written together, before building."""
+    times = sorted(_secs("2000-01-01T00:00:00Z", n["at"]) for n in notes
+                   if n.get("at") and n.get("kind") != "guard" and not n.get("attack"))
     best = 0
     for i, t in enumerate(times):
         best = max(best, sum(1 for u in times[i:] if u - t <= BATCH_S))
@@ -2517,7 +2545,8 @@ USAGE = {
     "note": 'herd note --found|--fixed|--open|--decision|--late-red|--human-change|--tried [--attack bad-input|collision|one-bad-part|recount|refusal|other-reading --check "<command>" [--timeout S] | --covered-by <criterion id> (recount, refusal, other-reading) [--refuses "<command>"] [--example "<command>" --expect "<text>" [--expect-changed "<reason>"]]] "text"',
     "detect": "herd detect",
     "lint": "herd lint [--suggest]   (without --suggest: the PostToolUse hook, reads hook JSON on stdin)",
-    "verify": "herd verify [slug] [--verbose] [--only <id>]   (--only: run one criterion or attack, write nothing)",
+    "verify": "herd verify [slug] [--verbose] [--fresh] [--only <id>]   (an unchanged tree runs no check unless --fresh; "
+              "--only: run one criterion or attack, write nothing)",
     "status": "herd status [slug] [--json]   (--json: the stop record, or null)",
     "done": "herd done [slug] [--verbose]",
     "cancel": 'herd cancel [slug] [--reason "text"]',
@@ -2539,7 +2568,7 @@ def _opt(args, flag):
         return None, args
     i = args.index(flag)
     if i + 1 >= len(args):
-        raise UsageError
+        raise UsageError(f"`{flag}` needs a value")
     return args[i + 1], args[:i] + args[i + 2:]
 
 
@@ -2552,11 +2581,18 @@ def _note_command(root, args):
     try:
         opts["timeout"] = None if opts["timeout"] is None else float(opts["timeout"])
     except ValueError:
-        raise UsageError
+        raise UsageError(f"`--timeout {opts['timeout']}` was not accepted: it needs a number of seconds")
     flags = [a for a in args if a.startswith("--")]
     rest = [a for a in args if not a.startswith("--")]
-    if len(flags) != 1 or flags[0] not in kinds or len(rest) != 1:
-        raise UsageError
+    bad = [f for f in flags if f not in kinds] or flags[1:]
+    if bad:
+        raise UsageError(f"`{bad[0]}` was not accepted: " + ("one kind flag per note, each other flag once"
+                         if bad[0] in kinds else "unknown flag, or a repeated one"))
+    if not flags:
+        raise UsageError(f"no kind flag: give one of {', '.join(kinds)}")
+    if len(rest) != 1:
+        raise UsageError(f"unexpected argument `{rest[1]}`: quote the text as one argument" if rest
+                         else "no note text")
     add_note(root, _slug_arg(root, []), kinds[flags[0]], rest[0], **opts)
     check = opts["check"]
     vacuous = [check] if check and VACUOUS.fullmatch(check.strip()) else []
@@ -2607,7 +2643,10 @@ def main(argv):  # noqa: C901
         elif cmd == "check":
             return _check_command(root, _slug_arg(root, args))
         elif cmd == "note":
-            _note_command(root, args)
+            try:
+                _note_command(root, args)
+            except ValueError as e:  # refused by add_note: it names the flag; show the usage too
+                raise UsageError(str(e)) from None
         elif cmd == "detect":
             print(json.dumps(herd_detect.detect(root), indent=2))
         elif cmd == "lint":
@@ -2625,12 +2664,18 @@ def main(argv):  # noqa: C901
         elif cmd == "verify":
             only, args = _opt(args, "--only")
             if only is not None:
-                ok, lines = verify_only(root, _slug_arg(root, [a for a in args if a != "--verbose"]), only)
+                ok, lines = verify_only(root, _slug_arg(root, [a for a in args if a not in ("--verbose", "--fresh")]), only)
                 print("\n".join(lines))
                 return 0 if ok else 1
-            verbose = "--verbose" in args
+            verbose, fresh = "--verbose" in args, "--fresh" in args
+            slug = _slug_arg(root, [a for a in args if a not in ("--verbose", "--fresh")])
             with git_state_once():  # verify reads git state once; the hints below reuse that read
-                ev = verify(root, _slug_arg(root, [a for a in args if a != "--verbose"]))
+                ev = None if fresh else unchanged_evidence(root, slug)
+                if ev:
+                    print(f"unchanged since the verify at {ev['at']}: no check run, evidence kept "
+                          "(`herd verify --fresh` runs every check)")
+                else:
+                    ev = verify(root, slug)
                 s = ev["summary"]
                 print(f"{s['passing']} passing, {s['failing']} failing, {s['unchecked']} unchecked")
                 for r in ev["results"]:  # by default only what needs attention
@@ -2753,7 +2798,9 @@ def main(argv):  # noqa: C901
             if rec.get("status") == "fallback":  # never hide a broken config behind the default
                 why = f"fallback: {rec.get('cause')}; check herd.toml"
             print(json.dumps(rec, indent=2) if as_json else f"risk: {risk['effective']} ({why})")
-    except UsageError:
+    except UsageError as e:
+        if str(e):
+            print(f"herd: {e}", file=sys.stderr)
         print(f"herd: usage: {USAGE[cmd]}", file=sys.stderr)
         return 1
     except (ValueError, FileNotFoundError) as e:

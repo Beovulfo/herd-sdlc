@@ -7,7 +7,8 @@ Exit 0 and "leak audit: clean", or exit 1 with one line per finding. Exit 2 with
 the log or the work folder cannot be read (a missing work folder is never reported clean). The audit does not read
 paths from commands: shell text cannot be parsed completely. The sandbox is the guard and
 run_leg.py --selftest proves it. The audit reads only structured fields of the log: tool results
-that report a sandbox violation or a denial, WebFetch and WebSearch calls, and the settings file.
+that report a sandbox violation or a denial, WebFetch and WebSearch calls, Read calls on a hidden
+verifier file (a refused call counts too), and the settings file.
 --plugin is accepted for older command lines and is not used. The work folder must hold no file
 named like a hidden verifier file of any task: a copy there is a finding. --task (a name or a path such
 as examples/bus-transfer/) names the run's task and is refused when unknown; every task's hidden files
@@ -108,6 +109,10 @@ def audit(log_path, work, plugin=None, settings=None, task=None):  # noqa: C901
                     calls[block.get("id")] = name
                     if name in NETWORK_TOOLS:
                         findings.append(Finding(name, "network tool call", False))
+                    inp = block.get("input")
+                    path = inp.get("file_path") if name == "Read" and isinstance(inp, dict) else None
+                    if isinstance(path, str) and os.path.basename(path) in run_leg.PLANTED_NAMES:
+                        findings.append(Finding(name, f"read hidden verifier file: {path}", False))
                 elif ev.get("type") == "user" and block.get("type") == "tool_result":
                     text = _text(block.get("content"))
                     name = calls.get(block.get("tool_use_id"), "?")

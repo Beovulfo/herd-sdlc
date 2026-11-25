@@ -12,6 +12,16 @@ Herd runs the program itself for two attack claims (issue #66). The owner asked:
 - A `--refuses` or `--example` command that runs no project code (`true`, `echo`, `test -f`) does not count; `echo ... | <program>` does count.
 - **Known limits:** `--refuses` cannot tell a missing script or a shell quoting error from a refusal when the interpreter exits 1 to 125 with a message. Only the word `Traceback` marks a stack trace. Herd does not check that the command is the program, or that its input is the one claimed; any unquoted pipe, such as `echo x | true`, lifts the vacuous rule. `herd verify --only` does not report a vacuous command.
 
+## Unreleased
+
+No plugin file changed, so no version bump. Benchmark 2, a bus transfer planner (issue #57), is built; no leg has run yet.
+
+- **Added:** `examples/bus-transfer/`: `prompt.md` (the median-person wording), a README (method, isolation, how to score), and `verifier/` with the hidden verifier `bus_verify.py` (hand, random, grid, radial, clusters and overnight networks at sizes S to XL; every journey checked against the timetable, the change time and an oracle's earliest arrival; "not possible" accepted only when the oracle finds none), the robustness probe `bus_probe.py` (6 bad inputs), the reference solver and two wrong solvers `bus_reference.py` (static Dijkstra, no change time), `ADAPTER_SPEC.md` and `test_bus_verify.py`.
+- **Changed:** `run_leg.py` takes `--task bus-transfer` or `--task supermarket-route` (a name or a path); the task supplies `prompt.md` unless `--prompt` is given, and the hidden file names of every task are refused where a run could read them. `leak_audit.py` also reports a hidden verifier file found in a run's work folder and takes `--task`. CI now runs `test_leak_audit` and `test_bus_verify`.
+- **Fixed before any leg:** the verifier exits 2 with "no cases ran" on an empty selection instead of printing PASS; L and XL run `--seeds` seeds like S and M; program output that is not UTF-8 is a failed case or probe scenario instead of aborting the run.
+- **Faster verifier tests:** each generated network is built once per test process and XL runs only with `BUS_FULL=1`, which CI sets. `test_bus_verify` on one machine, one run each: 101.0 s for 37 tests before, 50.9 s for 42 tests (XL skipped) after.
+- **Known limits:** the verifier judges one service day with one global change time; L and XL are generated and solved by the oracle in tests but not run through a full solver.
+
 ## 0.12.11
 
 Docs in sync with the code, and a small cleanup (issue #59). The owner asked: "In the same PR update docs to make sure is in sync with the code and clean up docs and code". No behaviour change.

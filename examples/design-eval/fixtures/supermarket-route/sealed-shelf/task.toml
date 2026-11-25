@@ -1,0 +1,12 @@
+goal = "Supermarket route optimizer"
+known_limits = "none known"
+
+[[inputs]]
+human = "the MAP of the supermarket with all the products localised in the map"
+program = "a grid; '#' is a shelf, '.' is floor; each product names its shelf cell"
+
+[[criteria]]
+id = "C1"
+text = "Each product is picked from any walkable cell next to its shelf, the reachable one nearest on the route"
+source = "agent-proposed"
+check = "python3 -m unittest tests.test_pick"

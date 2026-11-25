@@ -4,7 +4,7 @@ import unittest
 
 from scripts import herd
 from tests.test_harness_rules import NO_INPUTS, OK, TASK, Base
-from tests.test_herd_cli import late_review
+from tests.test_herd_cli import PROGRAMS, late_review
 
 NAME = "other-reading"
 ENTRY = '\n[[inputs]]\nhuman = "a date"\nprogram = "03/04/2026 or 2026-04-03"\n'
@@ -19,12 +19,12 @@ class TestOtherReading(Base):
     def log(self, check=OK, text="two readings of each input", others=OK):
         for a in herd.ATTACKS:
             if a != NAME:
-                herd.add_note(self.root, "t1", "tried", f"{a} attack", attack=a, check=others)
+                herd.add_note(self.root, "t1", "tried", f"{a} attack", attack=a, check=others, **PROGRAMS.get(a, {}))
         if check is None and not text.startswith("n/a:"):  # an old note, or one written straight into the log
             with open(self.root / ".herd/tasks/t1/notes.jsonl", "a") as f:
                 f.write(json.dumps({"at": herd.now(), "kind": "tried", "text": text, "attack": NAME}) + "\n")
         else:
-            herd.add_note(self.root, "t1", "tried", text, attack=NAME, check=check)
+            herd.add_note(self.root, "t1", "tried", text, attack=NAME, check=check, **(PROGRAMS[NAME] if check else {}))
 
     def refused(self, why, **kw):
         self.built()
@@ -41,7 +41,7 @@ class TestOtherReading(Base):
         self.built()
         for a in herd.ATTACKS:
             if a != NAME:
-                herd.add_note(self.root, "t1", "tried", f"{a} attack", attack=a, check=OK)
+                herd.add_note(self.root, "t1", "tried", f"{a} attack", attack=a, check=OK, **PROGRAMS.get(a, {}))
         late_review(self.root)
         herd.verify(self.root, "t1")
         self.assertIn(f"{NAME} (no passing command)", " ".join(herd.problems(self.root, "t1")))

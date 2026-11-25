@@ -3,7 +3,8 @@
 
   python3 leak_audit.py RUN_LOG.jsonl --work DIR [--plugin DIR] [--settings FILE] [--task TASK]
 
-Exit 0 and "leak audit: clean", or exit 1 with one line per finding. The audit does not read
+Exit 0 and "leak audit: clean", or exit 1 with one line per finding. Exit 2 with one message when
+the log or the work folder cannot be read (a missing work folder is never reported clean). The audit does not read
 paths from commands: shell text cannot be parsed completely. The sandbox is the guard and
 run_leg.py --selftest proves it. The audit reads only structured fields of the log: tool results
 that report a sandbox violation or a denial, WebFetch and WebSearch calls, Read calls on a hidden
@@ -85,6 +86,9 @@ def check_work(work, task=None):
 
 
 def audit(log_path, work, plugin=None, settings=None, task=None):  # noqa: C901
+    if not os.path.isdir(work):
+        # An absent folder would walk as empty and read as clean: refuse instead.
+        raise ValueError(f"work folder not found: {work}")
     settings = settings or Path(work).resolve().parent / "settings.json"
     findings = check_settings(settings) + check_work(work, task)
     calls = {}

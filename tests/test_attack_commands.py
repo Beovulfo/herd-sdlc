@@ -13,6 +13,7 @@ if arg.split(" x")[0] != "milk":
 print("aisle 3")
 '''
 REFUSES, EXAMPLE = "python3 prog.py nosuch", "python3 prog.py 'milk x2'"
+EXPECT = {"expect": "aisle 3"}  # passed as `extra`: as if logged before red
 PLACE = {"refuses": ("bad-input", "one-bad-part"), "example": ("other-reading",)}
 
 
@@ -27,7 +28,7 @@ class Attacks(Base):
             if a in na:
                 herd.add_note(self.root, "t1", "tried", "n/a: cannot apply here", attack=a)
                 continue
-            extra = {"collision": {"refuses": refuses}, "one-bad-part": {"refuses": refuses}, "other-reading": {"example": example}}.get(a, {})
+            extra = {"collision": {"refuses": refuses}, "one-bad-part": {"refuses": refuses}, "other-reading": {"example": example, "extra": EXPECT}}.get(a, {})
             herd.add_note(self.root, "t1", "tried", f"{a} attack", attack=a, check=OK, **extra)
 
     def run_all(self):
@@ -104,21 +105,23 @@ class TestRefuses(Attacks):
 
 class TestExample(Attacks):
     def state(self, cmd):
-        herd.add_note(self.root, "t1", "tried", "literal form", attack="other-reading", check=OK, example=cmd)
+        herd.add_note(self.root, "t1", "tried", "literal form", attack="other-reading", check=OK, example=cmd,
+                      extra=EXPECT)
         return herd._attack_states(herd.verify(self.root, "t1")["attacks"])["other-reading"][0]
 
-    def test_stored_by_the_cli_and_passes_only_on_exit_0(self):
+    def test_stored_by_the_cli_and_passes_only_with_the_text(self):
         self.built()
-        p = self.cli("note", "--tried", "--attack", "other-reading", "--check", OK, "--example", EXAMPLE, "x")
+        p = self.cli("note", "--tried", "--attack", "other-reading", "--check", OK, "--example", EXAMPLE, "--expect", "aisle 3",
+                     "--expect-changed", "logged after red", "x")
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(herd.load_notes(self.root, "t1")[0]["example"], EXAMPLE)
         self.assertEqual(herd._attack_states(herd.verify(self.root, "t1")["attacks"])["other-reading"][0], "passing")
         self.assertEqual(self.state("python3 prog.py 'two milk'"), "failing")
-        self.assertEqual(self.state("python3 -c \"import sys; print('warn', file=sys.stderr)\""), "passing")
+        self.assertEqual(self.state("python3 -c \"import sys; print('warn', file=sys.stderr)\""), "failing")
 
     def test_input_piped_into_the_program_counts(self):
         self.built()
-        (self.root / "prog.py").write_text("import sys\nsys.exit(0 if sys.stdin.read().strip() == 'a|b' else 1)\n")
+        (self.root / "prog.py").write_text("import sys\nsys.exit(0 if sys.stdin.read().strip() == 'a|b' and print('aisle 3') is None else 1)\n")
         self.assertEqual(self.state("echo 'a|b' | python3 prog.py"), "passing")
         for cmd in ("echo 'a|b'", "echo a || true", "echo a; exit 0"):
             self.assertEqual(self.state(cmd), "vacuous", cmd)
@@ -186,10 +189,11 @@ class TestRequired(Attacks):
                       refuses="python3 prog.py milk", extra={"at": last["at"]})
         self.assertIn("have not run", " ".join(herd.problems(self.root, "t1")))
 
-    def test_quick_and_low_risk_do_not_need_them(self):
+    def test_quick_and_low_risk_do_not_need_refuses(self):
+        latest = [{"attack": a, "status": "passing"} for a in ("collision", "one-bad-part")]
         for ev in ({"route": "standard", "risk": {"effective": "low"}}, {"route": "quick", "risk": {"effective": "medium"}}):
             self.assertFalse(herd.full_rules(ev))
-            self.assertEqual(herd.missing_programs(ev), [])
+            self.assertEqual(herd.missing_programs(dict(ev, attacks=latest)), [])
 
 
 class TestWhenDone(Attacks):

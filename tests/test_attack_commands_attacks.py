@@ -50,10 +50,10 @@ class TestRefusal(Gen):
         cases += [(rng.choice(CODES), rng.choice(OUTS), rng.choice(ERRS)) for _ in range(30)]
         for c in cases:
             self.note("bad-input", refuses=cmd(c))
-            self.note("other-reading", example=cmd(c))
+            self.note("other-reading", example=cmd(c), extra={"expect": "ok"})  # as if logged before red
         ran = self.verified()
         got = [a["status"] == "passing" for a in ran]
-        want = [w for c in cases for w in (should_refuse(*c), c[0] == 0)]
+        want = [w for c in cases for w in (should_refuse(*c), c[0] == 0 and "ok" in c[1].split())]
         self.assertEqual(got, want)
         self.assertTrue(any(want[0::2]) and not all(want[0::2]))
 
@@ -81,9 +81,9 @@ class TestOtherReading(Gen):
             self.note("one-bad-part", refuses=f)
         self.assertEqual([a["status"] for a in self.verified()], ["passing"] * len(forms))
         self.assertFalse(any(a["vacuous"] for a in self.verified()))
-        ok = cmd((0, "", ""))
+        ok = cmd((0, "ok\n", ""))
         for f in (ok, f"cat items.txt | {ok}", f"{ok} && {ok}", f"{ok} -- --refuses"):
-            self.note("other-reading", example=f)
+            self.note("other-reading", example=f, extra={"expect": "ok"})
         self.assertEqual([a["status"] for a in self.verified()][-4:], ["passing"] * 4)
 
     def test_both_flag_orders_on_the_cli(self):
@@ -115,11 +115,11 @@ class TestBadInput(Gen):
 
 class TestCollision(Gen):
     def test_same_check_different_programs_each_count(self):
-        good, bad = cmd((1, "", "no")), cmd((0, "", ""))
+        good, bad = cmd((1, "", "no")), cmd((0, "ok\n", ""))
         for c in (good, bad, good):
             self.note("bad-input", refuses=c)
         self.note("one-bad-part", refuses=bad)
-        self.note("other-reading", example=bad)  # the same command, judged by the other rule
+        self.note("other-reading", example=bad, extra={"expect": "ok"})  # the same command, other rule
         self.assertEqual([a["status"] for a in self.verified()],
                          ["passing", "failing", "passing", "failing", "passing"])
 

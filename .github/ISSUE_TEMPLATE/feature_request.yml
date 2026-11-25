@@ -1,0 +1,24 @@
+name: Feature request
+description: Suggest a change to Herd
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What do you need, and what gets in the way today? Do not paste secrets or private data.
+    validations:
+      required: true
+  - type: textarea
+    id: proposed-change
+    attributes:
+      label: Proposed change
+    validations:
+      required: true
+  - type: textarea
+    id: check
+    attributes:
+      label: How to check it worked
+      description: A runnable check, such as a command and its expected output.
+    validations:
+      required: true

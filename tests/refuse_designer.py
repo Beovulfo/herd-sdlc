@@ -16,9 +16,9 @@ def main(case):
         def run(*cmd):
             return subprocess.run(cmd, cwd=tmp, capture_output=True, text=True)
         run("git", "init", "-q")
-        if case == "example":
-            run(sys.executable, str(HERD), "init", "t1", "Add a greeting")
         (Path(tmp) / "herd.toml").write_text(TOML[case])
+        if case == "example":  # a task, so that status exits 0; it keeps the models herd.toml had at init
+            run(sys.executable, str(HERD), "init", "t1", "Add a greeting")
         p = run(sys.executable, str(HERD), "status")
     sys.stdout.write(p.stdout)
     sys.stderr.write(p.stderr)

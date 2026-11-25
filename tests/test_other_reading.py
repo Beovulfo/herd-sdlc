@@ -3,7 +3,7 @@ import json
 import unittest
 
 from scripts import herd
-from tests.test_harness_rules import NO_INPUTS, OK, TASK, Base
+from tests.test_harness_rules import NO_INPUTS, OK, REQUEST, TASK, Base
 from tests.test_herd_cli import PROGRAMS, late_review
 
 NAME = "other-reading"
@@ -125,30 +125,30 @@ class TestReadings(Base):
         return " ".join(herd.problems(self.root, "t1"))
 
     def test_none_one_or_an_empty_list_is_questioned(self):
-        for r in (None, "[]", '["day first"]'):
+        for r in (None, "[]", '["any call"]'):
             self.assertTrue(self.left(r), r)
             self.tearDown()
             self.setUp()
 
     def test_two_readings_are_not_questioned(self):
-        self.assertEqual(self.left('["day first", "month first"]'), [])
+        self.assertEqual(self.left('["any call", "month first"]'), [])
 
     def test_the_wording_is_never_read(self):
-        self.assertEqual(self.left('["", "x"]'), [])
+        self.assertEqual(self.left('["any call", ""]'), [])
 
     def test_a_string_is_not_a_list_of_readings(self):
         self.assertTrue(self.left('"day first, month first"'))
 
     def test_one_reading_refuses_done_at_medium_risk(self):
-        self.left('["day first"]')
+        self.left('["any call"]')
         self.assertIn("inputs #1: `readings`", self.refused())
 
     def test_two_readings_do_not_refuse_done(self):
-        self.left('["day first", "month first"]')
+        self.left('["any call", "month first"]')
         self.assertNotIn("inputs #1", self.refused())
 
     def test_low_risk_only_warns(self):
-        self.left('["day first"]', risk="low")
+        self.left('["any call"]', risk="low")
         self.assertNotIn("inputs #1", self.refused())
 
     def test_the_quick_route_is_exempt(self):
@@ -156,8 +156,120 @@ class TestReadings(Base):
         self.assertEqual([w for w in herd.verify(self.root, "q1")["warnings"] if w.startswith("inputs #")], [])
 
     def test_the_readings_are_shown_next_to_the_input(self):
-        self.left('["day first", "month first"]')
-        self.assertIn("a date -> 03/04/2026 (readings: day first; month first)", herd.report(herd.verify(self.root, "t1")))
+        self.left('["any call", "month first"]')
+        self.assertIn("a date -> 03/04/2026 (readings: any call; month first)", herd.report(herd.verify(self.root, "t1")))
+
+
+QUOTE = "inputs #{}: `readings[0]` is not a verbatim quote"
+WORDS = REQUEST.split()
+
+
+def entries(*firsts):
+    """task.toml with one input per value, as its first reading (JSON strings are TOML strings)."""
+    return TASK.replace("inputs = []\n", "") + "".join(entry(json.dumps([f, "another reading"])) for f in firsts)
+
+
+class TestReadingQuotes(Base):
+    """The first reading of each input quotes the request (0.12.13), by the human criteria's quote rule."""
+
+    def checked(self, text, risk="medium", request=REQUEST):
+        herd.init_task(self.root, "t1", "Add f() to app.py", request=request)
+        (self.root / ".herd/tasks/t1/task.toml").write_text(text)
+        f = self.root / ".herd/tasks/t1/start.json"
+        f.write_text(json.dumps({**json.loads(f.read_text()), "risk": risk}))
+        return self.cli("check", "t1")
+
+    def refusals(self, p):
+        return [ln for ln in p.stderr.splitlines() if "`readings[0]`" in ln]
+
+    def again(self):
+        self.tearDown()
+        self.setUp()
+
+    def test_check_refuses_at_medium_and_high_risk(self):
+        for risk in ("medium", "high"):
+            p = self.checked(entries("a date typed by hand"), risk)
+            self.assertEqual(p.returncode, 1, risk)
+            self.assertIn(QUOTE.format(1), p.stderr)
+            self.assertNotIn("ok", p.stdout.split())
+            self.assertNotIn("Traceback", p.stderr)
+            self.again()
+
+    def test_a_quote_passes_whatever_its_spacing_case_or_marks(self):
+        for first in ("return 1 for any call", "RETURN  1\nfor   any call.", "`f()` to app.py", '"any call"'):
+            p = self.checked(entries(first))
+            self.assertEqual((p.returncode, self.refusals(p)), (0, []), first)
+            self.again()
+
+    def test_part_of_a_word_or_number_is_not_a_quote(self):
+        for first in ("", "ny call", "return 10", "any call at all"):
+            self.assertEqual(self.checked(entries(first)).returncode, 1, repr(first))
+            self.again()
+
+    def test_done_refuses_too(self):
+        self.start(entries("typed by hand"))
+        self.red_then_build()
+        late_review(self.root)
+        herd.verify(self.root, "t1")
+        self.assertIn(QUOTE.format(1), " ".join(herd.problems(self.root, "t1")))
+
+    def test_changed_files_that_raise_the_risk_refuse(self):
+        (self.root / "herd.toml").write_text('[floor]\nmedium = ["api/**"]\n')
+        (self.root / "api").mkdir()
+        self.assertEqual(self.checked(entries("typed by hand"), "low").returncode, 0)
+        (self.root / "api/x.py").write_text("x = 1\n")
+        self.assertEqual(self.cli("check", "t1").returncode, 1)
+
+    def test_low_risk_exempt(self):
+        p = self.checked(entries("typed by hand"), "low")
+        self.assertEqual((p.returncode, self.refusals(p)), (0, []))
+        self.assertIn("warning: " + QUOTE.format(1), p.stdout)
+        self.red_then_build()
+        late_review(self.root)
+        herd.verify(self.root, "t1")
+        self.assertNotIn("readings[0]", " ".join(herd.problems(self.root, "t1")))
+        self.assertEqual(herd.reading_quote_warnings({"route": "quick", "inputs": [{"readings": ["no"]}]}, REQUEST), [])
+
+    def test_no_recorded_request_leaves_nothing_to_quote(self):
+        self.assertEqual(self.checked(entries("typed by hand"), request=None).returncode, 0)
+
+    def test_bad_input_never_ends_in_a_traceback(self):
+        base = TASK.replace("inputs = []\n", "")
+        for text in (TASK.replace("inputs = []", 'inputs = "a date"'), TASK.replace("inputs = []", "inputs = [1, []]"),
+                     base + entry(None), base + entry("[]"), base + entry('"any call"'), base + entry("[7, 8]"),
+                     base + entry('[{a = 1}, "x"]'), "inputs = [", ""):
+            p = self.checked(text)
+            self.assertIn(p.returncode, (0, 1, 2), text)
+            self.assertNotIn("Traceback", p.stderr, text)
+            self.again()
+
+    def test_collision_equal_entries_are_each_named(self):
+        p = self.checked(entries("typed by hand", "typed by hand"))
+        self.assertEqual(len(self.refusals(p)), 2)
+        self.assertIn(QUOTE.format(2), p.stderr)
+
+    def test_one_bad_part_only_the_unquoted_first_reading_is_named(self):
+        p = self.checked(entries("any call", "typed by hand", "app.py"))  # every second reading is unquoted
+        self.assertEqual([r.split(":")[1].strip() for r in self.refusals(p)], ["inputs #2"])
+
+    def test_recount_and_refusal_on_generated_readings(self):
+        """Every run of whole words of the request passes; the same run with a foreign word is refused."""
+        runs = [" ".join(WORDS[i:j]) for i in range(len(WORDS)) for j in range(i + 1, len(WORDS) + 1)]
+        good = herd.reading_quote_warnings({"inputs": [{"readings": [r]} for r in runs]}, REQUEST)
+        self.assertEqual(good, [])
+        mixed = [r if n % 3 else r + " zebra" for n, r in enumerate(runs)]
+        bad = herd.reading_quote_warnings({"inputs": [{"readings": [r]} for r in mixed]}, REQUEST)
+        self.assertEqual([int(w.split("#")[1].split(":")[0]) for w in bad],
+                         [n + 1 for n, r in enumerate(mixed) if "zebra" in r.split()])
+
+    def test_other_reading_of_the_task_and_request(self):
+        """Inline tables, [[inputs]] tables and a Markdown, wrapped or CRLF request are all read."""
+        inline = TASK.replace("inputs = []", 'inputs = [{human = "d", program = "d", readings = ["any call", "x"]}]')
+        for request in (REQUEST, "- Add f() to\r\n  app.py.\r\n> It must return **1** for\r\n> any call."):
+            for text in (inline, entries("It must return 1 for any call")):
+                p = self.checked(text, request=request)
+                self.assertEqual((p.returncode, self.refusals(p)), (0, []), (request, text))
+                self.again()
 
 
 if __name__ == "__main__":

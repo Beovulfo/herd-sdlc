@@ -14,7 +14,7 @@ A task is done when its criteria pass, proven by commands. Criteria live in `.he
 3. **Human criteria are quoted, never changed.** Put the human's words in `text` exactly, with `source = "human"`; `herd done` refuses any other text. Never reword, drop or narrow them. Put your concrete scenario in a separate `agent-proposed` criterion.
 4. **Cover every word of a human criterion.** Testing one example is still narrowing. `any`, `every`, `all`, `whatever`, `many`, `each`, `arbitrary` need generated cases of different shapes, random ones included. `big`, `large`, `huge`, `thousands` need a scale check with a time limit. Covering only part? Say so in `test_budget`; add `agent-proposed` criteria for the rest. Add `coverage`: what its check proves and misses, about 30 words.
 5. **Fill gaps, never block.** Write missing checks yourself. If nothing can run, `check = ""`: unchecked, never met.
-6. **Include one edge or failure case:** wrong input, empty state, or what must not change. List each input as a top-level `[[inputs]]` table (see Format): the program takes the human's form, never one the caller prepares first. Give each entry `readings = ["...", "..."]`, at least 2 ways a person could read the human's words for it: `herd done` refuses fewer at medium and high risk.
+6. **Include one edge or failure case:** wrong input, empty state, or what must not change. List each input as a top-level `[[inputs]]` table (see Format): the program takes the human's form, never one the caller prepares first. Give each entry `readings = ["...", "..."]`, at least 2 ways a person could read the human's words for it: `herd done` refuses fewer at medium and high risk. The first reading quotes the request, such as "the list of products (id:short name)": `herd check` refuses otherwise, and your `--example` runs on that form.
 7. **Fail first.** Run `herd verify` before writing code; tighten any check that already passes. Human criteria are then frozen.
 8. **Say what is not tested** (medium and high risk: `herd done` refuses while these or `inputs` are empty). Top-level `test_budget`: what is and is not tested, at which level. `known_limits`: when the claim may fail.
 9. **Validate.** `herd check` (run by every `herd verify`) warns about checks that run no project code (`true`, `echo`, `test -f`), vague `coverage`, limits that narrow an any/every claim and a missing `inputs`.
@@ -30,7 +30,7 @@ known_limits = "..."
 [[inputs]]   # top level; never inside [[criteria]]
 human = "the rows to export"
 program = "rows read from the database, as stored"
-readings = ["every row, as stored", "only the rows on screen"]
+readings = ["every row", "only the rows on screen"]   # the first quotes the request
 
 [[criteria]]
 id = "C1"

@@ -610,6 +610,39 @@ def input_warnings(task):
                   if i - 1 not in [b - 1 for b in bad] and len(_readings(x)) < 2]
 
 
+def reading_quote_warnings(task, request):
+    """Inputs of a standard task whose first reading is not the human's words, by the human criteria's quote rule.
+    Refused at medium and high risk (`herd check`, `herd done`); a warning at low risk. None if no request."""
+    ins = task.get("inputs")
+    if request is None or task.get("route", "standard") == "quick" or not isinstance(ins, list):
+        return []
+    return [f"inputs #{i}: `readings[0]` is not a verbatim quote of the request: put the human's own words for this "
+            "input first, copied from the request" for i, x in enumerate(ins, 1)
+            if isinstance(x, dict) and _readings(x) and not _quotes(_readings(x)[0], request)]
+
+
+def _check_command(root, slug):
+    """`herd check`: exit 1 for an invalid task.toml, or an unquoted first reading at medium or high risk."""
+    task = load_task(root, slug)
+    errs = validate_task(task)
+    d = _dir(root, slug)
+    request = (d / "request.md").read_text() if (d / "request.md").exists() else None
+    quotes, refused = reading_quote_warnings(task, request), False
+    if quotes:  # the risk as `herd verify` sees it: stored at init, raised by the files changed since
+        start, snap = _state(d / "start.json", {}), git_state(root, fresh=True)
+        changed = changed_since(root, start.get("head"), snap)
+        changed = changed if changed is not None else changed_since(root, "HEAD", snap)
+        refused = review_needed({"route": task.get("route", "standard"), "risk": risk_of(root, start, changed)})
+    for line in errs or ([] if refused else ["ok"]):
+        print(line)
+    for w in quotes if refused else []:
+        print(f"error: {w}", file=sys.stderr)
+    for w in (check_warnings(task, request, load_notes(root, slug)) + coverage_warnings(task) + length_warnings(task)
+              + ([] if refused else quotes)):
+        print(f"warning: {w}")
+    return 1 if errs or refused else 0
+
+
 def refusal_late(root, slug, red):
     """The refusal and other-reading attacks first logged after the first verify (by note order, not by time):
     they did not shape the design."""
@@ -1193,7 +1226,7 @@ def verify(root, slug):  # noqa: C901
     human_checks = [cid for cid in checks_changed if frozen[cid]["source"] == "human"]
     added = [cid for cid in now_by_id if frozen and cid not in frozen]
     human_not_verbatim = human_unquoted(task, request_text, load_notes(root, slug))
-    inputs_left = input_warnings(task)
+    inputs_left = input_warnings(task) + reading_quote_warnings(task, request_text)
     warnings = (check_warnings(task, request_text, load_notes(root, slug)) + coverage_warnings(task) + length_warnings(task)
                 + inputs_left
                 + [msg for name, msg in FIRST_VERIFY_ATTACKS
@@ -2913,15 +2946,7 @@ def main(argv):  # noqa: C901
             else:
                 print(f"created quick task {args[0]} with one criterion: run `herd verify` and expect it to fail first")
         elif cmd == "check":
-            slug = _slug_arg(root, args)
-            task = load_task(root, slug)
-            errs = validate_task(task)
-            print("\n".join(errs) if errs else "ok")
-            req_path = _dir(root, slug) / "request.md"
-            for w in (check_warnings(task, req_path.read_text() if req_path.exists() else None, load_notes(root, slug))
-                      + coverage_warnings(task) + length_warnings(task)):
-                print(f"warning: {w}")
-            return 1 if errs else 0
+            return _check_command(root, _slug_arg(root, args))
         elif cmd == "note":
             _note_command(root, args)
         elif cmd == "detect":

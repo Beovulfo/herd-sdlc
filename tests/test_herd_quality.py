@@ -218,7 +218,7 @@ class TestInputsRefused(Base):
 
     def test_complete_inputs_pass_and_are_shown_unchanged(self):
         ev, probs = self.ready(NO_INPUTS + '\n[[inputs]]\nhuman = "a call"\nprogram = "a call, as typed"\n'
-                               'readings = ["typed by hand", "pasted from a file"]\n')  # 0.12.9: 2 readings required
+                               'readings = ["any call", "pasted from a file"]\n')  # 0.12.9: 2 readings; 0.12.13: the first quotes
         self.assertEqual(probs, [])
         self.assertEqual(herd.problems(self.root, "t1"), [])
         self.assertIn("Inputs (as you described them -> as the program receives them): a call -> a call, as typed",

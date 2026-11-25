@@ -14,6 +14,8 @@ In EGM the human acts as scheduler (deciding what runs next) and judge (deciding
 
 ## 2. Principles
 
+**Motto: Shift left, with autopilot.** Shift left means finding problems at the plan, before code is written, and the autopilot does the rest with evidence.
+
 - **P1 Humans provide goals and success criteria; agents provide evidence.** Each success criterion has a `check`: a command, test or probe, and the expected result. The human reviews evidence, not process.
 - **P2 Minimal start.** A one-paragraph goal is enough to start. Success criteria, constraints, examples and extra evidence sources are optional; each one the human adds raises the success rate.
 - **P3 Gaps never block.** Missing criteria or checks are filled in by agents, marked `agent-proposed`, and listed under "Assumptions and gap-fills" for the human. Human-written criteria are never altered by agents. If a check cannot run, the agent writes a substitute (a test, script or proxy measure) and says so. Agents stop only for an irreversible risk or a real trade-off, never for missing detail.

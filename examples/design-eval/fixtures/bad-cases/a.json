@@ -1,0 +1,12 @@
+{
+  "task": "bus-transfer",
+  "prompt": "examples/bus-transfer/prompt.md",
+  "question": "In this design, what happens when an id that must be unique (such as a stop id) is given twice with different data?",
+  "labels": [
+    {"id": "refused", "means": "The program refuses the input with an error."},
+    {"id": "tolerated", "means": "The program accepts it: one entry wins, they are merged, one is skipped, or only a warning is printed."},
+    {"id": "unstated", "means": "The material does not say what happens to a repeated id with different data."}
+  ],
+  "right": ["refused"],
+  "wrong": ["tolerated"]
+}

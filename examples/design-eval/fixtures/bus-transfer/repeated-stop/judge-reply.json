@@ -1,0 +1,4 @@
+{
+  "model": "claude-sonnet-5-5",
+  "reply": "{\"label\": \"tolerated\", \"quote\": \"text = \\\"A stop id given twice keeps the last row and prints a warning\\\"\"}"
+}

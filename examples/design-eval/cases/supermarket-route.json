@@ -1,0 +1,12 @@
+{
+  "task": "supermarket-route",
+  "prompt": "examples/supermarket-route/prompt.md",
+  "question": "In this design, where is a product picked from?",
+  "labels": [
+    {"id": "shelf", "means": "A product sits on a shelf, a place the picker cannot stand on, and is picked from a walkable cell next to it. The program chooses that cell; the input gives the product's own place."},
+    {"id": "cell", "means": "A product's position is a walkable cell: the picker stands on it to pick, or the input must already give the cell to stand on."},
+    {"id": "unstated", "means": "The material does not settle where the picker stands to pick a product."}
+  ],
+  "right": ["shelf"],
+  "wrong": ["cell"]
+}

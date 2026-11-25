@@ -1,0 +1,1 @@
+{"kind": "tried", "attack": "collision", "text": "same stop id twice with two names: last one wins, warning on stderr"}

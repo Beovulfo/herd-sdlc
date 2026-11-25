@@ -1,0 +1,13 @@
+{
+  "task": "supermarket-route",
+  "prompt": "examples/supermarket-route/prompt.md",
+  "question": "In this design, where is a product picked from?",
+  "labels": {
+    "shelf": "A product sits on a shelf, a place the picker cannot stand on. The input gives the product's own place, and the program itself picks the nearest reachable side of it, comparing all the walkable sides.",
+    "fixed-side": "A product sits on a shelf the picker cannot stand on, but it is picked from one fixed access cell decided without comparing the sides for the route: for example the first walkable neighbour found, one set side, or the one nearest the entrance.",
+    "cell": "A product's position is a walkable cell: the picker stands on it to pick, or the input must already give the cell to stand on.",
+    "unstated": "The material does not settle where the picker stands to pick a product, or which side of a shelf the picker uses."
+  },
+  "right": ["shelf"],
+  "wrong": ["cell", "fixed-side"]
+}

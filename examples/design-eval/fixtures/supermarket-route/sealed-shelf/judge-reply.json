@@ -1,0 +1,4 @@
+{
+  "model": "claude-sonnet-5-5",
+  "reply": "{\"label\": \"shelf\", \"quote\": \"1. Where does the picker stand? First assumed: on the product cell. Decided: products are on shelves and are picked from a walkable neighbour.\"}"
+}

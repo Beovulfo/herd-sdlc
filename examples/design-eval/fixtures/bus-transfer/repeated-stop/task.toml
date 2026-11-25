@@ -1,0 +1,12 @@
+goal = "Bus journey planner"
+known_limits = "none known"
+
+[[inputs]]
+human = "the stops, the routes and their timetables"
+program = "three CSV files with ids"
+
+[[criteria]]
+id = "C1"
+text = "A stop id given twice keeps the last row and prints a warning"
+source = "agent-proposed"
+check = "python3 -m unittest tests.test_load"

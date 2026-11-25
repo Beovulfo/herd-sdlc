@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest import mock
 
 from scripts import herd
+from tests.test_herd_cli import stub_first_verify_refusal
 
 HOOKS = Path(herd.__file__).resolve().parent.parent / "hooks" / "hooks.json"
 STATE = ("evidence.json", "notes.jsonl", "start.json", "red.json", "frozen.json", "green.json", "fails.json",
@@ -45,7 +46,10 @@ def git(root, *args):
 
 
 class Base(unittest.TestCase):
+    refuses_first = False
+
     def setUp(self):
+        stub_first_verify_refusal(self)
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name).resolve()
         git(self.root, "init", "-q")

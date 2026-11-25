@@ -2,6 +2,15 @@
 
 All notable changes to Herd. Versions follow `plugin/.claude-plugin/plugin.json`.
 
+## 0.13.2
+
+The first `herd verify` refuses while a standard attack has no note (issue #94). It used to warn and record red anyway. From the design review: "Haiku ignores warnings. 'A late attack warns and does not refuse' is a hole." The owner asked: "let's implement Features 1 and 2".
+
+- **Changed:** on the standard route, while no `red.json` exists, `herd verify` exits 1 if any of the six attacks has no note. A note counts with `--check`, `--covered-by` or `n/a:`; its command need not pass. The message names each missing attack. No check runs and nothing is written.
+- **Removed:** the first-verify warning about a missing attack.
+- **Unchanged:** the quick route needs no attacks. A task already past its first verify, as tasks started on 0.13.x are, is not refused and keeps the late-attack warning.
+- **Known limits:** the refusal checks that a note exists, not that its command or `n/a:` reason is any good. A task switched from quick to standard after red is not refused. A task whose `red.json` was never written, because no criterion had a runnable check, is asked for the attacks on a later verify too. No model leg has measured 0.13.2, with Haiku or any other model.
+
 ## 0.13.1
 
 An attack may reuse a criterion's check (issue #85). On the bus task (#57), one run's attack test file was 325 lines. Its recount, refusal and other-reading attacks found nothing: the same comparison was already in its criterion check. A baseline without Herd wrote one such test and lost nothing on the hidden verifier. The owner asked: "I like the proposal but do already what you decided to leave out".

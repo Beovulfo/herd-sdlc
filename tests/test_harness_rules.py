@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 
 from scripts import herd
-from tests.test_herd_cli import PROGRAMS, run_herd
+from tests.test_herd_cli import PROGRAMS, run_herd, stub_first_verify_refusal
 
 OK = "python3 -c \"import json\""  # an attack command that passes and is not vacuous
 REQUEST = "Add f() to app.py. It must return 1 for any call."
@@ -40,6 +40,8 @@ def git(root, *args):
 
 
 class Base(unittest.TestCase):
+    refuses_first = False
+
     @classmethod
     def setUpClass(cls):
         """One template repository per test class; each test works in a copy of it (git init is not under test)."""
@@ -60,6 +62,7 @@ class Base(unittest.TestCase):
         super().tearDownClass()
 
     def setUp(self):
+        stub_first_verify_refusal(self)
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         shutil.copytree(self.template.name, self.root, dirs_exist_ok=True)
@@ -1105,18 +1108,8 @@ class TestInputsAndRefusalFirst(Base):
         self.assertIn(line, herd.report(ev))
         self.assertIn(line, herd.pr_body(self.root, "t1"))
 
-    def test_the_first_verify_asks_for_the_refusal_attack(self):
-        self.start()
-        self.assertIn(herd.REFUSAL_FIRST, self.red_then_build()["warnings"])
-        self.assertNotIn(herd.REFUSAL_FIRST, herd.verify(self.root, "t1")["warnings"])  # only the first verify asks
-
-    def test_a_refusal_attack_logged_before_the_first_verify_stops_the_question(self):
-        self.start()
-        herd.add_note(self.root, "t1", "tried", "refusals", attack="refusal", check=OK)
-        self.assertNotIn(herd.REFUSAL_FIRST, self.red_then_build()["warnings"])
-
     def test_a_refusal_attack_logged_after_the_first_verify_is_warned_about(self):
-        self.start()
+        self.start()  # a 0.13.x task could pass its first verify without the attack
         self.red_then_build()
         herd.add_note(self.root, "t1", "tried", "refusals", attack="refusal", check=OK)
         w = herd.verify(self.root, "t1")["warnings"]

@@ -72,7 +72,18 @@ def run_herd(cwd, *args, input=None):
     return subprocess.CompletedProcess(args, code or 0, out.getvalue(), err.getvalue())
 
 
+def stub_first_verify_refusal(case):
+    """Most tests are about other rules: they run a first verify with no attack notes, which is refused since issue #94.
+    A class that tests the refusal itself sets `refuses_first = True`."""
+    if not case.refuses_first:
+        patch = mock.patch.object(herd, "unlogged_attacks", return_value=[])
+        patch.start()
+        case.addCleanup(patch.stop)
+
+
 class Base(unittest.TestCase):
+    refuses_first = False
+
     @classmethod
     def setUpClass(cls):
         """One template repository per test class; each test works in a copy of it (git init is not under test)."""
@@ -92,6 +103,7 @@ class Base(unittest.TestCase):
         super().tearDownClass()
 
     def setUp(self):
+        stub_first_verify_refusal(self)
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         shutil.copytree(self.template.name, self.root, dirs_exist_ok=True)

@@ -206,6 +206,17 @@ class TestReadingQuotes(Base):
             self.assertEqual(self.checked(entries(first)).returncode, 1, repr(first))
             self.again()
 
+    def test_no_first_reading_is_refused(self):
+        for r in (None, "[]", '"any call"'):
+            p = self.checked(TASK.replace("inputs = []\n", "") + entry(r))
+            self.assertEqual((p.returncode, len(self.refusals(p))), (1, 1), r)
+            self.again()
+
+    def test_the_next_step_is_to_quote(self):
+        why = herd.reading_quote_warnings({"inputs": [{}]}, REQUEST)[0]
+        step = next(s for pat, s in herd.NEXT_STEPS if pat.search(why))
+        self.assertIn("quote of the request", step)
+
     def test_done_refuses_too(self):
         self.start(entries("typed by hand"))
         self.red_then_build()

@@ -209,7 +209,7 @@ class TestInputsRefused(Base):
         self.assertEqual([p.split(":", 1)[0] for p in probs], ["C1 has an `inputs` key inside its [[criteria]] table"])
 
     def test_an_incomplete_or_wrong_shape_input_is_refused(self):
-        _, probs = self.ready(NO_INPUTS + '\n[[inputs]]\nhuman = "a call"\nprogram = " "\n')
+        _, probs = self.ready(NO_INPUTS + '\n[[inputs]]\nhuman = "a call"\nprogram = " "\nreadings = ["any call", "x"]\n')
         self.assertEqual([p.split(":", 1)[0] for p in probs], ["inputs #1"])
         self.tearDown()
         self.setUp()

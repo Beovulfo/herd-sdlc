@@ -606,7 +606,7 @@ def input_warnings(task):
     out += [f"inputs #{i}: give `human` (the input as the human described it) and `program` (as the program "
             "receives it)" for i in bad]
     return out + [f"inputs #{i}: `readings` needs at least 2 items, the ways a person could read the human's words "
-                  f"for it, such as `readings = [\"<one reading>\", \"<another>\"]`" for i, x in enumerate(ins, 1)
+                  f"for it, such as `readings = [\"<a quote of the request>\", \"<another>\"]`" for i, x in enumerate(ins, 1)
                   if i - 1 not in [b - 1 for b in bad] and len(_readings(x)) < 2]
 
 
@@ -618,7 +618,7 @@ def reading_quote_warnings(task, request):
         return []
     return [f"inputs #{i}: `readings[0]` is not a verbatim quote of the request: put the human's own words for this "
             "input first, copied from the request" for i, x in enumerate(ins, 1)
-            if isinstance(x, dict) and _readings(x) and not _quotes(_readings(x)[0], request)]
+            if isinstance(x, dict) and not any(_quotes(r, request) for r in _readings(x)[:1])]
 
 
 def _check_command(root, slug):
@@ -2211,6 +2211,8 @@ NEXT_STEPS = ((re.compile(r"^(.+?) is failing: "), "fix {0}, then run `herd veri
                "restore human criterion {0} as the human wrote it, or record the human's change with "
                "`herd note --human-change`, then run `herd verify`"),
               (re.compile(r"^(test_budget|known_limits) is empty"), "add `{0}` to task.toml, then run `herd verify`"),
+              (re.compile(r"^inputs #\d+: `readings\[0\]`"),
+               "put a quote of the request first in that input's `readings`, then run `herd verify`"),
               (re.compile(r"^(?:no `inputs`|`inputs` must|inputs #\d+|\S+ has an `inputs` key)"),
                "add top-level `[[inputs]]` tables with `human` and `program` to task.toml, then run `herd verify`"),
               (re.compile(r"^coverage of human criterion (\S+) is empty"),

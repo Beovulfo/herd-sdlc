@@ -6,9 +6,13 @@ Set FontSize 16
 Set Framerate 10
 Set TypingSpeed 40ms
 Hide
-Type "clear && /tmp/herd-demo/start.sh"
+Type "clear && $HERD_DEMO_DIR/start.sh"
 Enter
-Sleep 10s
+# A new private folder shows the trust question (default "No, exit"): answer yes, off screen.
+Sleep 6s
+Down
+Enter
+Sleep 8s
 Show
 Sleep 1s
 Type "/herd:run Add slugify(text) to textutil.py for blog URLs. It must work for any title: 'Hello, World!' becomes 'hello-world' and 'Café Ñandú' becomes 'cafe-nandu'. Use the full workflow, not a quick fix."

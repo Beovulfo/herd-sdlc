@@ -12,7 +12,7 @@ Herd runs the program itself for two attack claims (issue #66). The owner asked:
 - A `--refuses` or `--example` command that runs no project code (`true`, `echo`, `test -f`) does not count; `echo ... | <program>` does count.
 - **Known limits:** `--refuses` cannot tell a missing script or a shell quoting error from a refusal when the interpreter exits 1 to 125 with a message. Only the word `Traceback` marks a stack trace. Herd does not check that the command is the program, or that its input is the one claimed; any unquoted pipe, such as `echo x | true`, lifts the vacuous rule. `herd verify --only` does not report a vacuous command.
 
-## Unreleased
+### Also in 0.12.12: benchmark 2 (no plugin file change)
 
 No plugin file changed, so no version bump. Benchmark 2, a bus transfer planner (issue #57), is built; no leg has run yet.
 

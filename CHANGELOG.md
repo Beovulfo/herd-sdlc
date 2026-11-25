@@ -9,7 +9,7 @@ Herd runs the program itself for two attack claims (issue #66). The owner asked:
 - **Added:** `herd note --tried --attack bad-input|one-bad-part --check "<tests>" --refuses "<cmd>"`. `herd verify` runs the command; the attack passes only if it exits 1 to 125, writes to stderr and prints no `Traceback`. Exit 126 and above or a signal means the command did not run or crashed.
 - **Added:** `--attack other-reading ... --example "<cmd>"`: the attack passes only if the command exits 0.
 - **Changed:** at medium and high risk `herd done` and the Stop gate refuse when `one-bad-part` has no `--refuses` or `other-reading` has no `--example`, unless the attack is n/a. A task in progress must log those two attacks again.
-- A `--refuses` or `--example` command that runs no project code (`true`, `echo`, `test -f`) does not count.
+- A `--refuses` or `--example` command that runs no project code (`true`, `echo`, `test -f`) does not count; `echo ... | <program>` does count.
 - **Known limits:** `--refuses` cannot tell a missing script or a shell quoting error from a refusal when the interpreter exits 1 to 125 with a message. Only the word `Traceback` marks a stack trace. Herd does not check that the command is the program, or that its input is the one claimed.
 
 ## 0.12.11

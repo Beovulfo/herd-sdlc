@@ -118,6 +118,19 @@ class TestExample(Attacks):
         self.assertEqual(self.state("python3 prog.py 'two milk'"), "failing")
         self.assertEqual(self.state("python3 -c \"import sys; print('warn', file=sys.stderr)\""), "passing")
 
+    def test_input_piped_into_the_program_counts(self):
+        self.built()
+        (self.root / "prog.py").write_text("import sys\nsys.exit(0 if sys.stdin.read().strip() == 'a|b' else 1)\n")
+        self.assertEqual(self.state("echo 'a|b' | python3 prog.py"), "passing")
+        for cmd in ("echo 'a|b'", "echo a || true", "echo a; exit 0"):
+            self.assertEqual(self.state(cmd), "vacuous", cmd)
+
+    def test_a_failing_program_is_not_shown_as_zero_tests(self):
+        self.built()
+        herd.add_note(self.root, "t1", "tried", "x", attack="other-reading",
+                      check="python3 -c \"print('Ran 0 tests')\"", example="python3 prog.py nosuch")
+        self.assertEqual(herd._attack_states(herd.verify(self.root, "t1")["attacks"])["other-reading"][0], "failing")
+
     def test_only_for_other_reading(self):
         self.built()
         p = self.cli("note", "--tried", "--attack", "bad-input", "--check", OK, "--example", EXAMPLE, "x")
@@ -176,7 +189,7 @@ class TestRequired(Attacks):
         self.assertIn("have not run", " ".join(herd.problems(self.root, "t1")))
 
     def test_quick_and_low_risk_do_not_need_them(self):
-        for ev in ({"route": "standard", "risk": {"effective": "low"}},):
+        for ev in ({"route": "standard", "risk": {"effective": "low"}}, {"route": "quick", "risk": {"effective": "medium"}}):
             self.assertFalse(herd.review_needed(ev))
             self.assertEqual(herd.missing_programs(ev), [])
 

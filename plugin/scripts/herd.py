@@ -1010,6 +1010,17 @@ def _program_fault(kind, p):
     return "printed a Traceback" if "Traceback" in p.stdout + p.stderr else None
 
 
+def vacuous_program(cmd):
+    """VACUOUS for a --refuses or --example command, except one that pipes into a program (`echo x | prog`)."""
+    if not VACUOUS.fullmatch(cmd.strip()):
+        return False
+    lex = shlex.shlex(cmd, posix=False, punctuation_chars=True)  # keeps quotes, so a quoted `|` is not a pipe
+    try:
+        return "|" not in list(lex)
+    except ValueError:  # unbalanced quotes
+        return True
+
+
 def run_program(root, kind, cmd, timeout):
     """Run a --refuses or --example command: (why it does not count or None, output tail)."""
     try:
@@ -1031,9 +1042,9 @@ def _run_programs(root, note, a, ran):
             ran[key] = run_program(root, kind, cmd, key[2])
         why, out = ran[key]
         a[kind] = cmd
-        a["vacuous"] = a.get("vacuous") or bool(VACUOUS.fullmatch(cmd))
+        a["vacuous"] = a.get("vacuous") or vacuous_program(cmd)
         if why:
-            a["status"], a["output_tail"] = "failing", out
+            a["status"], a["output_tail"], a["zero_tests"] = "failing", out, False
             a["program_fault"] = f"--{kind} {cmd}: {why}"
 
 
@@ -2855,8 +2866,9 @@ def _note_command(root, args):
     if len(flags) != 1 or flags[0] not in kinds or len(rest) != 1:
         raise UsageError
     add_note(root, _slug_arg(root, []), kinds[flags[0]], rest[0], **opts)
-    for cmd in (opts["check"], *(opts[k] for k in PROGRAM_FLAGS)):
-        if cmd and VACUOUS.fullmatch(cmd.strip()):
+    check = opts["check"]
+    vacuous = [check] if check and VACUOUS.fullmatch(check.strip()) else []
+    for cmd in vacuous + [opts[k] for k in PROGRAM_FLAGS if opts[k] and vacuous_program(opts[k])]:
             print(f"warning: `{cmd.strip()}` runs no project code, so it does not count for {opts['attack']}",
                   file=sys.stderr)
     print(f"noted ({kinds[flags[0]]}): {rest[0]}")

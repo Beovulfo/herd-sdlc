@@ -75,11 +75,12 @@ class TestOtherReading(Gen):
     def test_shell_forms(self):
         (self.root / "items.txt").write_text("milk\n")
         refuse = cmd((1, "", "no"))
-        forms = [refuse, f"{refuse} 2>&1 1>/dev/null >&2", f"cd . && {refuse}", f"X=1 {refuse}",
+        forms = [refuse, f"cd . && {refuse}", f"X=1 {refuse}",
                  f"echo milk | {refuse}", f"{refuse} < items.txt", f"({refuse})", f"{refuse}\n"]
-        for f in forms[:1] + forms[2:]:
+        for f in forms:
             self.note("one-bad-part", refuses=f)
-        self.assertEqual([a["status"] for a in self.verified()], ["passing"] * (len(forms) - 1))
+        self.assertEqual([a["status"] for a in self.verified()], ["passing"] * len(forms))
+        self.assertFalse(any(a["vacuous"] for a in self.verified()))
         ok = cmd((0, "", ""))
         for f in (ok, f"cat items.txt | {ok}", f"{ok} && {ok}", f"{ok} -- --refuses"):
             self.note("other-reading", example=f)

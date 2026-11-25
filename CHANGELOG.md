@@ -10,6 +10,7 @@ No plugin file changed, so no version bump. Benchmark 2, a bus transfer planner 
 - **Changed:** `run_leg.py` takes `--task bus-transfer` or `--task supermarket-route` (a name or a path); the task supplies `prompt.md` unless `--prompt` is given, and the hidden file names of every task are refused where a run could read them. `leak_audit.py` also reports a hidden verifier file found in a run's work folder and takes `--task`. CI now runs `test_leak_audit` and `test_bus_verify`.
 - **Fixed before any leg:** the verifier exits 2 with "no cases ran" on an empty selection instead of printing PASS; L and XL run `--seeds` seeds like S and M; program output that is not UTF-8 is a failed case or probe scenario instead of aborting the run.
 - **Faster verifier tests:** each generated network is built once per test process and XL runs only with `BUS_FULL=1`, which CI sets. `test_bus_verify` on one machine, one run each: 101.0 s for 37 tests before, 50.9 s for 42 tests (XL skipped) after.
+- **Fixed (bus benchmark, issue #70):** the probe counts a bad input as handled only for a non-zero exit with a message; a signal exit, a silent non-zero exit and a traceback are not. `ADAPTER_SPEC.md` has a time format section (whole minutes as `int`, the rule for converting the project's own format), and `bus_verify.py` rejects a float minute such as `560.0`.
 - **Known limits:** the verifier judges one service day with one global change time; L and XL are generated and solved by the oracle in tests but not run through a full solver.
 
 ## 0.12.11

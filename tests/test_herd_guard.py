@@ -17,8 +17,8 @@ from tests.test_herd_cli import stub_first_verify_refusal
 HOOKS = Path(herd.__file__).resolve().parent.parent / "hooks" / "hooks.json"
 STATE = ("evidence.json", "notes.jsonl", "start.json", "red.json", "frozen.json", "green.json", "fails.json",
          "stopped.json", "gate_blocks", "done_blocks", "cancelled")  # G3, as the design lists them
-PUSH = ("Herd guard: `git push` is not allowed during a task. Use `herd pr` to publish, "
-        "or ask the human one question and stop.")
+PUSH = ("Herd guard: `git push` is not allowed during a task. Use `herd pr` to publish "
+        "(`herd pr --draft` for a draft PR, `--milestone NAME` for its milestone), or ask the human one question and stop.")
 DENIED = [  # (command, the rule it breaks): each built-in rule in several shapes
     ("git push", "git push"), ("git push --force origin herd/x", "git push"), ("git push origin x --force", "git push"),
     ("/usr/bin/git push", "git push"), ("git -C sub push", "git push"), ("git -c a.b=c push -u origin x", "git push"),

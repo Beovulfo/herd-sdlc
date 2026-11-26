@@ -1040,7 +1040,7 @@ def _edited_files(log):
                 continue
             for c in content if isinstance(content, list) else []:
                 inp = c.get("input") if isinstance(c, dict) and c.get("type") == "tool_use" else None
-                if c.get("name") in EDIT_TOOLS and isinstance(inp, dict):
+                if isinstance(inp, dict) and c.get("name") in EDIT_TOOLS:
                     path = inp.get("file_path") or inp.get("notebook_path")
                     if isinstance(path, str) and path:
                         files.add(path)
@@ -3003,7 +3003,7 @@ def _skipped_init(log, cwd):
                     continue
                 for c in content if isinstance(content, list) else []:
                     inp = c.get("input") if isinstance(c, dict) and c.get("type") == "tool_use" else None
-                    if c.get("name") == "Bash" and isinstance(inp, dict) and _init_target(str(inp.get("command")), cwd):
+                    if isinstance(inp, dict) and c.get("name") == "Bash" and _init_target(str(inp.get("command")), cwd):
                         return False
         return bool(_edited_files(log))
     except (OSError, ValueError):

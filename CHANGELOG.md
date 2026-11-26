@@ -9,6 +9,7 @@ A session started with `/herd:run` could skip Herd entirely: with no active task
 - **Changed:** with no active task, `herd gate` reads the hook's `transcript_path`. It blocks the stop when the log has a `/herd:run` message with arguments (the parser `herd init` already uses), an Edit, Write, MultiEdit or NotebookEdit call (also in subagent logs), and no Bash command that ran `herd.py init` (in the session's log or its subagents' logs, since the designer subagent runs it). The reason says to run `herd init <slug> "<goal>"`.
 - **Changed:** the same `MAX_BLOCKS` (3) circuit breaker applies, per session log. The count and the release are recorded in `herd-noinit.json` in the checkout's git dir, never in the work tree.
 - **Changed:** sessions without a `/herd:run` message, without an edit, or that ran `herd init` (a task done or cancelled since) stop freely, as before. A missing or unreadable log allows the stop.
+- **Fixed:** a non-object item in a log message's content (a string, a number or null) no longer crashes the preinit hook or the Stop gate while they look for edits.
 - **Known limits:** edits made through Bash (`sed`, `cat >`) are not seen, so a session that edits only that way still stops freely. A failed `herd init` command counts as run. `herd cancel` needs a task, so a session whose human dropped the request is released only after 3 blocks. Not tried in a live session.
 
 ## 0.14.9

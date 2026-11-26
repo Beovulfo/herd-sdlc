@@ -1058,6 +1058,12 @@ class TestGateWithoutInit(Base):
             "content": [{"type": "tool_use", "name": "Bash", "input": {"command": "python3 herd.py init t1 \"g\""}}]}}))
         self.assertIsNone(self.stop(log))  # a designer subagent started the task, since done
 
+    def test_odd_content_items_do_not_crash(self):
+        log = self.log()
+        with log.open("a") as f:  # a string, a number and a null among the content items
+            f.write(json.dumps({"type": "assistant", "message": {"content": ["text", 3, None]}}) + "\n")
+        self.assertEqual(self.stop(log)["decision"], "block")
+
     def test_an_active_task_keeps_the_task_gate(self):
         self.task()
         self.assertIn("Herd task `t1`", self.stop(self.log())["reason"])

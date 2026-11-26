@@ -45,9 +45,13 @@ The agent also solves one tiny case by hand: that answer is frozen before any co
 
 Each verify records how long every criterion and attack check took (`seconds` in `evidence.json`). The report shows each criterion's time as `(N s)`, and `herd verify` prints the total and names any check over 60 s. The time is evidence only: it never fails a criterion.
 
+A limit logged with `herd note --open` gets a number. Once it is resolved, `herd note --fixed --closes N "text"` closes it: it leaves "Not proven" in the final report and the PR, and shows under "Caveats" as closed.
+
 Untrusted input is refused, not tolerated: contradictory entries, or a broken entry that could change a requested answer, end in an error, not a warning with exit 0. The agent then builds, tries to break the result and verifies. No second model reviews the change: bugs outside the attacks and criteria are not caught.
 
-`herd done` writes the evidence report. With `herd pr` (opt-in) that report is the pull request description; Herd never merges. Once the PR exists, every `herd verify` rewrites that description from the latest evidence (body only; a failed `gh` call is one warning line). Lines after Herd's footer line, such as `Closes #N`, are kept, also by `herd pr` and `herd done`.
+The designer and builder subagents must run in the foreground: the guard denies `herd:herd-designer` or `herd:herd-builder` with `run_in_background` not `false`, with or without a task, because a main session that waits on one tries to stop and uses up the Stop gate.
+
+`herd done` writes the evidence report. With `herd pr` (opt-in) that report is the pull request description; Herd never merges. Once the PR exists, every `herd verify` rewrites that description from the latest evidence (body only; a failed `gh` call is one warning line). Lines after Herd's footer line, such as `Closes #N`, are kept, also by `herd pr` and `herd done`. `herd pr --draft` opens a draft and `--milestone NAME` sets the milestone, on a new or an open PR; a flag left out changes nothing, and any other flag is refused before anything is pushed. During a task the guard denies `git push` and names `herd pr` instead.
 
 ## Models
 

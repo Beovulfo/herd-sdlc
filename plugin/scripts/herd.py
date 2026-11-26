@@ -2759,8 +2759,9 @@ def gate(root, hook):
 
 # ---- cli ------------------------------------------------------------------
 
-def _slug_arg(root, args):
-    """Slug from the arguments, the active task, or the only task that exists."""
+def _slug_arg(root, args, none_ok=False):
+    """Slug from the arguments, the active task, or the only task that exists. With none_ok, no task at all
+    (none here, none in another worktree) returns None instead of exiting."""
     slug = args[0] if args else active_slug(root)
     moved = elsewhere(root)
     if slug and slug in moved and not _dir(root, slug).exists():
@@ -2777,6 +2778,8 @@ def _slug_arg(root, args):
     if moved:
         sys.exit("no task in this checkout; tasks started here live in their worktrees: "
                  + ", ".join(f"{k} in {v}" for k, v in moved.items()) + ". Work from there")
+    if none_ok:
+        return None
     sys.exit("no active task: run `herd init <slug> \"<goal>\"`")
 
 
@@ -2874,6 +2877,8 @@ def main(argv):  # noqa: C901
                 return 0
             check_worktree_rule(root, args[0])
             init_task(root, args[0], args[1], quick_check=quick, request=request)
+            if _git(root, "rev-parse", "--git-dir"):  # Herd state never shows in `git status` or `git add -A`
+                _ignore_locally(root, [".herd/"])
             base, warn = task_branch(root, args[0])
             if base:
                 print(f"switched to new branch herd/{args[0]}, cut from {base}")
@@ -2941,11 +2946,19 @@ def main(argv):  # noqa: C901
         elif cmd == "status":
             as_json = "--json" in args
             try:
-                slug = _slug_arg(root, [a for a in args if a != "--json"])
-            except SystemExit:
-                if not as_json:  # before `herd init`: the models still say who designs
+                slug = _slug_arg(root, [a for a in args if a != "--json"], none_ok=True)
+            except SystemExit:  # several tasks, or tasks in other worktrees: exit 1 with the message on stderr
+                if not as_json:
                     print("\n".join(routing(root)))
                 raise
+            if slug is None:  # no task at all: a normal state before `herd init`
+                if as_json:
+                    read_models(root)  # a broken herd.toml still exits 1
+                    print("null")
+                else:  # the models still say who designs
+                    print("\n".join(routing(root)))
+                    print('no active task: run herd init <slug> "<goal>"')
+                return 0
             stop = load_stop(root, slug)
             if as_json:
                 print(json.dumps(stop, indent=2))

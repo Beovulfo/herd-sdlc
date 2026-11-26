@@ -2,6 +2,17 @@
 
 All notable changes to Herd. Versions follow `plugin/.claude-plugin/plugin.json`.
 
+## 0.14.12
+
+A new `/herd:run` session that continued a task finished in an earlier session (to merge the base branch or fix review comments on its PR) was blocked at 3 stops with "no Herd task was started": `start.json` named only the session that ran `herd init`, and there was no way to take the task up again (issue #145).
+
+- **Changed:** `herd reopen <slug>` makes a finished task in this checkout active again. `start.json` keeps the `session` that ran `herd init` and adds the session the pre-init hook last saw run a herd command here to a `sessions` list. The block counters (`gate_blocks`, `done_blocks`) are reset.
+- **Changed:** the Stop gate (with or without an active task) and the design hook count a session in `sessions` as the task's, like the `init` session.
+- **Changed:** a reopened task must pass `herd done` again. The evidence is tied to the work by its content id, so an edit after the reopen makes it stale until `herd verify` runs. Since `start.json` changed, the next `herd verify` runs every check instead of skipping an unchanged tree.
+- **Changed:** `herd reopen` refuses a cancelled task, a task that does not exist, a task whose `start.json` is missing or unreadable, and any reopen while another task is active in the checkout.
+- **Changed:** the run skill tells an agent continuing a finished task to run `herd reopen <slug>` instead of `herd init`.
+- **Known limits:** without the pre-init hook (such as in a terminal) no session is recorded, and the task is active but its gate may not block the new session. A session that continues a finished task without `herd reopen` is still blocked as before. Not tried in a live session.
+
 ## 0.14.11
 
 The 0.14.10 Stop gate blocked a finished task. In the 0.14.10 benchmark, 1 of 3 Haiku runs ran `herd init` as `H=.../herd.py; python3 "$H" init ...` and passed `herd done`, and the gate then blocked 3 stops with "no Herd task was started": the command check only knows a literal `herd.py init`.

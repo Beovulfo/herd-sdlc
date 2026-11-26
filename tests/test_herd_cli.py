@@ -1080,6 +1080,89 @@ class TestGateWithoutInit(Base):
         self.assertIn("Herd task `t1`", self.stop(self.log())["reason"])
 
 
+
+class TestReopen(Base):
+    """Issue #145: a new /herd:run session that continues a finished task runs `herd reopen <slug>`."""
+    RUN, log, stop = TestGateWithoutInit.RUN, TestGateWithoutInit.log, TestGateWithoutInit.stop
+
+    def herd_command(self, log, command):
+        herd.preinit({"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(self.root),
+                      "transcript_path": str(log)})
+
+    def finished(self):
+        """t1, started and finished by session A. Returns A's log."""
+        a = self.log(request=self.RUN.replace("Fix the typo in README.md", "Given a name, when greet runs, then it "
+                                              "prints hello"))
+        self.herd_command(a, 'python3 herd.py init t1 "Add a greeting"')
+        self.task(attacks=True)
+        (self.root / "greet.txt").write_text("hello")
+        herd.verify(self.root, "t1")
+        p = run_herd(self.root, "done")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIsNone(self.stop(a))
+        return a
+
+    def start(self):
+        return json.loads((self.root / ".herd/tasks/t1/start.json").read_text())
+
+    def test_a_session_that_reopens_the_task_is_gated_as_its_owner(self):
+        a, b = self.finished(), self.log()
+        self.herd_command(b, "python3 herd.py reopen t1")
+        p = run_herd(self.root, "reopen", "t1")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("reopened t1", p.stdout)
+        self.assertEqual((self.root / ".herd/active").read_text().strip(), "t1")
+        self.assertEqual((self.start()["session"], self.start()["sessions"]), (str(a), [str(b)]))
+        (self.root / "greet.txt").write_text("hello again")  # the new edit: the old evidence no longer counts
+        self.assertIn("evidence is stale", self.stop(b)["reason"])
+        self.assertNotEqual(run_herd(self.root, "done").returncode, 0)
+        herd.verify(self.root, "t1")
+        self.assertEqual(run_herd(self.root, "done").returncode, 0)
+        self.assertIsNone(self.stop(b))  # finished again: no "no Herd task was started" block
+        self.assertFalse((self.root / ".git" / herd.NOINIT_FILE).exists())
+
+    def test_reopen_twice_records_the_session_once(self):
+        self.finished()
+        b = self.log()
+        self.herd_command(b, "python3 herd.py reopen t1")
+        herd.reopen_task(self.root, "t1")
+        herd.reopen_task(self.root, "t1")
+        self.assertEqual(self.start()["sessions"], [str(b)])
+
+    def test_a_session_that_neither_inits_nor_reopens_is_still_blocked(self):
+        self.finished()
+        b = self.log()
+        for i in range(1, herd.MAX_BLOCKS + 1):
+            self.assertIn(f"no Herd task was started ({i}/{herd.MAX_BLOCKS}", self.stop(b)["reason"])
+        self.assertIsNone(self.stop(b))
+
+    def test_reopen_of_a_cancelled_or_missing_task_is_refused(self):
+        self.finished()
+        herd.cancel_task(self.root, "t1", "dropped")
+        for slug, why in (("t1", "was cancelled"), ("nope", "no task nope"), ("../x", "no task")):
+            with self.subTest(slug=slug):
+                p = run_herd(self.root, "reopen", slug)
+                self.assertEqual(p.returncode, 1)
+                self.assertIn(why, p.stderr)
+        self.assertFalse((self.root / ".herd/active").exists())
+        self.assertNotIn("sessions", self.start())
+        self.assertEqual(run_herd(self.root, "reopen").returncode, 1)  # the slug is required
+
+    def test_reopen_is_refused_while_another_task_is_active(self):
+        self.finished()
+        herd.init_task(self.root, "t2", "Another")
+        with self.assertRaisesRegex(ValueError, "t2 is still active"):
+            herd.reopen_task(self.root, "t1")
+
+    def test_the_pre_init_hook_records_a_reopen(self):
+        b = self.log()
+        hook = json.dumps({"tool_name": "Bash", "tool_input": {"command": "python3 /p/scripts/herd.py reopen t1"},
+                           "cwd": str(self.root), "transcript_path": str(b)})
+        subprocess.run([sys.executable, str(Path(herd.__file__)), "preinit"], cwd=self.root, input=hook,
+                       text=True, check=True)
+        self.assertEqual(herd._seen_session(self.root), str(b))
+
+
 class TestCli(Base):
     def run_cli(self, *args):
         p = subprocess.run(["python3", str(Path(herd.__file__)), *args], cwd=self.root,
@@ -2171,13 +2254,14 @@ class TestBudgets(Base):
     # (3) short skills, rare parts in reference files read only when needed
     def test_skill_word_budgets(self):
         # quality first: 0.3.1 raised run from 800 when the break-it attacks moved back into it
-        budget = {"run": 1025, "criteria": 565, "evidence": 450}  # 0.4.0: rules the CLI enforces left the skill;
+        budget = {"run": 1050, "criteria": 565, "evidence": 450}  # 0.4.0: rules the CLI enforces left the skill;
         # 0.5.0: +10 for resuming from the stop record; 0.6.0: +15 for the guard rule; 0.9.0: criteria +30 for `inputs`;
         # 0.10.0: criteria +20 for the top-level [[inputs]] example (a Haiku run put `inputs` inside [[criteria]])
         # 0.12.9: criteria +45 for `readings` (a sentence and an example line)
         # 0.12.13: criteria +30 for the sentence that the first reading quotes the request
         # 0.11.0: run +30 for an intake review step, given back in 0.12.0 when it was removed
         # 0.14.0: run +180 for who designs and who builds, and the second look (issue #102)
+        # 0.14.12: run +25 for `herd reopen` (issue #145)
         for name, limit in budget.items():
             self.assertLessEqual(words((SKILLS / name / "SKILL.md").read_text()), limit, name)
 

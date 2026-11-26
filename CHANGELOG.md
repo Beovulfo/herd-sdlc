@@ -2,6 +2,15 @@
 
 All notable changes to Herd. Versions follow `plugin/.claude-plugin/plugin.json`.
 
+## 0.14.7
+
+A check that makes every verify slow was invisible during the build: `evidence.json` held no time per check. In one analysed project CI on each pull request took 14 to 25 minutes, and no record showed which checks were slow (issue #127, part of #121).
+
+- **Changed:** each verify result with a check records `seconds` (wall clock, to 0.1 s), passing, failing or timed out. Each attack command that ran records it too (a shared command once). `evidence.json` also holds the total, `seconds`.
+- **Changed:** the report (`herd status`, `evidence.md`) shows the time in the status column, as in `passing (1.0 s)`.
+- **Changed:** `herd verify` adds `(checks took N s)` to its summary line and names each check over 60 s: `C3 took 412 s: every verify reruns it`. The time never fails a criterion or changes the exit code.
+- **Known limits:** times are wall clock, so load on the machine changes them. The 60 s line is not configurable. A skipped (unchanged) verify prints no time. `herd verify --only` records nothing. The pull request description shows no times. Times of `--refuses` and `--example` commands are only in the total.
+
 ## 0.14.2
 
 In 4 of 36 analysed headless runs the main session started `herd:herd-designer` or `herd:herd-builder` in the background. It then tried to stop, the Stop gate blocked 3 times and released the task, and 3 of those sessions ended unfinished (issue #122).

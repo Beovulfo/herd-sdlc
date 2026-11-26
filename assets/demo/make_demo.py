@@ -40,7 +40,7 @@ def panel(step, caption, t):
                          f'<path d="M{ax + gap - 6} {y + 21}l5 4l-5 4z" fill="{DIM}"/>')
     m, s = divmod(int(t), 60)
     parts.append(f'<text x="{x0}" y="{y + 92}" {FONT} font-size="22" fill="{TEXT}">{escape(caption)}</text>'
-                 f'<text x="{x0}" y="{y + 130}" {FONT} font-size="16" fill="{DIM}">Real /herd:run session, Herd 0.14.0, Claude Sonnet 5.5 with a Haiku 5.5 builder, '
+                 f'<text x="{x0}" y="{y + 130}" {FONT} font-size="16" fill="{DIM}">Real /herd:run session, Herd 0.14.1, Claude Sonnet 5.5 with a Haiku 5.5 builder, '
                  f'sped up. Elapsed {m}m {s:02d}s</text></svg>')
     return "".join(parts)
 

@@ -18,7 +18,7 @@
 
 <p align="center">
   <img src="assets/demo.gif" alt="A real /herd:run session in Claude Code">
-  <br><sub>A real session with Herd 0.14.0, sped up: Claude Sonnet 5.5 designs, a Claude Haiku 5.5 subagent builds.</sub></p>
+  <br><sub>A real session with Herd 0.14.1, sped up: Claude Sonnet 5.5 designs, a Claude Haiku 5.5 subagent builds. The one red output is red first: the checks must fail before any code exists.</sub></p>
 
 Herd is a [Claude Code](https://claude.com/claude-code) plugin. You give a goal; the agent plans, builds, tries to break its work and verifies.
 It stops only when **runnable checks prove the criteria pass**, and returns code plus **evidence**: output, commit SHA, timestamps.
@@ -99,7 +99,7 @@ New here? Try a [good first issue](https://github.com/Beovulfo/herd-sdlc/labels/
 
 ## Status
 
-Version 0.14.0 (see the [changelog](CHANGELOG.md)). The local autopilot works; CI runs its unit tests on Python 3.11, 3.12 and 3.13.
+Version 0.14.1 (see the [changelog](CHANGELOG.md)). The local autopilot works; CI runs its unit tests on Python 3.11, 3.12 and 3.13.
 Not yet done: many live runs across project types, and issue-to-pull-request automation on GitHub.
 Checks run as shell commands with your permissions: read a task file as you read code.
 

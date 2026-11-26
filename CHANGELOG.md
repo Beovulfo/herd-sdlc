@@ -2,6 +2,15 @@
 
 All notable changes to Herd. Versions follow `plugin/.claude-plugin/plugin.json`.
 
+## 0.14.1
+
+The demo GIF in the README showed red error output. Two causes: `herd status` before `herd init` exited 1, and a plain `herd init` left `.herd/` in `git status` (issue #116).
+
+- **Changed:** `herd status` with no task at all prints the models and `no active task: run herd init <slug> "<goal>"` on stdout, and exits 0. `herd status --json` prints `null` and exits 0. Several tasks with none active, tasks that live only in other worktrees, and a broken `herd.toml` still exit 1 with the message on stderr.
+- **Changed:** a plain `herd init` and a quick route `herd init` add `.herd/` to the checkout's own `info/exclude` (never committed), so Herd state never shows in `git status` or `git add -A`. A worktree init already did this.
+- **Changed:** the README demo is re-recorded on 0.14.1 (a 4.5-minute session, 5 of 5 criteria proven). `assets/demo/check_red.py` scans the GIF for red tool output: one red run, frames 165 to 182, the red-first `herd verify`, labelled in the caption.
+- **Known limits:** red first still exits 1 by design: `herd verify` before any code must fail. Issue #118 proposes `herd verify --red`, which would exit 0 on an expected red.
+
 ## 0.14.0
 
 Design runs on a stronger model than the build, with a "be specific" second look before the attacks (issue #102). The owner: "I WANT the be specific second look BEFORE the attack", and "give more weight to \"be right \" than to be cheap. It is more expensive to run twice the same project because it got wrong results".

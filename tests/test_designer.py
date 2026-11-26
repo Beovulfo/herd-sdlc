@@ -95,9 +95,9 @@ class Models(Repo):
 
     def test_models_default_and_override_by_herd_toml(self):
         (self.root / "herd.toml").write_text('[models]\ndesign = "opus"\nbuild = "claude-sonnet-5-5"\n')
-        before = run_herd(self.root, "status")  # no task yet: the models still print
+        before = run_herd(self.root, "status")  # no task yet: the models still print, and that is not an error
         self.assertIn("Models: design opus, build claude-sonnet-5-5", before.stdout)
-        self.assertEqual(before.returncode, 1)
+        self.assertEqual(before.returncode, 0)
         self.init()
         (self.root / "herd.toml").write_text('[models]\ndesign = "haiku"\n')  # an edit during the task: no effect
         self.assertIn("Models: design opus, build claude-sonnet-5-5", self.status())
@@ -153,8 +153,9 @@ class Routing(Repo):
     def test_build_model_routing_before_init(self):
         self.session(HAIKU)
         p = run_herd(self.root, "status")
+        self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn("Build: here, in this session", p.stdout)
-        self.assertIn("no active task", p.stderr)
+        self.assertIn("no active task", p.stdout)
 
     def test_build_model_routing_unknown_session(self):
         self.init()

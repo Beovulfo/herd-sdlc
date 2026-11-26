@@ -695,8 +695,11 @@ class TestSlugFallback(Base):
         self.assertIn("t1", p.stderr)
         self.assertIn("t2", p.stderr)
 
-    def test_no_tasks_is_an_error(self):
+    def test_no_tasks_status_is_not_an_error(self):  # issue #116: before `herd init` is a normal state
         p = self.run_cli("status")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("herd init", p.stdout)
+        p = self.run_cli("verify")  # other commands still need a task
         self.assertEqual(p.returncode, 1)
         self.assertIn("herd init", p.stderr)
 
@@ -2274,6 +2277,148 @@ class TestCoveredBy(Base):
         self.note("refusal")
         ev = herd.verify(self.root, "t1")
         self.assertIn("refusal attack was logged after the first verify", " ".join(ev["warnings"]))
+
+
+class TestStatusNoTask(Base):
+    """`herd status` before any task is a normal state: exit 0, hint on stdout. Every other no-task case still
+    exits 1 with its message on stderr (issue #116)."""
+
+    def status(self, *args):
+        return run_herd(self.root, "status", *args)
+
+    def add_task(self, slug):
+        (self.root / ".herd/tasks" / slug).mkdir(parents=True)
+        (self.root / ".herd/tasks" / slug / "task.toml").write_text(TASK)
+
+    def test_no_task_exits_0_hint_on_stdout(self):
+        p = self.status()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn('no active task: run herd init <slug> "<goal>"', p.stdout)
+        self.assertIn("Design:", p.stdout)
+        self.assertEqual(p.stderr, "")
+
+    def test_no_task_json_null_exits_0(self):
+        p = self.status("--json")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stdout.strip(), "null")
+
+    def test_several_tasks_none_active_exits_1(self):
+        self.add_task("t1")
+        self.add_task("t2")
+        p = self.status()
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("pass one of: t1, t2", p.stderr)
+        self.assertNotIn("no active task: run", p.stdout)
+
+    def test_tasks_in_other_worktrees_exits_1(self):
+        other = tempfile.TemporaryDirectory()
+        self.addCleanup(other.cleanup)
+        (self.root / ".herd/elsewhere").mkdir(parents=True)
+        (self.root / ".herd/elsewhere/t9").write_text(other.name)
+        p = self.status()
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("t9 in " + other.name, p.stderr)
+        self.assertNotIn("no active task: run", p.stdout)
+
+    def test_broken_herd_toml_exits_1(self):
+        (self.root / "herd.toml").write_text("[models\n")
+        for args in ((), ("--json",)):
+            with self.subTest(args=args):
+                p = self.status(*args)
+                self.assertEqual(p.returncode, 1, p.stdout)
+                self.assertIn("herd.toml", p.stderr)
+                self.assertNotIn("Traceback", p.stderr)
+
+    def test_bad_input_status(self):
+        (self.root / "herd.toml").write_text("[models\n")
+        for args in ((), ("--json",)):
+            with self.subTest(args=args):
+                p = self.status(*args)
+                self.assertEqual(p.returncode, 1, p.stdout)
+                self.assertNotIn("Traceback", p.stderr)
+        self.add_task("t1")
+        p = self.status("nope")  # an unknown slug is not a no-task case: its own message, never the hint
+        self.assertNotIn("no active task: run herd init", p.stdout)
+        self.assertNotIn("Traceback", p.stderr)
+
+    def test_refusals_match_independent_count(self):
+        other = tempfile.TemporaryDirectory()
+        self.addCleanup(other.cleanup)
+        layouts = {
+            "several tasks": lambda: (self.add_task("t1"), self.add_task("t2")),
+            "other worktree": lambda: ((self.root / ".herd/elsewhere").mkdir(parents=True),
+                                       (self.root / ".herd/elsewhere/t9").write_text(other.name)),
+        }
+        for name, make in layouts.items():
+            with self.subTest(layout=name):
+                make()
+                tasks_dir, moved_dir = self.root / ".herd/tasks", self.root / ".herd/elsewhere"
+                tasks = [p for p in tasks_dir.iterdir() if (p / "task.toml").exists()] if tasks_dir.exists() else []
+                moved = list(moved_dir.iterdir()) if moved_dir.exists() else []
+                self.assertTrue(len(tasks) >= 2 or moved, name)  # independent count of the layout
+                p = self.status()
+                self.assertEqual(p.returncode, 1, p.stdout)
+                self.assertTrue(p.stderr.strip())
+                self.assertNotIn("no active task: run herd init", p.stdout)
+                shutil.rmtree(self.root / ".herd")
+
+    def test_no_task_readings(self):
+        p = self.status()  # no .herd folder at all
+        self.assertEqual(p.returncode, 0, p.stderr)
+        (self.root / ".herd/tasks").mkdir(parents=True)  # an empty .herd/tasks folder
+        p = self.status()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("no active task: run herd init", p.stdout)
+
+
+class TestInitIgnoresHerd(Base):
+    """A plain or quick `herd init` keeps .herd/ out of `git status` and `git add -A` (issue #116)."""
+
+    def porcelain(self, cwd=None):
+        return subprocess.run(["git", "status", "--porcelain"], cwd=cwd or self.root, capture_output=True,
+                              text=True, check=True).stdout
+
+    def test_plain_init_hides_herd_from_git_status(self):
+        p = run_herd(self.root, "init", "t1", "Add a greeting")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue((self.root / ".herd/tasks/t1").exists())
+        self.assertNotIn(".herd", self.porcelain())
+
+    def test_quick_init_hides_herd_from_git_status(self):
+        p = run_herd(self.root, "init", "q1", "Fix typo", "--quick", "true")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertNotIn(".herd", self.porcelain())
+
+    def test_git_add_all_does_not_stage_herd(self):
+        run_herd(self.root, "init", "t1", "Add a greeting")
+        git(self.root, "add", "-A")
+        staged = subprocess.run(["git", "diff", "--cached", "--name-only"], cwd=self.root, capture_output=True,
+                                text=True, check=True).stdout
+        self.assertNotIn(".herd", staged)
+
+    def test_exclude_line_not_duplicated(self):
+        self.assertEqual(run_herd(self.root, "init", "t1", "Add a greeting").returncode, 0)
+        p = run_herd(self.root, "init", "t1", "Another goal")  # refused: the task exists
+        self.assertNotEqual(p.returncode, 0)
+        lines = (self.root / ".git/info/exclude").read_text().splitlines()
+        self.assertEqual(lines.count(".herd/"), 1)
+
+    def test_init_readings(self):
+        exclude = self.root / ".git/info/exclude"
+        with tempfile.TemporaryDirectory() as td:  # a linked worktree: init there hides .herd/ too
+            wt = Path(td) / "wt"
+            git(self.root, "worktree", "add", "-q", "-b", "wt1", str(wt), "HEAD")
+            p = run_herd(wt, "init", "t2", "Add a greeting")
+            self.assertEqual(p.returncode, 0, p.stderr)
+            self.assertNotIn(".herd", self.porcelain(cwd=wt))
+            git(self.root, "worktree", "remove", "--force", str(wt))
+        # the exclude file is shared by linked worktrees: drop the line the worktree init wrote, then list it by hand
+        kept = [line for line in exclude.read_text().splitlines() if line != ".herd/"]
+        exclude.write_text("".join(line + "\n" for line in kept) + ".herd/\n")
+        p = run_herd(self.root, "init", "t1", "Add a greeting")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertNotIn(".herd", self.porcelain())
+        self.assertEqual(exclude.read_text().splitlines().count(".herd/"), 1)
 
 
 if __name__ == "__main__":

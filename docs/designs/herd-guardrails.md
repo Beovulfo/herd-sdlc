@@ -105,7 +105,7 @@ Do not guess any of these (CLAUDE.md, Writing). If a field does not exist, chang
 
 ### Part A: guard hook
 
-**A1. Wiring.** `hooks/hooks.json` gets a PreToolUse entry, matcher `Bash|Edit|Write|MultiEdit|NotebookEdit`, command `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/herd.py" guard`, timeout 10. `herd.py` adds `guard` to the old-Python early exit next to `gate` and `lint`.
+**A1. Wiring.** `hooks/hooks.json` gets a PreToolUse entry, matcher `Bash|Edit|Write|MultiEdit|NotebookEdit`, command `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/herd.py" guard`, timeout 10. `herd.py` adds `guard` to the old-Python early exit next to `gate` and `lint`. Since 0.14.2 the matcher also names `Agent`: `herd:herd-designer` and `herd:herd-builder` are denied unless `run_in_background` is `false`, with or without an active task (issue #122).
 
 **A2. Function.** `guard(root, hook) -> dict | None` in `herd.py`, next to `lint()`. `None` allows. A dict is the PreToolUse deny output. `main()` reads stdin like `lint`, wraps the call in `try/except Exception`, and on an exception prints one line to stderr and exits 0.
 

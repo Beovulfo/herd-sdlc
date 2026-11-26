@@ -60,7 +60,7 @@ if sys.argv[1:2] == ["guard"]:  # the PreToolUse guard runs before every Bash co
         _found = _active_root(_hook)
     except Exception:  # noqa: BLE001 - a deleted cwd and the like: the CLI path below reports it in one line
         _found = ""
-    if _found is None:
+    if _found is None and '"Agent"' not in GUARD_RAW:  # a Herd subagent is checked with no task too
         sys.exit(0)
 
 import contextlib
@@ -2343,6 +2343,7 @@ WRAPPERS = {"env": ("-u", "-C", "-S", "--unset", "--chdir", "--split-string"),
             "command": (), "time": (), "nohup": (), "exec": ("-a",), "nice": ("-n",),
             "timeout": ("-s", "-k", "--signal", "--kill-after"),  # then a duration
             "xargs": ("-n", "-I", "-P", "-L", "-d", "-s", "-E", "-a")}
+HERD_AGENTS = ("herd:herd-designer", "herd:herd-builder")  # denied unless run in the foreground
 HOOK_COMMANDS = ("gate", "preinit", "guard", "design-hook")  # Claude Code runs these; the agent never needs to
 SUBST = re.compile(r"\$\(([^()]*)\)|`([^`]*)`")  # command substitution, which runs inside double quotes too
 KEYWORDS = ("if", "then", "do", "else", "elif", "while", "until", "!", "{", "}")
@@ -2582,15 +2583,27 @@ def _protected(root, cwd, path, globs):
 
 
 def guard(root, hook):  # noqa: C901
-    """PreToolUse hook on Bash and the edit tools. None allows; a dict is the deny output. Only while a task is
-    active; each denial is a `guard` note. It reads command text, so bash -c, scripts and aliases pass (a Non-Goal)."""
+    """PreToolUse hook on Bash, the edit tools and Agent. None allows; a dict is the deny output. Bash and edits are
+    checked only while a task is active. A Herd subagent not run in the foreground is denied with or without one: the
+    designer is spawned before `herd init`. Each denial during a task is a `guard` note. It reads command text, so
+    bash -c, scripts and aliases pass (a Non-Goal)."""
     if not isinstance(hook, dict):
         return None
-    slug = active_slug(root)
-    if not slug or not _dir(root, slug).exists() or cancelled(root, slug):
-        return None
+    slug = active_slug(root) if root else None
+    if slug and (not _dir(root, slug).exists() or cancelled(root, slug)):
+        slug = None
     tool, inp = hook.get("tool_name"), hook.get("tool_input")
-    inp, cwd = inp if isinstance(inp, dict) else {}, str(hook.get("cwd") or root)
+    inp = inp if isinstance(inp, dict) else {}
+    if tool == "Agent":  # in the background, the main session stops while it waits and uses up the Stop gate
+        kind = inp.get("subagent_type")
+        if kind not in HERD_AGENTS or inp.get("run_in_background") is False:
+            return None
+        return _deny(root, slug, tool, f"background {kind}",
+                     f"Herd guard: `{kind}` cannot run in the background: call the Agent tool again with "
+                     "`run_in_background: false`.")
+    if not slug:
+        return None
+    cwd = str(hook.get("cwd") or root)
     globs, commands = guard_config(root)
     logs = hook.get("transcript_path")
     logs = os.path.realpath(os.path.dirname(logs)) if isinstance(logs, str) and logs else None
@@ -2636,14 +2649,18 @@ def guard(root, hook):  # noqa: C901
             hit = next((h for p in _written(words) if (h := _session_log(p) or _protected(root, here, p, globs))), None)
             if hit:
                 break
-    if not hit:
-        return None
+    return _deny(root, slug, tool, *hit) if hit else None
+
+
+def _deny(root, slug, tool, rule, reason):
+    """The deny output, noted on the active task when there is one."""
     try:
-        add_note(root, slug, "guard", f"{tool}: {hit[0]}")
+        if slug:
+            add_note(root, slug, "guard", f"{tool}: {rule}")
     except Exception as e:  # noqa: BLE001 - a log that cannot be written never turns a denial into an allow
         print(f"herd guard: denied, but the guard note could not be written: {e!r}"[:300], file=sys.stderr)
     return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
-                                   "permissionDecisionReason": hit[1]}}
+                                   "permissionDecisionReason": reason}}
 
 
 def guard_line(notes):
@@ -2840,7 +2857,8 @@ USAGE = {
     "pr": "herd pr [slug] [--yes] [--draft] [--milestone NAME]   (push the herd/* branch, open or update its PR with the evidence)",
     "gate": "herd gate   (the Stop hook, reads hook JSON on stdin)",
     "preinit": "herd preinit   (PreToolUse hook on Bash: before `herd init`, records files the session already edited)",
-    "guard": "herd guard   (PreToolUse hook: denies edits to secrets and Herd's state, and irreversible commands)",
+    "guard": "herd guard   (PreToolUse hook: denies edits to secrets and Herd's state, irreversible commands and "
+             "background Herd subagents)",
     "triage": 'herd triage "<text>" [--json]',
 }
 
@@ -3082,7 +3100,7 @@ def main(argv):  # noqa: C901
                 raw = raw if raw is not None else (sys.stdin.read() if not sys.stdin.isatty() else "")
                 hook = json.loads(raw) if raw.strip() else {}
                 found = guard_root(hook)
-                out = guard(found, hook) if found else None
+                out = guard(found, hook)
                 if out:
                     print(json.dumps(out))
             except Exception as e:  # noqa: BLE001 - a hook must never break the session

@@ -14,7 +14,7 @@ if sys.version_info < (3, 11):  # keep this block parseable by old Pythons: it r
     sys.exit("herd needs Python 3.11 or newer, found " + sys.version.split()[0])
 if sys.argv[1:2] == ["preinit"]:  # the PreToolUse hook runs before every Bash command: leave before the imports
     PREINIT_RAW = sys.stdin.read() if not sys.stdin.isatty() else ""
-    if "herd.py" not in PREINIT_RAW or ("init" not in PREINIT_RAW and "status" not in PREINIT_RAW):
+    if "herd.py" not in PREINIT_RAW or all(w not in PREINIT_RAW for w in ("init", "status", "reopen")):
         sys.exit(0)
 
 
@@ -443,7 +443,7 @@ def design_hook(root, hook):
         slug = active_slug(r)
         if slug and (_dir(r, slug) / "task.toml").exists() and not cancelled(r, slug):
             tasks.append((r, slug))
-    mine = [t for t in tasks if isinstance(main, str) and _state(_dir(*t) / "start.json", {}).get("session") == main]
+    mine = [t for t in tasks if isinstance(main, str) and _owned_by(_state(_dir(*t) / "start.json", {}), main)]
     for r, slug in mine or [t for t in tasks if t[0] == Path(root)]:
         wanted = task_models(r, slug)
         if not wanted:
@@ -599,6 +599,33 @@ def cancel_task(root, slug, reason=""):
     (d / "gate_blocks").unlink(missing_ok=True)
     if active_slug(root) == slug:
         (Path(root) / ".herd" / "active").unlink()
+
+
+def reopen_task(root, slug):
+    """Make a finished task active again for this session (issue #145): start.json keeps the `session` that ran
+    `herd init` and adds this one to `sessions`, so the Stop gate and the design hook count it as the task's. The
+    evidence is still tied to the work by its content id, so a new edit makes it stale and `herd done` must pass
+    again. Returns the session log recorded, or None."""
+    d = _dir(root, slug)
+    if not SLUG.fullmatch(slug) or not (d / "task.toml").exists():
+        raise ValueError(f"no task {slug}")
+    if cancelled(root, slug):
+        raise ValueError(f"task {slug} was cancelled: start a new one with `herd init`")
+    other = active_slug(root)
+    if other and other != slug and _dir(root, other).exists() and not cancelled(root, other):
+        raise ValueError(f"task {other} is still active in this checkout: finish it (`herd done`) or cancel it first")
+    start = _state(d / "start.json", None)
+    if start is None:
+        raise ValueError(f"start.json of task {slug} is missing or unreadable: start a new task with `herd init`")
+    session = _seen_session(root)
+    if session and not _owned_by(start, session):
+        kept = start.get("sessions") if isinstance(start.get("sessions"), list) else []
+        start["sessions"] = [s for s in kept if isinstance(s, str)] + [session]
+        (d / "start.json").write_text(json.dumps(start) + "\n")
+    for name in ("gate_blocks", "done_blocks"):  # the new session gets the whole stop budget
+        (d / name).unlink(missing_ok=True)
+    (Path(root) / ".herd" / "active").write_text(slug + "\n")
+    return session
 
 
 def cancelled(root, slug):
@@ -2964,6 +2991,19 @@ def _count(path):
     return int(text) if text.isdigit() else 0
 
 
+def _owned_by(start, log):
+    """Whether a session log is one that start.json names: the `session` that ran `herd init`, or one of the
+    `sessions` that ran `herd reopen`. Symlinks are resolved; a path that is not one (a NUL byte) never matches."""
+    extra = start.get("sessions")
+    for s in [start.get("session")] + (extra if isinstance(extra, list) else []):
+        try:
+            if isinstance(s, str) and s and os.path.realpath(s) == os.path.realpath(log):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
 def _other_session(root, slug, hook):
     """True only when the hook's session log and the one `herd init` recorded are both known and differ, and it is
     not the one that last ran a herd command in this checkout (a continuation of the task). A parent that spawned the
@@ -2974,7 +3014,7 @@ def _other_session(root, slug, hook):
         return False
     try:
         mine = os.path.realpath(mine)
-        if os.path.realpath(owner) == mine:
+        if os.path.realpath(owner) == mine or _owned_by(start, mine):
             return False
     except ValueError:  # a NUL byte: not a path
         return False
@@ -2990,16 +3030,15 @@ NOINIT_FILE = "herd-noinit.json"  # in the checkout's git dir: {session log: sto
 
 def _skipped_init(log, cwd):
     """True when a session log has a /herd:run request and an edit, but no Bash command in it or its subagents' logs
-    (the designer runs `herd init`) that ran `herd.py init`. A task whose start.json names this session counts as an
-    init whatever the command looked like (`python3 "$H" init`, seen in the 0.14.10 benchmark)."""
+    (the designer runs `herd init`) that ran `herd.py init`. A task whose start.json names this session (from
+    `herd init` or `herd reopen`) counts as an init whatever the command looked like (`python3 "$H" init`, seen in
+    the 0.14.10 benchmark)."""
     if not log_request(log):
         return False
     try:
         log = Path(log)
-        mine = os.path.realpath(log)
         for start in (Path(cwd) / ".herd" / "tasks").glob("*/start.json"):
-            owner = _state(start, {}).get("session")
-            if isinstance(owner, str) and owner and os.path.realpath(owner) == mine:
+            if _owned_by(_state(start, {}), log):
                 return False
         for f in [log] + sorted((log.parent / log.stem / "subagents").glob("*.jsonl")):
             for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -3118,6 +3157,7 @@ USAGE = {
     "design-hook": "herd design-hook   (the SubagentStop hook for herd-designer, reads hook JSON on stdin)",
     "done": "herd done [slug] [--verbose]",
     "cancel": 'herd cancel [slug] [--reason "text"]',
+    "reopen": "herd reopen <slug>   (make a finished task active again for this session; `herd done` must pass again)",
     "pr": "herd pr [slug] [--yes] [--draft] [--milestone NAME]   (push the herd/* branch, open or update its PR with the evidence)",
     "gate": "herd gate   (the Stop hook, reads hook JSON on stdin)",
     "preinit": "herd preinit   (PreToolUse hook on Bash: before `herd init`, records files the session already edited)",
@@ -3366,6 +3406,13 @@ def main(argv):  # noqa: C901
             slug = _slug_arg(root, args)
             cancel_task(root, slug, reason or "")
             print(f"cancelled {slug}: its files stay in .herd/tasks/{slug}/ and the Stop gate no longer blocks")
+        elif cmd == "reopen":
+            if len(args) != 1:
+                raise UsageError
+            slug = _slug_arg(root, args)
+            session = reopen_task(root, slug)
+            print(f"reopened {slug}" + ("" if session else " (this session's log is not known: the Stop gate may not "
+                  "block it)") + ": make your changes, then `herd verify` and `herd done`")
         elif cmd == "preinit":  # PreToolUse hook on Bash: must never break or slow the session
             try:
                 raw = globals().get("PREINIT_RAW")  # read by the fast path at the top of this file

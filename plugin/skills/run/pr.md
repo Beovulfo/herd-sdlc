@@ -6,5 +6,6 @@ Only when the request asks for a pull request, or `herd.toml` has `[pr] open = t
 2. Run `herd pr <slug>`, adding `--yes` when the request asked for the PR. It pushes only `herd/<slug>` and opens a PR whose description is the evidence. A worktree task targets the branch it started from.
    - A draft PR: add `--draft`. A milestone: add `--milestone NAME` (quote a name with spaces). Both also apply to an open PR; leaving one out changes nothing. Any other flag is refused. Never `git push` for this.
 3. A criterion that needs the PR to exist: open it before the final `herd verify`.
-4. `herd done` updates the PR description with the final evidence and prints the link. If it prints a warning instead, fix the cause and run `herd pr <slug>` again. The final report it prints names the PR.
-5. Never merge. The human reviews the evidence and merges.
+4. Once the PR exists, every `herd verify` rewrites its description from the new evidence (body only; not with `--only`). A `not refreshed` warning does not change the exit code: fix its cause and verify again.
+5. `herd done` updates the PR description with the final evidence and prints the link. If it prints a warning instead, fix the cause and run `herd pr <slug>` again. The final report it prints names the PR.
+6. Never merge. The human reviews the evidence and merges.

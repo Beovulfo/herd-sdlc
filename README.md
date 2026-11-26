@@ -64,6 +64,8 @@ Optional, in `herd.toml` at the project root. All of them: [Settings](https://gi
 | `[worktree] required = true` | off |
 | `[pr] open = true` | off; flags `--draft`, `--milestone NAME` |
 
+Once `herd pr` has opened a pull request, every `herd verify` rewrites its description from the latest evidence.
+
 ## Benchmark
 
 A supermarket route optimizer, 6 runs per arm, mean ± sd. Method and limits: [BENCHMARK.md](examples/supermarket-route/BENCHMARK.md).
@@ -99,7 +101,7 @@ New here? Try a [good first issue](https://github.com/Beovulfo/herd-sdlc/labels/
 
 ## Status
 
-Version 0.14.7 (see the [changelog](CHANGELOG.md)). The local autopilot works; CI runs its unit tests on Python 3.11, 3.12 and 3.13.
+Version 0.14.9 (see the [changelog](CHANGELOG.md)). The local autopilot works; CI runs its unit tests on Python 3.11, 3.12 and 3.13.
 Not yet done: many live runs across project types, and issue-to-pull-request automation on GitHub.
 Checks run as shell commands with your permissions: read a task file as you read code.
 

@@ -2,6 +2,15 @@
 
 All notable changes to Herd. Versions follow `plugin/.claude-plugin/plugin.json`.
 
+## 0.14.9
+
+A pull request kept showing results that a later `herd verify` had replaced, because only `herd pr` and `herd done` wrote its description. In field use, a PR still listed a failing criterion after it was fixed and verified, and needed a hand-written correction (issue #137, part of #135).
+
+- **Changed:** when `.herd/tasks/<slug>/pr` exists and `gh` is on PATH, `herd verify` ends by rewriting that pull request's description from the latest evidence, also when it skips an unchanged tree. Body only (`gh pr edit <url> --body-file -`): no push, title, draft or milestone change.
+- **Changed:** open notes closed with `--closes` leave "What is not proven" in the refreshed description, which names the verified commit and any uncommitted changes.
+- **Changed:** a failed, missing-record or timed-out (60 s) refresh prints one warning line and never changes the exit code.
+- **Known limits:** the description can name a commit that is not pushed yet. A merged or closed pull request with a recorded URL is rewritten too. `herd verify --only` and `herd note` refresh nothing. Text added to the description by hand (such as a `Closes #N` line) is lost at the next refresh: put it in a commit message. Tested against a stand-in `gh`, not real GitHub.
+
 ## 0.14.7
 
 A check that makes every verify slow was invisible during the build: `evidence.json` held no time per check. In one analysed project CI on each pull request took 14 to 25 minutes, and no record showed which checks were slow (issue #127, part of #121).

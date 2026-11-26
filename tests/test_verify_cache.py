@@ -116,7 +116,7 @@ class TestSkip(Case):
         for broken in ("{", "[]", "{}", ""):
             ev.write_text(broken)
             self.assertEqual(self.verify()[0], 1, broken)
-        (self.root / ".herd/tasks/t1/pr").write_text("https://example.com/pull/1\n")  # `herd pr` opened one
+        (self.root / ".herd/tasks/t1/pr").write_text("pr 1\n")  # `herd pr` opened one; not a URL: no real gh
         self.assertEqual(self.verify()[0], 1)
         (self.root / ".herd/tasks/t1/frozen.json").unlink()
         self.assertEqual(self.verify()[0], 1)

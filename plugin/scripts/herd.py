@@ -1856,6 +1856,8 @@ def load_evidence(root, slug):
 
 BATCH_S = 5
 MAX_PR_NOTES = 60  # keeps the PR description well under GitHub's 65,536-character limit
+PR_URL = re.compile(r"https?://\S+")  # what `herd pr` records
+PR_REFRESH_S = 60  # `herd verify` must not hang on `gh`
 
 
 def _largest_batch(notes):
@@ -2284,6 +2286,29 @@ def open_pr(root, slug, yes=False, draft=False, milestone=None):
     if existing and draft:
         _back_to_draft(root, branch)
     return url
+
+
+def refresh_pr(root, slug):
+    """After `herd verify`: rewrite the recorded PR's description from the evidence. Body only: no push, title, draft
+    or milestone. It never changes verify's exit code: a problem is one warning line."""
+    record = _dir(root, slug) / "pr"
+    if not record.exists() or not shutil.which("gh"):
+        return
+    try:
+        url = record.read_text().strip()
+        if not PR_URL.fullmatch(url):  # empty would make gh edit the current branch's PR, a leading `-` is a flag
+            raise ValueError(f"{record.relative_to(root)} does not hold one pull request URL")
+        ev = load_evidence(root, slug)
+        if ev is not None and not _stale(root, slug, ev):
+            refresh_head(root, slug, ev)  # an unchanged tree committed since: name the commit that holds it
+        p = subprocess.run(["gh", "pr", "edit", url, "--body-file", "-"], cwd=root, input=pr_body(root, slug),
+                           capture_output=True, text=True, errors="replace", timeout=PR_REFRESH_S)
+        if p.returncode:
+            raise ValueError(f"`gh pr edit` exit {p.returncode}: {p.stderr or p.stdout}")
+    except (subprocess.TimeoutExpired, *STATE_ERRORS) as e:
+        print(f"warning: pull request description not refreshed: {' '.join(str(e).split())[:300]}", file=sys.stderr)
+        return
+    print("pr: description refreshed")
 
 
 # ---- lint hook ------------------------------------------------------------
@@ -2980,7 +3005,7 @@ USAGE = {
     "detect": "herd detect",
     "lint": "herd lint [--suggest]   (without --suggest: the PostToolUse hook, reads hook JSON on stdin)",
     "verify": "herd verify [slug] [--verbose] [--fresh] [--only <id>]   (an unchanged tree runs no check unless --fresh; "
-              "--only: run one criterion or attack, write nothing)",
+              "--only: run one criterion or attack, write nothing; refreshes the task's PR description)",
     "status": "herd status [slug] [--json]   (--json: the stop record, or null)",
     "design-brief": "herd design-brief   (the second look, answered in the task's ANSWERS.md before the attacks)",
     "design-hook": "herd design-hook   (the SubagentStop hook for herd-designer, reads hook JSON on stdin)",
@@ -3144,6 +3169,7 @@ def main(argv):  # noqa: C901
                           + (" (and more: `herd check` lists them)" if len(w) > 1 else ""))
                 for cid in ev.get("escalate") or []:
                     print(f"  {cid} failed {ESCALATE_AFTER} times in a row: ask the human one question (see the run skill)")
+                refresh_pr(root, slug)
                 return 1 if s["failing"] or any(st == "failing" for st, _ in states.values()) else 0
         elif cmd == "status":
             as_json = "--json" in args

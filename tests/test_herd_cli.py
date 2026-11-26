@@ -564,7 +564,7 @@ class TestNotes(Base):
         self.assertIn("Caveats during the run: 1 found, 1 fixed, 1 open", text)
         self.assertIn("- 1m 40s found: pockets crash", text)
         self.assertIn("- 3m 00s fixed: pockets handled", text)
-        self.assertIn("open: slow above 600x400", text)
+        self.assertIn("open #1: slow above 600x400", text)
 
     def test_adversarial_pass_line(self):
         self.start()

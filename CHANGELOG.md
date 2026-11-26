@@ -9,6 +9,7 @@ A check that makes every verify slow was invisible during the build: `evidence.j
 - **Changed:** each verify result with a check records `seconds` (wall clock, to 0.1 s), passing, failing or timed out. Each attack command that ran records it too (a shared command once). `evidence.json` also holds the total, `seconds`.
 - **Changed:** the report (`herd status`, `evidence.md`) shows the time in the status column, as in `passing (1.0 s)`.
 - **Changed:** `herd verify` adds `(checks took N s)` to its summary line and names each check over 60 s: `C3 took 412 s: every verify reruns it`. The time never fails a criterion or changes the exit code.
+- **Measured once:** the issue's reproduction (`--quick "sleep 1"`) now prints `1 passing, 0 failing, 0 unchecked (checks took 1.0 s)` and reports `passing (1.0 s)`.
 - **Known limits:** times are wall clock, so load on the machine changes them. The 60 s line is not configurable. A skipped (unchanged) verify prints no time. `herd verify --only` records nothing. The pull request description shows no times. Times of `--refuses` and `--example` commands are only in the total.
 
 ## 0.14.2

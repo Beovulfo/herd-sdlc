@@ -1058,6 +1058,17 @@ class TestGateWithoutInit(Base):
             "content": [{"type": "tool_use", "name": "Bash", "input": {"command": "python3 herd.py init t1 \"g\""}}]}}))
         self.assertIsNone(self.stop(log))  # a designer subagent started the task, since done
 
+    def test_a_task_this_session_started_counts_as_init(self):
+        init = ("Bash", {"command": 'H=/p/scripts/herd.py && python3 "$H" init t1 "g"'})  # not seen as an init
+        log = self.log(tools=(("Write", {"file_path": "a.txt", "content": "a"}), init))
+        self.assertEqual(self.stop(log)["decision"], "block")
+        start = self.root / ".herd" / "tasks" / "t1" / "start.json"
+        start.parent.mkdir(parents=True)
+        start.write_text(json.dumps({"session": str(self.log())}))  # another session's task: still blocked
+        self.assertEqual(self.stop(log)["decision"], "block")
+        start.write_text(json.dumps({"session": str(log)}))  # done since, so no task is active
+        self.assertIsNone(self.stop(log))
+
     def test_odd_content_items_do_not_crash(self):
         log = self.log()
         with log.open("a") as f:  # a string, a number and a null among the content items

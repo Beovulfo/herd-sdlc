@@ -2990,11 +2990,17 @@ NOINIT_FILE = "herd-noinit.json"  # in the checkout's git dir: {session log: sto
 
 def _skipped_init(log, cwd):
     """True when a session log has a /herd:run request and an edit, but no Bash command in it or its subagents' logs
-    (the designer runs `herd init`) that ran `herd.py init`."""
+    (the designer runs `herd init`) that ran `herd.py init`. A task whose start.json names this session counts as an
+    init whatever the command looked like (`python3 "$H" init`, seen in the 0.14.10 benchmark)."""
     if not log_request(log):
         return False
     try:
         log = Path(log)
+        mine = os.path.realpath(log)
+        for start in (Path(cwd) / ".herd" / "tasks").glob("*/start.json"):
+            owner = _state(start, {}).get("session")
+            if isinstance(owner, str) and owner and os.path.realpath(owner) == mine:
+                return False
         for f in [log] + sorted((log.parent / log.stem / "subagents").glob("*.jsonl")):
             for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
                 try:

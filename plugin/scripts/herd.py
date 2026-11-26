@@ -2907,10 +2907,32 @@ def _count(path):
     return int(text) if text.isdigit() else 0
 
 
+def _other_session(root, slug, hook):
+    """True only when the hook's session log and the one `herd init` recorded are both known and differ, and it is
+    not the one that last ran a herd command in this checkout (a continuation of the task). A parent that spawned the
+    owner into this checkout and ran no herd command is such a session (issue #136). Unknown on either side: False."""
+    start = _state(_dir(root, slug) / "start.json", {})
+    owner, mine = start.get("session"), hook.get("transcript_path")
+    if not all(isinstance(x, str) and x for x in (owner, mine)):
+        return False
+    try:
+        mine = os.path.realpath(mine)
+        if os.path.realpath(owner) == mine:
+            return False
+    except ValueError:  # a NUL byte: not a path
+        return False
+    seen = _seen_session(root)
+    try:
+        return not seen or os.path.realpath(seen) != mine
+    except ValueError:  # a broken record adds no session
+        return True
+
+
 def gate(root, hook):
-    """Stop hook. None allows the stop; a dict blocks it with a reason for the agent."""
+    """Stop hook. None allows the stop; a dict blocks it with a reason for the agent. Only the task's sessions are
+    blocked (see _other_session): another one stops freely and leaves the block counters alone."""
     slug = active_slug(root)
-    if not slug or not _dir(root, slug).exists() or cancelled(root, slug):
+    if not slug or not _dir(root, slug).exists() or cancelled(root, slug) or _other_session(root, slug, hook):
         return None
     counter = _dir(root, slug) / "gate_blocks"
     try:
@@ -3254,7 +3276,9 @@ def main(argv):  # noqa: C901
         elif cmd == "gate":
             raw = sys.stdin.read() if not sys.stdin.isatty() else ""
             hook = json.loads(raw) if raw.strip() else {}
-            out = gate(find_root(Path(hook.get("cwd") or root)), hook)
+            hook = hook if isinstance(hook, dict) else {}
+            cwd = hook.get("cwd")
+            out = gate(find_root(Path(cwd if isinstance(cwd, str) and cwd else root)), hook)
             if out:
                 print(json.dumps(out))
         elif cmd == "design-brief":

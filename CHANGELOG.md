@@ -8,8 +8,9 @@ A pull request kept showing results that a later `herd verify` had replaced, bec
 
 - **Changed:** when `.herd/tasks/<slug>/pr` exists and `gh` is on PATH, `herd verify` ends by rewriting that pull request's description from the latest evidence, also when it skips an unchanged tree. Body only (`gh pr edit <url> --body-file -`): no push, title, draft or milestone change.
 - **Changed:** open notes closed with `--closes` leave "What is not proven" in the refreshed description, which names the verified commit and any uncommitted changes.
+- **Changed:** before rewriting an open pull request's description, `herd verify`, `herd pr` and `herd done` read it (`gh pr view <url> --json body -q .body`) and keep every line after Herd's footer line, so a `Closes #N` line there stays. If the read fails, the description is rewritten without those lines, with one warning.
 - **Changed:** a failed, missing-record or timed-out (60 s) refresh prints one warning line and never changes the exit code.
-- **Known limits:** the description can name a commit that is not pushed yet. A merged or closed pull request with a recorded URL is rewritten too. `herd verify --only` and `herd note` refresh nothing. Text added to the description by hand (such as a `Closes #N` line) is lost at the next refresh: put it in a commit message. Tested against a stand-in `gh`, not real GitHub.
+- **Known limits:** the description can name a commit that is not pushed yet. A merged or closed pull request with a recorded URL is rewritten too. `herd verify --only` and `herd note` refresh nothing. Text added to the description above Herd's footer line is lost at the next rewrite: put `Closes #N` after it. The last line that starts like the footer counts, so text above a copy of it in your own lines is lost. A description that cannot be read is rewritten without its added lines. Each read has its own 60 s limit. An edit made between the read and the write is lost. Tested against a stand-in `gh`, not real GitHub.
 
 ## 0.14.7
 

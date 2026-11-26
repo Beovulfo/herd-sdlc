@@ -47,7 +47,7 @@ Each verify records how long every criterion and attack check took (`seconds` in
 
 Untrusted input is refused, not tolerated: contradictory entries, or a broken entry that could change a requested answer, end in an error, not a warning with exit 0. The agent then builds, tries to break the result and verifies. No second model reviews the change: bugs outside the attacks and criteria are not caught.
 
-`herd done` writes the evidence report. With `herd pr` (opt-in) that report is the pull request description; Herd never merges. Once the PR exists, every `herd verify` rewrites that description from the latest evidence (body only; a failed `gh` call is one warning line).
+`herd done` writes the evidence report. With `herd pr` (opt-in) that report is the pull request description; Herd never merges. Once the PR exists, every `herd verify` rewrites that description from the latest evidence (body only; a failed `gh` call is one warning line). Lines after Herd's footer line, such as `Closes #N`, are kept, also by `herd pr` and `herd done`.
 
 ## Models
 

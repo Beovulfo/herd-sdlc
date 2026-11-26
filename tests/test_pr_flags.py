@@ -31,6 +31,14 @@ if "--body-file" in a:
         f.write(sys.stdin.read())
 if os.environ.get("GH_FAIL") == "edit" and a[:2] == ["pr", "edit"]:
     sys.exit("HTTP 502\\nsecond line of the error")
+if a[:2] == ["pr", "view"] and "body" in a:  # the remote description is the last one written
+    if os.environ.get("GH_FAIL") == "read":
+        sys.exit("HTTP 502")
+    remote = os.environ["GH_LOG"] + ".body"
+    if os.path.exists(remote):
+        with open(remote, "rb") as f:
+            sys.stdout.buffer.write(f.read() + b"\\n")  # gh ends its output with a newline
+    sys.exit(0)
 if a[:2] == ["pr", "view"]:
     if os.environ.get("GH_OPEN"):
         print("{URL}")
@@ -255,7 +263,8 @@ class TestRefresh(Refresh):
     def test_edits_only_the_body_of_the_recorded_pr(self):
         record(self.repo)
         self.verify("--fresh")
-        self.assertEqual(self.repo.calls(), [["pr", "edit", URL, "--body-file", "-"]])
+        self.assertEqual(self.repo.calls(), [["pr", "view", URL, "--json", "body", "-q", ".body"],
+                                             ["pr", "edit", URL, "--body-file", "-"]])
         self.assertIn("1 of 1 criteria proven", body(self.repo))
         self.assertFalse(self.repo.pushed())
 
@@ -394,6 +403,67 @@ class TestRefreshOtherReading(Refresh):
             self.assertEqual(self.repo.call("edit")[2], value.strip(), repr(value))
 
 
+FOOT = "Opened by Herd with `herd pr`. Herd never merges: review the evidence above, then merge."
+
+
+def remote(repo, text):
+    """Set the description the PR has now."""
+    Path(f"{repo.log}.body").write_bytes(text.encode())
+
+
+class TestRefreshKeepsTail(Refresh):
+    def refreshed(self, before, **env):
+        record(self.repo)
+        remote(self.repo, before)
+        p = self.verify("--fresh", **env)
+        return p, Path(f"{self.repo.log}.body").read_bytes().decode()
+
+    def test_text_after_the_footer_stays_and_does_not_grow(self):
+        for tail in ("\nCloses #1", "\n\nCloses #1\n", "Closes #1\n\n- caf\u00e9\n"):
+            _, first = self.refreshed(f"old evidence\n\n---\n{FOOT}\n{tail}")
+            self.assertTrue(first.endswith(f"{FOOT}\n{tail}"), repr(first[-200:]))
+            self.assertNotIn("old evidence", first)
+            self.verify("--fresh")
+            self.assertEqual(Path(f"{self.repo.log}.body").read_bytes().decode().split(FOOT)[1], f"\n{tail}")
+
+    def test_a_description_edited_on_the_web_has_crlf_lines(self):
+        _, text = self.refreshed(f"old\r\n---\r\n{FOOT}\r\n\r\nCloses #1")
+        self.assertTrue(text.endswith(f"{FOOT}\n\nCloses #1"), repr(text[-200:]))
+
+    def test_only_the_last_footer_line_counts(self):
+        _, text = self.refreshed(f"{FOOT}\nold evidence\nsee: {FOOT}\n{FOOT}\nCloses #1")
+        self.assertNotIn("old evidence", text)
+        self.assertTrue(text.endswith(f"{FOOT}\nCloses #1"), repr(text[-200:]))
+        self.assertEqual(text.count(FOOT), 1)
+
+    def test_nothing_is_kept_without_a_footer_or_a_tail(self):
+        for before in ("", "Closes #1", f"x\n{FOOT}", f"x\n{FOOT}\n"):
+            _, text = self.refreshed(before)
+            self.assertTrue(text.endswith(f"{FOOT}\n"), repr(before))
+            self.assertNotIn("Closes #1", text)
+
+    def test_a_failed_read_still_refreshes_and_warns_once(self):
+        p, text = self.refreshed(f"{FOOT}\nCloses #1", GH_FAIL="read")
+        self.assertIn("1 of 1 criteria proven", text)
+        self.assertIn("pr: description refreshed", p.stdout)
+        self.assertEqual(len(p.stderr.strip().splitlines()), 1, p.stderr)
+        self.assertIn("not kept", p.stderr)
+
+    def test_herd_pr_on_an_open_pr_keeps_it_too(self):
+        remote(self.repo, f"old\n{FOOT}\n\nCloses #1")
+        self.ok("--yes", "t", GH_OPEN="1")
+        self.assertTrue(body(self.repo).endswith(f"{FOOT}\n\nCloses #1"))
+        p = self.ok("--yes", "t", GH_OPEN="1", GH_FAIL="read")
+        self.assertEqual(p.stderr.count("not kept"), 1, p.stderr)
+        self.assertTrue(body(self.repo).endswith(f"{FOOT}\n"))
+
+    def test_a_new_pr_reads_no_body(self):
+        remote(self.repo, f"{FOOT}\nCloses #1")
+        self.ok("--yes", "t")
+        self.assertEqual([c for c in self.repo.calls() if "body" in c], [])
+        self.assertNotIn("Closes #1", body(self.repo))
+
+
 class TestDocs(unittest.TestCase):
     def test_guard_hint_names_the_draft_flag(self):
         self.assertIn("herd pr --draft", herd.GUARD_WHY["git push"])
@@ -403,6 +473,9 @@ class TestDocs(unittest.TestCase):
             text = (ROOT / name).read_text()
             self.assertIn("--draft", text, name)
             self.assertIn("--milestone", text, name)
+
+    def test_pr_reference_says_where_closes_goes(self):
+        self.assertRegex((ROOT / "plugin/skills/run/pr.md").read_text(), r"`Closes #N` after[^.]*footer[^.]*kept")
 
     def test_docs_say_verify_refreshes_the_description(self):
         for name in ("README.md", "plugin/skills/run/pr.md", "docs/how-it-works.md"):

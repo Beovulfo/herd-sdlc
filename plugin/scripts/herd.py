@@ -265,7 +265,7 @@ def active_slug(root):
 
 DEFAULT_MODELS = {"design": "sonnet", "build": "haiku"}
 DESIGNER, BUILDER = "herd:herd-designer", "herd:herd-builder"  # plugin agents: a project's own copy does not count
-SESSION_FILE = "herd-session.json"  # in the checkout's git dir: the session log the pre-init hook last saw
+SESSION_FILE = "herd-session.json"  # in the checkout's git dir: the session log the pre-init hook last saw, and its request
 # the exact text measured in the design eval: keep it word for word
 DESIGN_BRIEF = ("Challenge your own understanding of the request and its business context: do not assume you already "
                 "know everything. Write ANSWERS.md, saying what you first assumed and what you decided after thinking "
@@ -347,13 +347,15 @@ def _session_path(root):
 
 
 def _see_session(command, cwd, log):
-    """Remember the session log of a Bash command that runs herd.py, per checkout (follows a leading `cd <dir>`)."""
+    """Remember the session log of a Bash command that runs herd.py, per checkout (follows a leading `cd <dir>`), and
+    its /herd:run request. The hook reads the request here: it runs outside the Bash sandbox, and `herd init` inside
+    it may be denied the log (a `denyRead` on the home folder)."""
     if "herd.py" not in command or not isinstance(log, str) or not log:
         return
     m = re.match(r"\s*cd\s+(\S+)\s*(?:&&|;)", command)
     where = Path(cwd) / m[1].strip("'\"") if m else Path(cwd)
     if where.is_dir() and (record := _session_path(where)):
-        record.write_text(json.dumps({"log": log}))
+        record.write_text(json.dumps({"log": log, "request": log_request(log)}))
 
 
 def _seen_session(root):
@@ -394,15 +396,15 @@ def log_request(path):
 
 
 def _session_request(root):
-    """log_request of this checkout's session log. The pre-init hook rewrites its record right before `herd init`,
-    so an old record is another run's (init run by hand) and gives None."""
+    """The request the pre-init hook read from this checkout's session log. The hook rewrites its record right before
+    `herd init`, so an old record is another run's (init run by hand) and gives None."""
     record = _session_path(root)
     try:
         fresh = time.time() - record.stat().st_mtime <= PREINIT_MAX_AGE
     except (OSError, AttributeError):
         return None
-    log = _seen_session(root) if fresh else None
-    return log_request(log) if log else None
+    request = _state(record, {}).get("request") if fresh else None
+    return request if isinstance(request, str) else None
 
 
 def has_answers(root, slug):

@@ -35,6 +35,9 @@ class FromLog(unittest.TestCase):
 
     def see(self, *lines):
         self.log.write_text("".join(x + "\n" for x in lines), encoding="utf-8")
+        self.hook()
+
+    def hook(self):
         herd.preinit({"tool_name": "Bash", "cwd": str(self.root), "transcript_path": str(self.log),
                       "tool_input": {"command": "python3 herd.py status"}})
 
@@ -117,8 +120,8 @@ class FromLog(unittest.TestCase):
                                  b'{"type":"user","message":"herd:run"}', b'{"type":"user","herd:run":1}',
                                  b'{"type":"user","message":{"content":[1,{"type":"text","text":2},"herd:run"]}}',
                                  user(command(ASKED)).encode()[:-20], b"[" * 100000 + b'"herd:run"']):
-            self.see()
             self.log.write_bytes(raw)
+            self.hook()
             self.assertIsNone(herd.log_request(self.log), i)
         self.assert_from_flag(self.init())
 
@@ -129,9 +132,17 @@ class FromLog(unittest.TestCase):
     def test_a_missing_log_or_a_folder_falls_back(self):
         self.see(user(command(ASKED)))
         self.log.unlink()
+        self.hook()
         self.assert_from_flag(self.init())
         self.assertIsNone(herd.log_request(self.root))
         self.assertIsNone(herd.log_request(None))
+
+    def test_init_that_cannot_read_the_log_gets_the_message_the_hook_read(self):
+        """The Bash sandbox (denyRead on the home folder) hides the log from `herd init`, not from the hook."""
+        asked = "Add hello.sh that prints \u201chi\u201d"
+        self.see(user(command(asked)))
+        self.log.unlink()  # unreadable from here on, as in the sandbox
+        self.assert_from_log(self.init('Add hello.sh that prints "hi"'), asked)
 
     def test_an_old_session_record_is_not_used(self):
         self.see(user(command(ASKED)))

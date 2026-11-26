@@ -266,7 +266,7 @@ def active_slug(root):
 
 DEFAULT_MODELS = {"design": "sonnet", "build": "haiku"}
 DESIGNER, BUILDER = "herd:herd-designer", "herd:herd-builder"  # plugin agents: a project's own copy does not count
-SESSION_FILE = "herd-session.json"  # in the checkout's git dir: the session log the pre-init hook last saw
+SESSION_FILE = "herd-session.json"  # in the checkout's git dir: the session log the pre-init hook last saw, and its request
 # the exact text measured in the design eval: keep it word for word
 DESIGN_BRIEF = ("Challenge your own understanding of the request and its business context: do not assume you already "
                 "know everything. Write ANSWERS.md, saying what you first assumed and what you decided after thinking "
@@ -348,19 +348,64 @@ def _session_path(root):
 
 
 def _see_session(command, cwd, log):
-    """Remember the session log of a Bash command that runs herd.py, per checkout (follows a leading `cd <dir>`)."""
+    """Remember the session log of a Bash command that runs herd.py, per checkout (follows a leading `cd <dir>`), and
+    its /herd:run request. The hook reads the request here: it runs outside the Bash sandbox, and `herd init` inside
+    it may be denied the log (a `denyRead` on the home folder)."""
     if "herd.py" not in command or not isinstance(log, str) or not log:
         return
     m = re.match(r"\s*cd\s+(\S+)\s*(?:&&|;)", command)
     where = Path(cwd) / m[1].strip("'\"") if m else Path(cwd)
     if where.is_dir() and (record := _session_path(where)):
-        record.write_text(json.dumps({"log": log}))
+        record.write_text(json.dumps({"log": log, "request": log_request(log)}))
 
 
 def _seen_session(root):
     record = _session_path(root)
     log = _state(record, {}).get("log") if record else None
     return log if isinstance(log, str) else None
+
+
+# a slash command as Claude Code writes the human's message; anchored, so tags quoted inside a message never count
+RUN_MESSAGE = re.compile(r"(?:<command-message>[^<]*</command-message>\s*)?<command-name>/herd:run</command-name>\s*"
+                         r"(?:<command-message>[^<]*</command-message>\s*)?<command-args>(.*)</command-args>", re.DOTALL)
+
+
+def log_request(path):
+    """The arguments of the human's latest /herd:run message in a session log, verbatim, or None. Subagent and meta
+    lines, tool results and bad lines are skipped; a missing log or a bare `/herd:run` gives None."""
+    found = None
+    try:
+        with open(path, "rb") as log:  # by line: split only on newlines, a message may hold other line breaks
+            for raw in log:
+                if b"herd:run" not in raw:
+                    continue
+                try:
+                    d = json.loads(raw)
+                    if d["type"] != "user" or d.get("isSidechain") or d.get("isMeta"):
+                        continue
+                    content = d["message"]["content"]
+                    texts = [content] if isinstance(content, str) else [
+                        c["text"] for c in content if isinstance(c, dict) and c.get("type") == "text"]
+                    for text in texts:
+                        if m := RUN_MESSAGE.match(text):
+                            found = m[1]
+                except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
+                    continue
+    except (OSError, TypeError):
+        return None
+    return found if found and found.strip() else None
+
+
+def _session_request(root):
+    """The request the pre-init hook read from this checkout's session log. The hook rewrites its record right before
+    `herd init`, so an old record is another run's (init run by hand) and gives None."""
+    record = _session_path(root)
+    try:
+        fresh = time.time() - record.stat().st_mtime <= PREINIT_MAX_AGE
+    except (OSError, AttributeError):
+        return None
+    request = _state(record, {}).get("request") if fresh else None
+    return request if isinstance(request, str) else None
 
 
 def has_answers(root, slug):
@@ -487,10 +532,12 @@ def routing(root, slug=None):
 
 # ---- task -----------------------------------------------------------------
 
-def init_task(root, slug, goal, quick_check=None, request=None, session=None):
+def init_task(root, slug, goal, quick_check=None, request=None, seen_in=None):
     """Create a task. quick_check makes a one-criterion `quick` task (refused at a high risk floor).
 
-    request is the human's message, verbatim: human criteria must quote it (see human_unquoted).
+    request is the human's message, verbatim: human criteria must quote it (see human_unquoted). The /herd:run
+    message in the session log wins over it; a differing request is kept as a decision note. seen_in is the checkout
+    whose session record to read (the one that started a worktree). Returns the source used, or None.
     """
     if not SLUG.fullmatch(slug):
         raise ValueError("slug must be lower-case letters, digits and dashes (max 41 chars)")
@@ -512,7 +559,10 @@ def init_task(root, slug, goal, quick_check=None, request=None, session=None):
         raise ValueError(f"task {other} is still active in this checkout: finish it (`herd done`), cancel it, "
                          f"or start this one in its own worktree with --worktree")
     models = read_models(root)  # refused before anything is written
-    session = session or _seen_session(root)
+    session = _seen_session(seen_in or root)
+    logged, claimed = _session_request(seen_in or root), request
+    source = "the session log" if logged is not None else "--request" if request is not None else None
+    request = logged if logged is not None else request
     d.mkdir(parents=True)
     (d / "task.toml").write_text(text)
     (d / "started").write_text(now() + "\n")
@@ -530,8 +580,12 @@ def init_task(root, slug, goal, quick_check=None, request=None, session=None):
                                              | ({"agent_edits": edits} if edits else {}))
                                   + "\n")
     if request is not None:
-        (d / "request.md").write_text(request)
+        (d / "request.md").write_bytes(request.encode("utf-8", "replace"))  # as is: no newline translation
     (Path(root) / ".herd" / "active").write_text(slug + "\n")
+    if logged is not None and claimed is not None and claimed.split() not in ([], logged.split()):
+        add_note(root, slug, "decision", "request.md holds the /herd:run message from the session log, not "
+                 "--request; the human's words win; --request was: " + " ".join(claimed.split()))
+    return source
 
 
 def cancel_task(root, slug, reason=""):
@@ -643,7 +697,8 @@ def check_worktree_rule(root, slug):
 def init_worktree(root, slug, goal, quick_check=None, request=None):
     """Start a task on a new herd/<slug> branch in its own worktree, cut from the current local branch.
 
-    Returns (path, base branch, whether uncommitted changes were left behind in the starting checkout).
+    Returns (path, base branch, whether uncommitted changes were left behind in the starting checkout, the request's
+    source or None).
     """
     if not SLUG.fullmatch(slug):
         raise ValueError("slug must be lower-case letters, digits and dashes (max 41 chars)")
@@ -664,7 +719,7 @@ def init_worktree(root, slug, goal, quick_check=None, request=None):
         raise ValueError(f"git worktree add failed: {p.stderr.strip()[-300:]}")
     path = tree / Path(root).resolve().relative_to(toplevel(root).resolve())  # same subfolder as the project
     try:
-        init_task(path, slug, goal, quick_check=quick_check, request=request, session=_seen_session(root))
+        source = init_task(path, slug, goal, quick_check=quick_check, request=request, seen_in=root)
         (_dir(path, slug) / "base").write_text(base + "\n")
     except Exception:  # undo only what this call made: its own new worktree and branch
         subprocess.run(["git", "worktree", "remove", "--force", str(tree)], cwd=root, capture_output=True)
@@ -674,7 +729,7 @@ def init_worktree(root, slug, goal, quick_check=None, request=None):
     pointer.mkdir(parents=True, exist_ok=True)
     (pointer / slug).write_text(str(path) + "\n")  # one file per task: safe when several inits run at once
     left = bool(_git(root, "status", "--porcelain", "--", *OWN_FILES).strip())
-    return path, base, left
+    return path, base, left, source
 
 
 def elsewhere(root):
@@ -1656,8 +1711,50 @@ def _check_expect(root, slug, example, expect, changed):
     return {"expect": expect.strip(), "expect_was": was, "expect_changed": changed.strip()}
 
 
+class CloseRefused(ValueError):
+    """A `--closes` that names no open note: shown as one line, without the usage."""
+
+
+def open_notes(notes):
+    """The open notes in the order logged, as (number, note, the note that closed it or None). The number, from 1,
+    counts open notes only; the log is append-only, so it never changes."""
+    closed = {n["closes"]: n for n in notes if n["kind"] == "fixed" and n.get("closes")}
+    opened = [n for n in notes if n["kind"] == "open"]
+    return [(i, n, closed.get(i)) for i, n in enumerate(opened, 1)]
+
+
+def _still_open(notes):
+    return [n["text"] for _, n, closer in open_notes(notes) if closer is None]
+
+
+def _note_when(n):
+    return fmt_duration(n["elapsed_s"]) if n.get("elapsed_s") is not None else n.get("at", "?")
+
+
+def _note_labels(notes):
+    """The kind of each note as the report shows it: open notes carry their number and, once closed, when."""
+    labels = {id(n): f"open #{i}" + (f" (closed at {_note_when(c)})" if c else "") for i, n, c in open_notes(notes)}
+    return [labels.get(id(n), n["kind"]) for n in notes]
+
+
+def _check_closes(root, slug, kind, closes):
+    """The number of the open note that `--closes` names."""
+    if kind != "fixed":
+        raise CloseRefused("--closes goes with --fixed")
+    m = re.fullmatch(r"#?([0-9]{1,9})", closes.strip())
+    if not m:
+        raise CloseRefused(f"--closes takes the number of an open note, such as 1, not `{closes[:40]}`")
+    number = int(m.group(1))
+    found = {i: closer for i, _, closer in open_notes(load_notes(root, slug))}
+    if number not in found:
+        raise CloseRefused(f"--closes {number}: there is no open note #{number} ({len(found)} logged)")
+    if found[number]:
+        raise CloseRefused(f"--closes {number}: open note #{number} is already closed")
+    return number
+
+
 def add_note(root, slug, kind, text, attack=None, check=None, timeout=None, extra=None, refuses=None,
-             example=None, covered_by=None, expect=None, expect_changed=None):
+             example=None, covered_by=None, expect=None, expect_changed=None, closes=None):
     """Append a note to the task's log: one of NOTE_KINDS (found, fixed, open for a known limit, tried for an
     adversarial attempt, decision, late-red, human-change).
 
@@ -1665,7 +1762,8 @@ def add_note(root, slug, kind, text, attack=None, check=None, timeout=None, extr
     shows it, run by `herd verify`. An attack that cannot apply has no check and text starting `n/a:`.
     refuses and example are commands that run the program itself (PROGRAM_FLAGS). expect is the text the
     example's stdout must contain; expect_changed is why it differs after the first verify. covered_by is a criterion id
-    whose check stands for the attack's command, for the attacks in COVERABLE."""
+    whose check stands for the attack's command, for the attacks in COVERABLE. closes is the number of the open
+    note that a fixed note resolves. Returns the number of the open note written or closed, else None."""
     if kind not in NOTE_KINDS:
         raise ValueError(f"note kind must be one of {NOTE_KINDS}")
     if attack is not None and (kind != "tried" or attack not in ATTACKS):
@@ -1683,6 +1781,7 @@ def add_note(root, slug, kind, text, attack=None, check=None, timeout=None, extr
     if attack == "other-reading" and text.strip().lower() == "n/a:":
         raise ValueError('--attack other-reading "n/a:" needs a reason')
     expected = _check_expect(root, slug, example, expect, expect_changed)
+    closes = None if closes is None else _check_closes(root, slug, kind, closes)
     if attack and check is None and covered_by is None and not text.strip().lower().startswith("n/a:"):
         raise ValueError(f'--attack {attack} needs --check "<command that shows the attack>", run by herd verify; '
                          'an attack that cannot apply needs text starting "n/a:" with the reason')
@@ -1696,8 +1795,10 @@ def add_note(root, slug, kind, text, attack=None, check=None, timeout=None, extr
     if timeout is not None:
         rec["timeout_s"] = timeout
     rec.update(extra or {})
+    rec.update({} if closes is None else {"closes": closes})
     with open(d / "notes.jsonl", "a") as f:
         f.write(json.dumps(rec) + "\n")
+    return len(open_notes(load_notes(root, slug))) if kind == "open" else closes
 
 
 def full_rules(ev):
@@ -1723,9 +1824,11 @@ def final_report(root, slug, ev, notes):
     where = str((_dir(root, slug) / "evidence.md").relative_to(root)) + (f" and {pr.read_text().strip()}" if pr.exists() else "")
     gaps = [f"{r['id']} {r['status']}" for r in results if r["status"] != "passing"]
     gaps += [f"{r['id']} ran zero tests" for r in results if r.get("zero_tests")]
-    gaps += [n["text"] for n in notes if n["kind"] == "open"] + _refusals_not_run(ev) + _rule_lines(ev, notes)
+    gaps += _still_open(notes) + _refusals_not_run(ev) + _rule_lines(ev, notes)
     caveats = [f"{n['kind']}" + (f" at {fmt_duration(n['elapsed_s'])}" if n.get("elapsed_s") is not None else "")
                + f": {n['text']}" for n in notes if n["kind"] in ("found", "fixed")]
+    caveats += [f"open #{i} opened at {_note_when(n)}, closed at {_note_when(c)}: {n['text']}"
+                for i, n, c in open_notes(notes) if c]
     stop = load_stop(root, slug)
     guarded = guard_line(notes)
     caveats = ([stop_line(stop)] if stop else []) + ([guarded] if guarded else []) + caveats
@@ -1918,11 +2021,13 @@ def report(ev, notes=None):  # noqa: C901
         count = {k: sum(n["kind"] == k for n in notes) for k in NOTE_KINDS}
         lines.append("")
         if count["found"] or count["fixed"] or count["open"]:
-            lines.append(f"Caveats during the run: {count['found']} found, {count['fixed']} fixed, {count['open']} open")
-        for n in notes:
+            left = len(_still_open(notes))
+            lines.append(f"Caveats during the run: {count['found']} found, {count['fixed']} fixed, {left} open"
+                         + (f", {count['open'] - left} closed" if count["open"] > left else ""))
+        for n, label in zip(notes, _note_labels(notes)):
             when = f"{fmt_duration(n['elapsed_s'])} " if n.get("elapsed_s") is not None else ""
             text = " / ".join(x.strip() for x in n["text"].splitlines() if x.strip()) if n["kind"] == "review" else n["text"]
-            lines.append(f"- {when}{n['kind']}: {text}")
+            lines.append(f"- {when}{label}: {text}")
         batch = _largest_batch(notes)
         if batch >= 3:
             lines.append(f"Note: {batch} notes were logged within {BATCH_S} s of each other, so their times show "
@@ -2026,7 +2131,7 @@ def pr_body(root, slug):  # noqa: C901
              for r in results if r["source"] == "human" and str(r.get("coverage") or "").strip()]
     if ev.get("known_limits"):
         gaps.append(f"- Known limits: {ev['known_limits']}")
-    gaps += [f"- Open caveat: {n['text']}" for n in notes if n["kind"] == "open"]
+    gaps += [f"- Open caveat: {text}" for text in _still_open(notes)]
     if ev.get("route") != "quick" and not any(n["kind"] == "tried" for n in notes):
         gaps.append("- No adversarial pass was recorded")
     elif ev.get("route") != "quick":
@@ -2066,10 +2171,11 @@ def pr_body(root, slug):  # noqa: C901
     lines += [f"- {d}" for d in details]
     # ponytail: output tails stay out of the PR (they can hold secrets); the reviewer re-runs the check instead
     if notes:
-        shown = [n for n in notes if n["kind"] != "guard"][:MAX_PR_NOTES]  # the Guard line above sums them
+        shown = [(n, label) for n, label in zip(notes, _note_labels(notes))
+                 if n["kind"] != "guard"][:MAX_PR_NOTES]  # the Guard line above sums them
         lines += ["", "Caveats logged during the run:", ""]
         lines += [f"- {fmt_duration(n['elapsed_s']) + ' ' if n.get('elapsed_s') is not None else ''}"
-                  f"{n['kind']}: {_first_line(n['text'], 300) if n['kind'] == 'review' else n['text']}" for n in shown]
+                  f"{label}: {_first_line(n['text'], 300) if n['kind'] == 'review' else n['text']}" for n, label in shown]
         rest = len([n for n in notes if n["kind"] != "guard"]) - len(shown)
         if rest > 0:
             lines.append(f"- and {rest} more: run `herd status {slug}`")
@@ -2099,8 +2205,50 @@ def pr_wanted(root):
     return isinstance(cfg, dict) and cfg.get("open") is True
 
 
-def open_pr(root, slug, yes=False):
-    """Push the task's herd/* branch and open or update its PR with the evidence. Opt-in; no other branch."""
+def pr_args(args):
+    """`herd pr` arguments as (slug arguments, yes, draft, milestone). Anything else is refused, so that no
+    flag is ever silently ignored."""
+    slugs, yes, draft, milestone, rest = [], False, False, None, iter(args)
+    for a in rest:
+        if a == "--yes":
+            yes = True
+        elif a == "--draft":
+            draft = True
+        elif a == "--milestone":
+            name = next(rest, "")
+            if not name.strip() or name.startswith("-"):
+                raise ValueError("herd pr: `--milestone` needs a milestone name")
+            if milestone not in (None, name):
+                raise ValueError("herd pr: two different `--milestone` names; pass one")
+            milestone = name
+        elif a.startswith("-") or not a.strip() or slugs:
+            raise ValueError(f"herd pr: unknown argument `{a}`; usage: {USAGE['pr'].split('   ')[0]}")
+        else:
+            slugs.append(a)
+    return slugs, yes, draft, milestone
+
+
+def _pr_command(root, slug, branch, existing, draft, milestone):
+    """The `gh` call that creates the PR, or updates the open one."""
+    extra = ["--milestone", milestone] if milestone else []
+    if existing:
+        return ["gh", "pr", "edit", branch, "--body-file", "-", *extra]
+    base_file = _dir(root, slug) / "base"
+    base = ["--base", base_file.read_text().strip()] if base_file.exists() else []
+    return ["gh", "pr", "create", "--head", branch, *base, "--title", pr_title(load_task(root, slug)["goal"], slug),
+            "--body-file", "-", *extra, *(["--draft"] if draft else [])]
+
+
+def _back_to_draft(root, branch):
+    """`gh pr edit` has no draft flag, so an open PR is turned into a draft with its own call."""
+    p = subprocess.run(["gh", "pr", "ready", branch, "--undo"], cwd=root, capture_output=True, text=True)
+    if p.returncode:
+        raise ValueError(f"`gh pr ready --undo` failed: {(p.stderr or p.stdout).strip()[-500:]}")
+
+
+def open_pr(root, slug, yes=False, draft=False, milestone=None):
+    """Push the task's herd/* branch and open or update its PR with the evidence. Opt-in; no other branch.
+    `draft` and `milestone` only ever add: without them an existing PR keeps its own."""
     try:
         cfg = tomllib.loads((Path(root) / "herd.toml").read_text()).get("pr")
     except (OSError, tomllib.TOMLDecodeError):
@@ -2126,17 +2274,15 @@ def open_pr(root, slug, yes=False):
     view = subprocess.run(["gh", "pr", "view", branch, "--json", "url,state", "-q", 'select(.state == "OPEN") | .url'],
                           cwd=root, capture_output=True, text=True)
     url = view.stdout.strip() if view.returncode == 0 else ""  # empty unless an open PR exists
-    if url:
-        cmd = ["gh", "pr", "edit", branch, "--body-file", "-"]
-    else:
-        base_file = _dir(root, slug) / "base"
-        base = ["--base", base_file.read_text().strip()] if base_file.exists() else []
-        cmd = ["gh", "pr", "create", "--head", branch, *base, "--title", pr_title(load_task(root, slug)["goal"], slug), "--body-file", "-"]
+    existing = bool(url)
+    cmd = _pr_command(root, slug, branch, existing, draft, milestone)
     p = subprocess.run(cmd, cwd=root, input=body, capture_output=True, text=True)
     if p.returncode:
         raise ValueError(f"`{' '.join(cmd[:3])}` failed: {(p.stderr or p.stdout).strip()[-500:]}")
     url = url or p.stdout.strip().splitlines()[-1]
     (_dir(root, slug) / "pr").write_text(url + "\n")  # `herd done` refreshes this PR's description
+    if existing and draft:
+        _back_to_draft(root, branch)
     return url
 
 
@@ -2316,7 +2462,8 @@ GUARD_COMMANDS = ("git push", "git reset --hard", "git clean -f", "git branch -D
                   "git stash drop", "git stash clear", "git switch -f", "git switch --discard-changes",
                   "gh pr merge", "gh repo delete", "rm -rf /", "rm -rf ~", "rm -rf .")
 UNSTAGE = ({"--staged", "-S"}, {"--worktree", "-W"})  # `git restore --staged .` only unstages: allowed
-GUARD_WHY = {"git push": "Use `herd pr` to publish, or ask the human one question and stop.",
+GUARD_WHY = {"git push": "Use `herd pr` to publish (`herd pr --draft` for a draft PR, `--milestone NAME` "
+                         "for its milestone), or ask the human one question and stop.",
              "gh pr merge": "Herd never merges: a human merges after reading the evidence."}
 GLOBAL_OPTS = {"git": ("-C", "-c", "--git-dir", "--work-tree", "--namespace"),  # options before the subcommand
                "gh": ("-R", "--repo", "--hostname")}                         # that take a value
@@ -2829,7 +2976,7 @@ def _slug_arg(root, args, none_ok=False):
 USAGE = {
     "init": 'herd init <slug> "<goal>" [--request "<message>"] [--quick "<check>"] [--worktree]',
     "check": "herd check [slug]",
-    "note": 'herd note --found|--fixed|--open|--decision|--late-red|--human-change|--tried [--attack bad-input|collision|one-bad-part|recount|refusal|other-reading --check "<command>" [--timeout S] | --covered-by <criterion id> (recount, refusal, other-reading) [--refuses "<command>"] [--example "<command>" --expect "<text>" [--expect-changed "<reason>"]]] "text"',
+    "note": 'herd note --found|--fixed [--closes N (the open note it resolves)]|--open|--decision|--late-red|--human-change|--tried [--attack bad-input|collision|one-bad-part|recount|refusal|other-reading --check "<command>" [--timeout S] | --covered-by <criterion id> (recount, refusal, other-reading) [--refuses "<command>"] [--example "<command>" --expect "<text>" [--expect-changed "<reason>"]]] "text"',
     "detect": "herd detect",
     "lint": "herd lint [--suggest]   (without --suggest: the PostToolUse hook, reads hook JSON on stdin)",
     "verify": "herd verify [slug] [--verbose] [--fresh] [--only <id>]   (an unchanged tree runs no check unless --fresh; "
@@ -2839,7 +2986,7 @@ USAGE = {
     "design-hook": "herd design-hook   (the SubagentStop hook for herd-designer, reads hook JSON on stdin)",
     "done": "herd done [slug] [--verbose]",
     "cancel": 'herd cancel [slug] [--reason "text"]',
-    "pr": "herd pr [slug] [--yes]   (push the herd/* branch, open or update its PR with the evidence)",
+    "pr": "herd pr [slug] [--yes] [--draft] [--milestone NAME]   (push the herd/* branch, open or update its PR with the evidence)",
     "gate": "herd gate   (the Stop hook, reads hook JSON on stdin)",
     "preinit": "herd preinit   (PreToolUse hook on Bash: before `herd init`, records files the session already edited)",
     "guard": "herd guard   (PreToolUse hook: denies edits to secrets and Herd's state, irreversible commands and "
@@ -2866,7 +3013,7 @@ def _note_command(root, args):
     kinds = {"--found": "found", "--fixed": "fixed", "--open": "open", "--tried": "tried",
              "--decision": "decision", "--late-red": "late-red", "--human-change": "human-change"}
     opts = {}
-    for name in ("attack", "check", "timeout", "covered_by", "expect", "expect_changed", *PROGRAM_FLAGS):
+    for name in ("attack", "check", "timeout", "covered_by", "expect", "expect_changed", "closes", *PROGRAM_FLAGS):
         opts[name], args = _opt(args, f"--{name.replace('_', '-')}")
     try:
         opts["timeout"] = None if opts["timeout"] is None else float(opts["timeout"])
@@ -2883,13 +3030,14 @@ def _note_command(root, args):
     if len(rest) != 1:
         raise UsageError(f"unexpected argument `{rest[1]}`: quote the text as one argument" if rest
                          else "no note text")
-    add_note(root, _slug_arg(root, []), kinds[flags[0]], rest[0], **opts)
+    number = add_note(root, _slug_arg(root, []), kinds[flags[0]], rest[0], **opts)
     check = opts["check"]
     vacuous = [check] if check and VACUOUS.fullmatch(check.strip()) else []
     for cmd in vacuous + [opts[k] for k in PROGRAM_FLAGS if opts[k] and vacuous_program(opts[k])]:
             print(f"warning: `{cmd.strip()}` runs no project code, so it does not count for {opts['attack']}",
                   file=sys.stderr)
-    print(f"noted ({kinds[flags[0]]}): {rest[0]}")
+    about = "" if number is None else f" #{number}" if kinds[flags[0]] == "open" else f", closes open #{number}"
+    print(f"noted ({kinds[flags[0]]}{about}): {rest[0]}")
 
 
 def main(argv):  # noqa: C901
@@ -2913,14 +3061,18 @@ def main(argv):  # noqa: C901
             if len(args) != 2:
                 raise UsageError
             if worktree:
-                path, base, left = init_worktree(root, args[0], args[1], quick_check=quick, request=request)
+                path, base, left, source = init_worktree(root, args[0], args[1], quick_check=quick, request=request)
                 print(f"created worktree {path} on branch herd/{args[0]}, cut from {base}. Work from there: in Claude "
                       "Code, EnterWorktree with that path; otherwise cd into it. Run every herd command from it.")
                 if left:
                     print(f"warning: uncommitted changes in {base} were not carried into the worktree", file=sys.stderr)
+                if source:
+                    print(f"request: from {source}")
                 return 0
             check_worktree_rule(root, args[0])
-            init_task(root, args[0], args[1], quick_check=quick, request=request)
+            source = init_task(root, args[0], args[1], quick_check=quick, request=request)
+            if source:
+                print(f"request: from {source}")
             if _git(root, "rev-parse", "--git-dir"):  # Herd state never shows in `git status` or `git add -A`
                 _ignore_locally(root, [".herd/"])
             base, warn = task_branch(root, args[0])
@@ -2937,6 +3089,8 @@ def main(argv):  # noqa: C901
         elif cmd == "note":
             try:
                 _note_command(root, args)
+            except CloseRefused:
+                raise
             except ValueError as e:  # refused by add_note: it names the flag; show the usage too
                 raise UsageError(str(e)) from None
         elif cmd == "detect":
@@ -3018,7 +3172,10 @@ def main(argv):  # noqa: C901
                       + (f"Resolved at {stop['resolved_at']} by herd done." if stop.get("resolved_at")
                          else "The task went on after it (newer evidence): see below." if went_on
                          else f"Next: {stop.get('next')}"))
-            print(report(ev, load_notes(root, slug)) if ev else f"task {slug}: no evidence yet")
+            print(report(ev, load_notes(root, slug)) if ev else "\n".join(
+                [f"task {slug}: no evidence yet"]
+                + [f"- open #{i}: {n['text']}" if not c else f"- open #{i} (closed at {_note_when(c)}): {n['text']}"
+                   for i, n, c in open_notes(load_notes(root, slug))]))
             c = cancelled(root, slug)
             if c:
                 print(f"cancelled at {c['at']}" + (f": {c['reason']}" if c["reason"] else ""))
@@ -3065,8 +3222,9 @@ def main(argv):  # noqa: C901
                     print(f"warning: the pull request still shows older evidence ({e}); run `herd pr` again",
                           file=sys.stderr)
         elif cmd == "pr":
-            slug = _slug_arg(root, [a for a in args if a != "--yes"])
-            print(open_pr(root, slug, yes="--yes" in args))
+            slugs, yes, draft, milestone = pr_args(args)
+            slug = _slug_arg(root, slugs)
+            print(open_pr(root, slug, yes, draft, milestone))
             probs = problems(root, slug)
             if probs:
                 print("warning: the pull request shows evidence that is not done: " + "; ".join(probs), file=sys.stderr)

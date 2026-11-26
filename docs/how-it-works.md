@@ -15,7 +15,7 @@ Herd only asks you something when an action is irreversible or a real trade-off 
 
 ## Quickstart notes
 
-CI tests Python 3.13 only. For a trivial change, say "quick fix". To plan how to prove a change for your project type, run `/herd:evidence`.
+CI tests Python 3.11, 3.12 and 3.13. For a trivial change, say "quick fix". To plan how to prove a change for your project type, run `/herd:evidence`.
 
 ## The run
 
@@ -36,6 +36,8 @@ flowchart LR
     S[Stop hook] -.->|blocks finishing until the conditions hold| G
     G -->|opt-in| P[herd pr<br/>PR with the evidence]
 ```
+
+`herd init` records your request itself: the text of your latest `/herd:run` message in the session log. `--request` counts only when there is none; a differing one is kept as a decision note.
 
 Every criterion has a `check`, a shell command where exit 0 means pass. Before any code, the agent also logs six standard attacks, so they shape the design. On the standard route the first `herd verify` refuses while one has no note. For `recount`, `refusal` and `other-reading`, `--covered-by <criterion id>` reuses a criterion's check instead of a second test.
 

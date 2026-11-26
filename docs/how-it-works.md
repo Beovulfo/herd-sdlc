@@ -15,7 +15,7 @@ Herd only asks you something when an action is irreversible or a real trade-off 
 
 ## Quickstart notes
 
-CI tests Python 3.13 only. For a trivial change, say "quick fix". To plan how to prove a change for your project type, run `/herd:evidence`.
+CI tests Python 3.11, 3.12 and 3.13. For a trivial change, say "quick fix". To plan how to prove a change for your project type, run `/herd:evidence`.
 
 ## The run
 

@@ -225,7 +225,7 @@ class Hook(Repo):
 
     def test_hook_records_in_the_worktree_task_of_this_session(self):
         self.session(HAIKU, command="herd.py init t2 goal --worktree")
-        path, _, _ = herd.init_worktree(self.root, "t2", "goal")
+        path, *_ = herd.init_worktree(self.root, "t2", "goal")
         self.stop(SONNET)
         self.assertTrue((path / ".herd/tasks/t2/design.json").exists())
 

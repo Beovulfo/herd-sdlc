@@ -62,7 +62,7 @@ Optional, in `herd.toml` at the project root. All of them: [Settings](https://gi
 | `[floor]` | `high`: `migrations/**`, `auth/**`, `billing/**`, `herd.toml`; `medium`: `api/**`; any other path is medium |
 | `[models]` | `design = "sonnet"`, `build = "haiku"` |
 | `[worktree] required = true` | off |
-| `[pr] open = true` | off |
+| `[pr] open = true` | off; flags `--draft`, `--milestone NAME` |
 
 ## Benchmark
 
@@ -99,7 +99,7 @@ New here? Try a [good first issue](https://github.com/Beovulfo/herd-sdlc/labels/
 
 ## Status
 
-Version 0.14.6 (see the [changelog](CHANGELOG.md)). The local autopilot works; CI runs its unit tests on Python 3.13.
+Version 0.14.6 (see the [changelog](CHANGELOG.md)). The local autopilot works; CI runs its unit tests on Python 3.11, 3.12 and 3.13.
 Not yet done: many live runs across project types, and issue-to-pull-request automation on GitHub.
 Checks run as shell commands with your permissions: read a task file as you read code.
 

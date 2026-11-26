@@ -265,7 +265,7 @@ def active_slug(root):
 
 DEFAULT_MODELS = {"design": "sonnet", "build": "haiku"}
 DESIGNER, BUILDER = "herd:herd-designer", "herd:herd-builder"  # plugin agents: a project's own copy does not count
-SESSION_FILE = "herd-session.json"  # in the checkout's git dir: the session log the pre-init hook last saw
+SESSION_FILE = "herd-session.json"  # in the checkout's git dir: the session log the pre-init hook last saw, and its request
 # the exact text measured in the design eval: keep it word for word
 DESIGN_BRIEF = ("Challenge your own understanding of the request and its business context: do not assume you already "
                 "know everything. Write ANSWERS.md, saying what you first assumed and what you decided after thinking "
@@ -347,19 +347,64 @@ def _session_path(root):
 
 
 def _see_session(command, cwd, log):
-    """Remember the session log of a Bash command that runs herd.py, per checkout (follows a leading `cd <dir>`)."""
+    """Remember the session log of a Bash command that runs herd.py, per checkout (follows a leading `cd <dir>`), and
+    its /herd:run request. The hook reads the request here: it runs outside the Bash sandbox, and `herd init` inside
+    it may be denied the log (a `denyRead` on the home folder)."""
     if "herd.py" not in command or not isinstance(log, str) or not log:
         return
     m = re.match(r"\s*cd\s+(\S+)\s*(?:&&|;)", command)
     where = Path(cwd) / m[1].strip("'\"") if m else Path(cwd)
     if where.is_dir() and (record := _session_path(where)):
-        record.write_text(json.dumps({"log": log}))
+        record.write_text(json.dumps({"log": log, "request": log_request(log)}))
 
 
 def _seen_session(root):
     record = _session_path(root)
     log = _state(record, {}).get("log") if record else None
     return log if isinstance(log, str) else None
+
+
+# a slash command as Claude Code writes the human's message; anchored, so tags quoted inside a message never count
+RUN_MESSAGE = re.compile(r"(?:<command-message>[^<]*</command-message>\s*)?<command-name>/herd:run</command-name>\s*"
+                         r"(?:<command-message>[^<]*</command-message>\s*)?<command-args>(.*)</command-args>", re.DOTALL)
+
+
+def log_request(path):
+    """The arguments of the human's latest /herd:run message in a session log, verbatim, or None. Subagent and meta
+    lines, tool results and bad lines are skipped; a missing log or a bare `/herd:run` gives None."""
+    found = None
+    try:
+        with open(path, "rb") as log:  # by line: split only on newlines, a message may hold other line breaks
+            for raw in log:
+                if b"herd:run" not in raw:
+                    continue
+                try:
+                    d = json.loads(raw)
+                    if d["type"] != "user" or d.get("isSidechain") or d.get("isMeta"):
+                        continue
+                    content = d["message"]["content"]
+                    texts = [content] if isinstance(content, str) else [
+                        c["text"] for c in content if isinstance(c, dict) and c.get("type") == "text"]
+                    for text in texts:
+                        if m := RUN_MESSAGE.match(text):
+                            found = m[1]
+                except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
+                    continue
+    except (OSError, TypeError):
+        return None
+    return found if found and found.strip() else None
+
+
+def _session_request(root):
+    """The request the pre-init hook read from this checkout's session log. The hook rewrites its record right before
+    `herd init`, so an old record is another run's (init run by hand) and gives None."""
+    record = _session_path(root)
+    try:
+        fresh = time.time() - record.stat().st_mtime <= PREINIT_MAX_AGE
+    except (OSError, AttributeError):
+        return None
+    request = _state(record, {}).get("request") if fresh else None
+    return request if isinstance(request, str) else None
 
 
 def has_answers(root, slug):
@@ -486,10 +531,12 @@ def routing(root, slug=None):
 
 # ---- task -----------------------------------------------------------------
 
-def init_task(root, slug, goal, quick_check=None, request=None, session=None):
+def init_task(root, slug, goal, quick_check=None, request=None, seen_in=None):
     """Create a task. quick_check makes a one-criterion `quick` task (refused at a high risk floor).
 
-    request is the human's message, verbatim: human criteria must quote it (see human_unquoted).
+    request is the human's message, verbatim: human criteria must quote it (see human_unquoted). The /herd:run
+    message in the session log wins over it; a differing request is kept as a decision note. seen_in is the checkout
+    whose session record to read (the one that started a worktree). Returns the source used, or None.
     """
     if not SLUG.fullmatch(slug):
         raise ValueError("slug must be lower-case letters, digits and dashes (max 41 chars)")
@@ -511,7 +558,10 @@ def init_task(root, slug, goal, quick_check=None, request=None, session=None):
         raise ValueError(f"task {other} is still active in this checkout: finish it (`herd done`), cancel it, "
                          f"or start this one in its own worktree with --worktree")
     models = read_models(root)  # refused before anything is written
-    session = session or _seen_session(root)
+    session = _seen_session(seen_in or root)
+    logged, claimed = _session_request(seen_in or root), request
+    source = "the session log" if logged is not None else "--request" if request is not None else None
+    request = logged if logged is not None else request
     d.mkdir(parents=True)
     (d / "task.toml").write_text(text)
     (d / "started").write_text(now() + "\n")
@@ -529,8 +579,12 @@ def init_task(root, slug, goal, quick_check=None, request=None, session=None):
                                              | ({"agent_edits": edits} if edits else {}))
                                   + "\n")
     if request is not None:
-        (d / "request.md").write_text(request)
+        (d / "request.md").write_bytes(request.encode("utf-8", "replace"))  # as is: no newline translation
     (Path(root) / ".herd" / "active").write_text(slug + "\n")
+    if logged is not None and claimed is not None and claimed.split() not in ([], logged.split()):
+        add_note(root, slug, "decision", "request.md holds the /herd:run message from the session log, not "
+                 "--request; the human's words win; --request was: " + " ".join(claimed.split()))
+    return source
 
 
 def cancel_task(root, slug, reason=""):
@@ -642,7 +696,8 @@ def check_worktree_rule(root, slug):
 def init_worktree(root, slug, goal, quick_check=None, request=None):
     """Start a task on a new herd/<slug> branch in its own worktree, cut from the current local branch.
 
-    Returns (path, base branch, whether uncommitted changes were left behind in the starting checkout).
+    Returns (path, base branch, whether uncommitted changes were left behind in the starting checkout, the request's
+    source or None).
     """
     if not SLUG.fullmatch(slug):
         raise ValueError("slug must be lower-case letters, digits and dashes (max 41 chars)")
@@ -663,7 +718,7 @@ def init_worktree(root, slug, goal, quick_check=None, request=None):
         raise ValueError(f"git worktree add failed: {p.stderr.strip()[-300:]}")
     path = tree / Path(root).resolve().relative_to(toplevel(root).resolve())  # same subfolder as the project
     try:
-        init_task(path, slug, goal, quick_check=quick_check, request=request, session=_seen_session(root))
+        source = init_task(path, slug, goal, quick_check=quick_check, request=request, seen_in=root)
         (_dir(path, slug) / "base").write_text(base + "\n")
     except Exception:  # undo only what this call made: its own new worktree and branch
         subprocess.run(["git", "worktree", "remove", "--force", str(tree)], cwd=root, capture_output=True)
@@ -673,7 +728,7 @@ def init_worktree(root, slug, goal, quick_check=None, request=None):
     pointer.mkdir(parents=True, exist_ok=True)
     (pointer / slug).write_text(str(path) + "\n")  # one file per task: safe when several inits run at once
     left = bool(_git(root, "status", "--porcelain", "--", *OWN_FILES).strip())
-    return path, base, left
+    return path, base, left, source
 
 
 def elsewhere(root):
@@ -2124,8 +2179,50 @@ def pr_wanted(root):
     return isinstance(cfg, dict) and cfg.get("open") is True
 
 
-def open_pr(root, slug, yes=False):
-    """Push the task's herd/* branch and open or update its PR with the evidence. Opt-in; no other branch."""
+def pr_args(args):
+    """`herd pr` arguments as (slug arguments, yes, draft, milestone). Anything else is refused, so that no
+    flag is ever silently ignored."""
+    slugs, yes, draft, milestone, rest = [], False, False, None, iter(args)
+    for a in rest:
+        if a == "--yes":
+            yes = True
+        elif a == "--draft":
+            draft = True
+        elif a == "--milestone":
+            name = next(rest, "")
+            if not name.strip() or name.startswith("-"):
+                raise ValueError("herd pr: `--milestone` needs a milestone name")
+            if milestone not in (None, name):
+                raise ValueError("herd pr: two different `--milestone` names; pass one")
+            milestone = name
+        elif a.startswith("-") or not a.strip() or slugs:
+            raise ValueError(f"herd pr: unknown argument `{a}`; usage: {USAGE['pr'].split('   ')[0]}")
+        else:
+            slugs.append(a)
+    return slugs, yes, draft, milestone
+
+
+def _pr_command(root, slug, branch, existing, draft, milestone):
+    """The `gh` call that creates the PR, or updates the open one."""
+    extra = ["--milestone", milestone] if milestone else []
+    if existing:
+        return ["gh", "pr", "edit", branch, "--body-file", "-", *extra]
+    base_file = _dir(root, slug) / "base"
+    base = ["--base", base_file.read_text().strip()] if base_file.exists() else []
+    return ["gh", "pr", "create", "--head", branch, *base, "--title", pr_title(load_task(root, slug)["goal"], slug),
+            "--body-file", "-", *extra, *(["--draft"] if draft else [])]
+
+
+def _back_to_draft(root, branch):
+    """`gh pr edit` has no draft flag, so an open PR is turned into a draft with its own call."""
+    p = subprocess.run(["gh", "pr", "ready", branch, "--undo"], cwd=root, capture_output=True, text=True)
+    if p.returncode:
+        raise ValueError(f"`gh pr ready --undo` failed: {(p.stderr or p.stdout).strip()[-500:]}")
+
+
+def open_pr(root, slug, yes=False, draft=False, milestone=None):
+    """Push the task's herd/* branch and open or update its PR with the evidence. Opt-in; no other branch.
+    `draft` and `milestone` only ever add: without them an existing PR keeps its own."""
     try:
         cfg = tomllib.loads((Path(root) / "herd.toml").read_text()).get("pr")
     except (OSError, tomllib.TOMLDecodeError):
@@ -2151,17 +2248,15 @@ def open_pr(root, slug, yes=False):
     view = subprocess.run(["gh", "pr", "view", branch, "--json", "url,state", "-q", 'select(.state == "OPEN") | .url'],
                           cwd=root, capture_output=True, text=True)
     url = view.stdout.strip() if view.returncode == 0 else ""  # empty unless an open PR exists
-    if url:
-        cmd = ["gh", "pr", "edit", branch, "--body-file", "-"]
-    else:
-        base_file = _dir(root, slug) / "base"
-        base = ["--base", base_file.read_text().strip()] if base_file.exists() else []
-        cmd = ["gh", "pr", "create", "--head", branch, *base, "--title", pr_title(load_task(root, slug)["goal"], slug), "--body-file", "-"]
+    existing = bool(url)
+    cmd = _pr_command(root, slug, branch, existing, draft, milestone)
     p = subprocess.run(cmd, cwd=root, input=body, capture_output=True, text=True)
     if p.returncode:
         raise ValueError(f"`{' '.join(cmd[:3])}` failed: {(p.stderr or p.stdout).strip()[-500:]}")
     url = url or p.stdout.strip().splitlines()[-1]
     (_dir(root, slug) / "pr").write_text(url + "\n")  # `herd done` refreshes this PR's description
+    if existing and draft:
+        _back_to_draft(root, branch)
     return url
 
 
@@ -2341,7 +2436,8 @@ GUARD_COMMANDS = ("git push", "git reset --hard", "git clean -f", "git branch -D
                   "git stash drop", "git stash clear", "git switch -f", "git switch --discard-changes",
                   "gh pr merge", "gh repo delete", "rm -rf /", "rm -rf ~", "rm -rf .")
 UNSTAGE = ({"--staged", "-S"}, {"--worktree", "-W"})  # `git restore --staged .` only unstages: allowed
-GUARD_WHY = {"git push": "Use `herd pr` to publish, or ask the human one question and stop.",
+GUARD_WHY = {"git push": "Use `herd pr` to publish (`herd pr --draft` for a draft PR, `--milestone NAME` "
+                         "for its milestone), or ask the human one question and stop.",
              "gh pr merge": "Herd never merges: a human merges after reading the evidence."}
 GLOBAL_OPTS = {"git": ("-C", "-c", "--git-dir", "--work-tree", "--namespace"),  # options before the subcommand
                "gh": ("-R", "--repo", "--hostname")}                         # that take a value
@@ -2864,7 +2960,7 @@ USAGE = {
     "design-hook": "herd design-hook   (the SubagentStop hook for herd-designer, reads hook JSON on stdin)",
     "done": "herd done [slug] [--verbose]",
     "cancel": 'herd cancel [slug] [--reason "text"]',
-    "pr": "herd pr [slug] [--yes]   (push the herd/* branch, open or update its PR with the evidence)",
+    "pr": "herd pr [slug] [--yes] [--draft] [--milestone NAME]   (push the herd/* branch, open or update its PR with the evidence)",
     "gate": "herd gate   (the Stop hook, reads hook JSON on stdin)",
     "preinit": "herd preinit   (PreToolUse hook on Bash: before `herd init`, records files the session already edited)",
     "guard": "herd guard   (PreToolUse hook: denies edits to secrets and Herd's state, irreversible commands and "
@@ -2939,14 +3035,18 @@ def main(argv):  # noqa: C901
             if len(args) != 2:
                 raise UsageError
             if worktree:
-                path, base, left = init_worktree(root, args[0], args[1], quick_check=quick, request=request)
+                path, base, left, source = init_worktree(root, args[0], args[1], quick_check=quick, request=request)
                 print(f"created worktree {path} on branch herd/{args[0]}, cut from {base}. Work from there: in Claude "
                       "Code, EnterWorktree with that path; otherwise cd into it. Run every herd command from it.")
                 if left:
                     print(f"warning: uncommitted changes in {base} were not carried into the worktree", file=sys.stderr)
+                if source:
+                    print(f"request: from {source}")
                 return 0
             check_worktree_rule(root, args[0])
-            init_task(root, args[0], args[1], quick_check=quick, request=request)
+            source = init_task(root, args[0], args[1], quick_check=quick, request=request)
+            if source:
+                print(f"request: from {source}")
             if _git(root, "rev-parse", "--git-dir"):  # Herd state never shows in `git status` or `git add -A`
                 _ignore_locally(root, [".herd/"])
             base, warn = task_branch(root, args[0])
@@ -3092,8 +3192,9 @@ def main(argv):  # noqa: C901
                     print(f"warning: the pull request still shows older evidence ({e}); run `herd pr` again",
                           file=sys.stderr)
         elif cmd == "pr":
-            slug = _slug_arg(root, [a for a in args if a != "--yes"])
-            print(open_pr(root, slug, yes="--yes" in args))
+            slugs, yes, draft, milestone = pr_args(args)
+            slug = _slug_arg(root, slugs)
+            print(open_pr(root, slug, yes, draft, milestone))
             probs = problems(root, slug)
             if probs:
                 print("warning: the pull request shows evidence that is not done: " + "; ".join(probs), file=sys.stderr)

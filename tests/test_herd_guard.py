@@ -468,7 +468,7 @@ class TestWiring(unittest.TestCase):
         self.assertEqual(len(guard), 1)
         self.assertEqual(guard[0]["timeout"], 10)
         matcher = next(e["matcher"] for e in entries if guard[0] in e["hooks"])
-        self.assertEqual(set(matcher.split("|")), {"Bash", "Edit", "Write", "MultiEdit", "NotebookEdit"})
+        self.assertEqual(set(matcher.split("|")), {"Bash", "Edit", "Write", "MultiEdit", "NotebookEdit", "Agent"})
         src = Path(herd.__file__).read_text()
         self.assertIn('"guard"', src.split("import hashlib", 1)[0])  # leaves early on an old Python
 

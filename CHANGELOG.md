@@ -12,6 +12,14 @@ A builder could store its own summary as the request: `herd init` took `--reques
 - **Changed:** the run skill, the quick route and the designer say in one line that Herd records the message itself.
 - **Known limits:** a later task asked in plain words in the same session still gets the earlier `/herd:run` message; type `/herd:run` again for it. A message queued while the agent is busy, a run started without typing `/herd:run`, or a change of Claude Code's log layout falls back to `--request`. Not run in a live session on 0.14.3.
 
+## 0.14.2
+
+In 4 of 36 analysed headless runs the main session started `herd:herd-designer` or `herd:herd-builder` in the background. It then tried to stop, the Stop gate blocked 3 times and released the task, and 3 of those sessions ended unfinished (issue #122).
+
+- **Changed:** the guard now sees the `Agent` tool. It denies `herd:herd-designer` and `herd:herd-builder` unless `run_in_background` is `false`, with one line naming the fix. Other subagent types pass.
+- **Changed:** this deny applies with or without an active task, because the designer is spawned before `herd init`. During a task it is a `guard` note, so the final report counts it.
+- **Known limits:** a deny before `herd init` is not noted. The guard reads only the call's input: resumed agents (`SendMessage`) and background Bash runs are not covered. A Claude Code whose `Agent` tool has no `run_in_background` parameter could not start the Herd subagents. The Stop gate still counts stops made while a background command runs.
+
 ## 0.14.1
 
 The demo GIF in the README showed red error output. Two causes: `herd status` before `herd init` exited 1, and a plain `herd init` left `.herd/` in `git status` (issue #116).

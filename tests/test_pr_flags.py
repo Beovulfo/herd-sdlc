@@ -414,11 +414,12 @@ def by_hand(word):
     try:
         if word == "refresh":
             # the issue's reproduction: a failing verify, a recorded PR, then a passing verify
-            assert repo.herd("init", "r", "g", "--quick", "test -f ok").returncode == 0
-            repo.herd("verify", "r")
-            record(repo, slug="r")
+            toml = repo.work / ".herd/tasks/t/task.toml"
+            toml.write_text(toml.read_text().replace('"true"', '"test -f ok"'))
+            assert repo.herd("verify", "t").returncode == 1
+            record(repo)
             (repo.work / "ok").touch()
-            p = repo.herd("verify", "r")
+            assert repo.herd("verify", "t").returncode == 0
             print(next(line for line in body(repo).splitlines() if line.startswith("**Result:**")))
         elif word == "example":
             p = repo.herd("pr", "--yes", "--draft", "--milestone", "Field robustness", "t")

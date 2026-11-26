@@ -43,6 +43,8 @@ Every criterion has a `check`, a shell command where exit 0 means pass. Before a
 
 The agent also solves one tiny case by hand: that answer is frozen before any code (`--expect`), and the real program's output must contain it. The checks run once before any work and should fail. `herd verify` runs no check when the work, `task.toml` and the attack notes are unchanged since the last full run; `--fresh` runs them all.
 
+Each verify records how long every criterion and attack check took (`seconds` in `evidence.json`). The report shows each criterion's time as `(N s)`, and `herd verify` prints the total and names any check over 60 s. The time is evidence only: it never fails a criterion.
+
 Untrusted input is refused, not tolerated: contradictory entries, or a broken entry that could change a requested answer, end in an error, not a warning with exit 0. The agent then builds, tries to break the result and verifies. No second model reviews the change: bugs outside the attacks and criteria are not caught.
 
 `herd done` writes the evidence report. With `herd pr` (opt-in) that report is the pull request description; Herd never merges.

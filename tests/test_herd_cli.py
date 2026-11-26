@@ -1867,7 +1867,8 @@ class TestBudgets(Base):
     # (1) short CLI output
     def test_cli_verify_prints_one_line_when_all_pass(self):
         rc, out = self.cli("verify")
-        self.assertEqual((rc, out), (0, ["2 passing, 0 failing, 0 unchecked"]))
+        self.assertEqual((rc, len(out)), (0, 1), out)
+        self.assertRegex(out[0], r"^2 passing, 0 failing, 0 unchecked \(checks took \d+\.\d s\)$")
 
     def test_cli_verify_lists_only_what_needs_attention(self):
         (self.root / "greet.txt").unlink()

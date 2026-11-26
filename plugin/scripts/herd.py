@@ -217,6 +217,7 @@ def narrowed_claims(ev):
     return out + ([f"and {len(hits) - MAX_NARROWED} more narrowing limits in known_limits"]
                   if len(hits) > MAX_NARROWED else [])
 MAX_TEXT_WORDS, MAX_COVERAGE_WORDS = 40, 50  # advisory limits, see length_warnings
+SLOW_S = 60  # `herd verify` names a check that took longer. Evidence only: it never fails anything
 WORKTREES = ".claude/worktrees"  # where `herd init --worktree` puts tasks; Claude Code's EnterWorktree can enter it
 OWN_FILES = (".", ":!.herd")  # pathspec: this checkout's work, not Herd's own state
 # Test runners' own words for an empty run, and for a run that executed tests. Advisory, so the list
@@ -1331,6 +1332,24 @@ def risk_of(root, start, changed):
     return {"start": begin, "changed": level, "effective": effective, "rules": matched}
 
 
+def _elapsed(began):
+    """Seconds since a time.monotonic() reading, to 0.1 s."""
+    return round(time.monotonic() - began, 1)
+
+
+def _seconds(entry):
+    """The recorded time of a check, or None: evidence from before 0.14.7 or hand-edited has no number."""
+    s = entry.get("seconds")
+    return s if type(s) in (int, float) else None
+
+
+def slow_lines(ev):
+    """One line per criterion or attack check that took longer than SLOW_S."""
+    timed = [(r["id"], _seconds(r)) for r in ev["results"]]
+    timed += [(f"attack {a['attack']}", _seconds(a)) for a in ev.get("attacks") or []]
+    return [f"{name} took {s:.0f} s: every verify reruns it" for name, s in timed if s is not None and s > SLOW_S]
+
+
 def run_check(root, check, timeout, full=False):
     """Exit code (None on timeout) and the output tail; with full=True, the whole output instead."""
     try:
@@ -1433,7 +1452,9 @@ def run_attacks(root, notes, results):
         if a["check"]:
             key = (a["check"], n.get("timeout_s", DEFAULT_TIMEOUT))
             if key not in ran:
+                began = time.monotonic()
                 ran[key] = run_check(root, a["check"], key[1], full=True)
+                a["seconds"] = _elapsed(began)  # a command shared by several notes runs, and is timed, once
             a["exit_code"], out = ran[key]
             a["output_tail"] = out[-TAIL_CHARS:]
             a["status"] = "passing" if a["exit_code"] == 0 else "failing"
@@ -1520,12 +1541,15 @@ def verify(root, slug):  # noqa: C901
                          "look comes before red: run `herd design-brief` and answer it in "
                          f"{_dir(root, slug) / 'ANSWERS.md'}")
     results = []
+    checks_began = time.monotonic()
     for c in task["criteria"]:
         r = {"id": c["id"], "text": c["text"], "source": c["source"], "check": c["check"],
              "coverage": c.get("coverage"), "exit_code": None, "output_tail": "", "status": "unchecked",
              "zero_tests": False}
         if c["check"].strip():
+            began = time.monotonic()
             r["exit_code"], out = run_check(root, c["check"], c.get("timeout_s", DEFAULT_TIMEOUT), full=True)
+            r["seconds"] = _elapsed(began)
             r["output_tail"] = out[-TAIL_CHARS:]
             r["status"] = "passing" if r["exit_code"] == 0 else "failing"
             r["zero_tests"] = r["status"] == "passing" and ran_zero_tests(out)  # advisory, the gate ignores it
@@ -1533,6 +1557,7 @@ def verify(root, slug):  # noqa: C901
     summary = {s: sum(r["status"] == s for r in results) for s in ("passing", "failing", "unchecked")}
     ran_notes = load_notes(root, slug)  # a note logged while the attacks run makes the next verify run again
     attacks = run_attacks(root, ran_notes, {r["id"]: r for r in results})
+    checks_s = _elapsed(checks_began)
     snap = git_state(root, fresh=True)  # the one git read of this verify, after the checks changed files
     head = (snap or {}).get("oid") or "none"
     dirty = bool(snap and snap["entries"])
@@ -1631,7 +1656,7 @@ def verify(root, slug):  # noqa: C901
           "warnings": warnings, "escalate": [cid for cid, n in fails.items() if n >= ESCALATE_AFTER],
           "fingerprint": fingerprint(root, snap), "content": task_content(root, slug, snap), "task_sha": _task_sha(root, slug),
           "verified_inputs": _verify_inputs(root, slug, ran_notes),
-          "results": results, "summary": summary, "attacks": attacks}
+          "results": results, "summary": summary, "attacks": attacks, "seconds": checks_s}
     (_dir(root, slug) / "evidence.json").write_text(json.dumps(ev, indent=2))
     return ev
 
@@ -1982,7 +2007,8 @@ def report(ev, notes=None):  # noqa: C901
         lines += ["", "Warnings from herd check:"] + [f"- {w}" for w in ev["warnings"]]
     lines += ["", "| id | status | source | check |", "| --- | --- | --- | --- |"]
     for r in ev["results"]:
-        lines.append(f"| {r['id']} | {r['status']} | {r['source']} | `{r['check'] or '-'}` |")
+        took = "" if _seconds(r) is None else f" ({r['seconds']:.1f} s)"
+        lines.append(f"| {r['id']} | {r['status']}{took} | {r['source']} | `{r['check'] or '-'}` |")
     zero = [r["id"] for r in ev["results"] if r.get("zero_tests")]
     if zero:
         lines += [""] + [f"Warning: {cid} passed but ran zero tests (its output says no tests ran), so it proves "
@@ -3091,13 +3117,17 @@ def main(argv):  # noqa: C901
             slug = _slug_arg(root, [a for a in args if a not in ("--verbose", "--fresh")])
             with git_state_once():  # verify reads git state once; the hints below reuse that read
                 ev = None if fresh else unchanged_evidence(root, slug)
+                kept = bool(ev)
                 if ev:
                     print(f"unchanged since the verify at {ev['at']}: no check run, evidence kept "
                           "(`herd verify --fresh` runs every check)")
                 else:
                     ev = verify(root, slug)
                 s = ev["summary"]
-                print(f"{s['passing']} passing, {s['failing']} failing, {s['unchecked']} unchecked")
+                took = "" if kept else f" (checks took {ev['seconds']:.1f} s)"  # a skipped verify ran nothing
+                print(f"{s['passing']} passing, {s['failing']} failing, {s['unchecked']} unchecked{took}")
+                for line in [] if kept else slow_lines(ev):
+                    print(f"  {line}")
                 for r in ev["results"]:  # by default only what needs attention
                     zero = " (ran zero tests)" if r.get("zero_tests") else ""
                     if verbose or r["status"] != "passing" or zero:

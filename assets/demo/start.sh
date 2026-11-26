@@ -5,7 +5,7 @@
 #   cp start.sh demo.tape "$HERD_DEMO_DIR/"
 #   mkdir "$HERD_DEMO_DIR/herd-plugin"
 #   git archive HEAD:plugin | tar -x -C "$HERD_DEMO_DIR/herd-plugin"
-#   mkdir "$HERD_DEMO_DIR/textutil" && cp textutil.py "$HERD_DEMO_DIR/textutil/" && git -C "$HERD_DEMO_DIR/textutil" init && git -C "$HERD_DEMO_DIR/textutil" add -A && git -C "$HERD_DEMO_DIR/textutil" commit -m init
+#   mkdir "$HERD_DEMO_DIR/textutil" && cp assets/demo/textutil.py "$HERD_DEMO_DIR/textutil/" && git -C "$HERD_DEMO_DIR/textutil" init && git -C "$HERD_DEMO_DIR/textutil" add -A && git -C "$HERD_DEMO_DIR/textutil" commit -m init
 #   cd "$HERD_DEMO_DIR" && vhs <path to>/demo.tape
 : ${HERD_DEMO_DIR:?HERD_DEMO_DIR is not set: make a private folder with mktemp -d and export it as HERD_DEMO_DIR}
 # No user settings (plugins, hooks) and no MCP servers: only the Herd copy above is loaded.

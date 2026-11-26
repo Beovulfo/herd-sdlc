@@ -2,6 +2,15 @@
 
 All notable changes to Herd. Versions follow `plugin/.claude-plugin/plugin.json`.
 
+## 0.14.5
+
+`herd pr` could not open a draft pull request in a milestone, and silently ignored `--draft` and `--milestone`. In field runs, 11 of 36 sessions tried `git push` during a task (12 guard denials) to get such a PR (issue #125).
+
+- **Changed:** `herd pr [slug] [--yes] [--draft] [--milestone NAME]`. A new PR gets `gh pr create --draft --milestone NAME`. On an open PR the milestone goes to `gh pr edit` and `--draft` runs `gh pr ready --undo`. Leaving a flag out changes nothing, so the refresh by `herd done` keeps both.
+- **Changed:** `herd pr` refuses any other flag, `--milestone=NAME`, a missing or blank name, two different names and a second slug, before anything is pushed.
+- **Changed:** the guard's `git push` message names `herd pr --draft` and `--milestone NAME`.
+- **Known limits:** a milestone or draft that `gh` rejects fails after the branch is pushed. Tests use a fake `gh`, not GitHub. A push that needs a credential helper given on the command line is not addressed.
+
 ## 0.14.1
 
 The demo GIF in the README showed red error output. Two causes: `herd status` before `herd init` exited 1, and a plain `herd init` left `.herd/` in `git status` (issue #116).

@@ -2073,8 +2073,50 @@ def pr_wanted(root):
     return isinstance(cfg, dict) and cfg.get("open") is True
 
 
-def open_pr(root, slug, yes=False):
-    """Push the task's herd/* branch and open or update its PR with the evidence. Opt-in; no other branch."""
+def pr_args(args):
+    """`herd pr` arguments as (slug arguments, yes, draft, milestone). Anything else is refused, so that no
+    flag is ever silently ignored."""
+    slugs, yes, draft, milestone, rest = [], False, False, None, iter(args)
+    for a in rest:
+        if a == "--yes":
+            yes = True
+        elif a == "--draft":
+            draft = True
+        elif a == "--milestone":
+            name = next(rest, "")
+            if not name.strip() or name.startswith("-"):
+                raise ValueError("herd pr: `--milestone` needs a milestone name")
+            if milestone not in (None, name):
+                raise ValueError("herd pr: two different `--milestone` names; pass one")
+            milestone = name
+        elif a.startswith("-") or not a.strip() or slugs:
+            raise ValueError(f"herd pr: unknown argument `{a}`; usage: {USAGE['pr'].split('   ')[0]}")
+        else:
+            slugs.append(a)
+    return slugs, yes, draft, milestone
+
+
+def _pr_command(root, slug, branch, existing, draft, milestone):
+    """The `gh` call that creates the PR, or updates the open one."""
+    extra = ["--milestone", milestone] if milestone else []
+    if existing:
+        return ["gh", "pr", "edit", branch, "--body-file", "-", *extra]
+    base_file = _dir(root, slug) / "base"
+    base = ["--base", base_file.read_text().strip()] if base_file.exists() else []
+    return ["gh", "pr", "create", "--head", branch, *base, "--title", pr_title(load_task(root, slug)["goal"], slug),
+            "--body-file", "-", *extra, *(["--draft"] if draft else [])]
+
+
+def _back_to_draft(root, branch):
+    """`gh pr edit` has no draft flag, so an open PR is turned into a draft with its own call."""
+    p = subprocess.run(["gh", "pr", "ready", branch, "--undo"], cwd=root, capture_output=True, text=True)
+    if p.returncode:
+        raise ValueError(f"`gh pr ready --undo` failed: {(p.stderr or p.stdout).strip()[-500:]}")
+
+
+def open_pr(root, slug, yes=False, draft=False, milestone=None):
+    """Push the task's herd/* branch and open or update its PR with the evidence. Opt-in; no other branch.
+    `draft` and `milestone` only ever add: without them an existing PR keeps its own."""
     try:
         cfg = tomllib.loads((Path(root) / "herd.toml").read_text()).get("pr")
     except (OSError, tomllib.TOMLDecodeError):
@@ -2100,17 +2142,15 @@ def open_pr(root, slug, yes=False):
     view = subprocess.run(["gh", "pr", "view", branch, "--json", "url,state", "-q", 'select(.state == "OPEN") | .url'],
                           cwd=root, capture_output=True, text=True)
     url = view.stdout.strip() if view.returncode == 0 else ""  # empty unless an open PR exists
-    if url:
-        cmd = ["gh", "pr", "edit", branch, "--body-file", "-"]
-    else:
-        base_file = _dir(root, slug) / "base"
-        base = ["--base", base_file.read_text().strip()] if base_file.exists() else []
-        cmd = ["gh", "pr", "create", "--head", branch, *base, "--title", pr_title(load_task(root, slug)["goal"], slug), "--body-file", "-"]
+    existing = bool(url)
+    cmd = _pr_command(root, slug, branch, existing, draft, milestone)
     p = subprocess.run(cmd, cwd=root, input=body, capture_output=True, text=True)
     if p.returncode:
         raise ValueError(f"`{' '.join(cmd[:3])}` failed: {(p.stderr or p.stdout).strip()[-500:]}")
     url = url or p.stdout.strip().splitlines()[-1]
     (_dir(root, slug) / "pr").write_text(url + "\n")  # `herd done` refreshes this PR's description
+    if existing and draft:
+        _back_to_draft(root, branch)
     return url
 
 
@@ -2290,7 +2330,8 @@ GUARD_COMMANDS = ("git push", "git reset --hard", "git clean -f", "git branch -D
                   "git stash drop", "git stash clear", "git switch -f", "git switch --discard-changes",
                   "gh pr merge", "gh repo delete", "rm -rf /", "rm -rf ~", "rm -rf .")
 UNSTAGE = ({"--staged", "-S"}, {"--worktree", "-W"})  # `git restore --staged .` only unstages: allowed
-GUARD_WHY = {"git push": "Use `herd pr` to publish, or ask the human one question and stop.",
+GUARD_WHY = {"git push": "Use `herd pr` to publish (`herd pr --draft` for a draft PR, `--milestone NAME` "
+                         "for its milestone), or ask the human one question and stop.",
              "gh pr merge": "Herd never merges: a human merges after reading the evidence."}
 GLOBAL_OPTS = {"git": ("-C", "-c", "--git-dir", "--work-tree", "--namespace"),  # options before the subcommand
                "gh": ("-R", "--repo", "--hostname")}                         # that take a value
@@ -2796,7 +2837,7 @@ USAGE = {
     "design-hook": "herd design-hook   (the SubagentStop hook for herd-designer, reads hook JSON on stdin)",
     "done": "herd done [slug] [--verbose]",
     "cancel": 'herd cancel [slug] [--reason "text"]',
-    "pr": "herd pr [slug] [--yes]   (push the herd/* branch, open or update its PR with the evidence)",
+    "pr": "herd pr [slug] [--yes] [--draft] [--milestone NAME]   (push the herd/* branch, open or update its PR with the evidence)",
     "gate": "herd gate   (the Stop hook, reads hook JSON on stdin)",
     "preinit": "herd preinit   (PreToolUse hook on Bash: before `herd init`, records files the session already edited)",
     "guard": "herd guard   (PreToolUse hook: denies edits to secrets and Herd's state, and irreversible commands)",
@@ -3017,8 +3058,9 @@ def main(argv):  # noqa: C901
                     print(f"warning: the pull request still shows older evidence ({e}); run `herd pr` again",
                           file=sys.stderr)
         elif cmd == "pr":
-            slug = _slug_arg(root, [a for a in args if a != "--yes"])
-            print(open_pr(root, slug, yes="--yes" in args))
+            slugs, yes, draft, milestone = pr_args(args)
+            slug = _slug_arg(root, slugs)
+            print(open_pr(root, slug, yes, draft, milestone))
             probs = problems(root, slug)
             if probs:
                 print("warning: the pull request shows evidence that is not done: " + "; ".join(probs), file=sys.stderr)

@@ -1686,8 +1686,50 @@ def _check_expect(root, slug, example, expect, changed):
     return {"expect": expect.strip(), "expect_was": was, "expect_changed": changed.strip()}
 
 
+class CloseRefused(ValueError):
+    """A `--closes` that names no open note: shown as one line, without the usage."""
+
+
+def open_notes(notes):
+    """The open notes in the order logged, as (number, note, the note that closed it or None). The number, from 1,
+    counts open notes only; the log is append-only, so it never changes."""
+    closed = {n["closes"]: n for n in notes if n["kind"] == "fixed" and n.get("closes")}
+    opened = [n for n in notes if n["kind"] == "open"]
+    return [(i, n, closed.get(i)) for i, n in enumerate(opened, 1)]
+
+
+def _still_open(notes):
+    return [n["text"] for _, n, closer in open_notes(notes) if closer is None]
+
+
+def _note_when(n):
+    return fmt_duration(n["elapsed_s"]) if n.get("elapsed_s") is not None else n.get("at", "?")
+
+
+def _note_labels(notes):
+    """The kind of each note as the report shows it: open notes carry their number and, once closed, when."""
+    labels = {id(n): f"open #{i}" + (f" (closed at {_note_when(c)})" if c else "") for i, n, c in open_notes(notes)}
+    return [labels.get(id(n), n["kind"]) for n in notes]
+
+
+def _check_closes(root, slug, kind, closes):
+    """The number of the open note that `--closes` names."""
+    if kind != "fixed":
+        raise CloseRefused("--closes goes with --fixed")
+    m = re.fullmatch(r"#?([0-9]{1,9})", closes.strip())
+    if not m:
+        raise CloseRefused(f"--closes takes the number of an open note, such as 1, not `{closes[:40]}`")
+    number = int(m.group(1))
+    found = {i: closer for i, _, closer in open_notes(load_notes(root, slug))}
+    if number not in found:
+        raise CloseRefused(f"--closes {number}: there is no open note #{number} ({len(found)} logged)")
+    if found[number]:
+        raise CloseRefused(f"--closes {number}: open note #{number} is already closed")
+    return number
+
+
 def add_note(root, slug, kind, text, attack=None, check=None, timeout=None, extra=None, refuses=None,
-             example=None, covered_by=None, expect=None, expect_changed=None):
+             example=None, covered_by=None, expect=None, expect_changed=None, closes=None):
     """Append a note to the task's log: one of NOTE_KINDS (found, fixed, open for a known limit, tried for an
     adversarial attempt, decision, late-red, human-change).
 
@@ -1695,7 +1737,8 @@ def add_note(root, slug, kind, text, attack=None, check=None, timeout=None, extr
     shows it, run by `herd verify`. An attack that cannot apply has no check and text starting `n/a:`.
     refuses and example are commands that run the program itself (PROGRAM_FLAGS). expect is the text the
     example's stdout must contain; expect_changed is why it differs after the first verify. covered_by is a criterion id
-    whose check stands for the attack's command, for the attacks in COVERABLE."""
+    whose check stands for the attack's command, for the attacks in COVERABLE. closes is the number of the open
+    note that a fixed note resolves. Returns the number of the open note written or closed, else None."""
     if kind not in NOTE_KINDS:
         raise ValueError(f"note kind must be one of {NOTE_KINDS}")
     if attack is not None and (kind != "tried" or attack not in ATTACKS):
@@ -1713,6 +1756,7 @@ def add_note(root, slug, kind, text, attack=None, check=None, timeout=None, extr
     if attack == "other-reading" and text.strip().lower() == "n/a:":
         raise ValueError('--attack other-reading "n/a:" needs a reason')
     expected = _check_expect(root, slug, example, expect, expect_changed)
+    closes = None if closes is None else _check_closes(root, slug, kind, closes)
     if attack and check is None and covered_by is None and not text.strip().lower().startswith("n/a:"):
         raise ValueError(f'--attack {attack} needs --check "<command that shows the attack>", run by herd verify; '
                          'an attack that cannot apply needs text starting "n/a:" with the reason')
@@ -1726,8 +1770,10 @@ def add_note(root, slug, kind, text, attack=None, check=None, timeout=None, extr
     if timeout is not None:
         rec["timeout_s"] = timeout
     rec.update(extra or {})
+    rec.update({} if closes is None else {"closes": closes})
     with open(d / "notes.jsonl", "a") as f:
         f.write(json.dumps(rec) + "\n")
+    return len(open_notes(load_notes(root, slug))) if kind == "open" else closes
 
 
 def full_rules(ev):
@@ -1753,9 +1799,11 @@ def final_report(root, slug, ev, notes):
     where = str((_dir(root, slug) / "evidence.md").relative_to(root)) + (f" and {pr.read_text().strip()}" if pr.exists() else "")
     gaps = [f"{r['id']} {r['status']}" for r in results if r["status"] != "passing"]
     gaps += [f"{r['id']} ran zero tests" for r in results if r.get("zero_tests")]
-    gaps += [n["text"] for n in notes if n["kind"] == "open"] + _refusals_not_run(ev) + _rule_lines(ev, notes)
+    gaps += _still_open(notes) + _refusals_not_run(ev) + _rule_lines(ev, notes)
     caveats = [f"{n['kind']}" + (f" at {fmt_duration(n['elapsed_s'])}" if n.get("elapsed_s") is not None else "")
                + f": {n['text']}" for n in notes if n["kind"] in ("found", "fixed")]
+    caveats += [f"open #{i} opened at {_note_when(n)}, closed at {_note_when(c)}: {n['text']}"
+                for i, n, c in open_notes(notes) if c]
     stop = load_stop(root, slug)
     guarded = guard_line(notes)
     caveats = ([stop_line(stop)] if stop else []) + ([guarded] if guarded else []) + caveats
@@ -1947,11 +1995,13 @@ def report(ev, notes=None):  # noqa: C901
         count = {k: sum(n["kind"] == k for n in notes) for k in NOTE_KINDS}
         lines.append("")
         if count["found"] or count["fixed"] or count["open"]:
-            lines.append(f"Caveats during the run: {count['found']} found, {count['fixed']} fixed, {count['open']} open")
-        for n in notes:
+            left = len(_still_open(notes))
+            lines.append(f"Caveats during the run: {count['found']} found, {count['fixed']} fixed, {left} open"
+                         + (f", {count['open'] - left} closed" if count["open"] > left else ""))
+        for n, label in zip(notes, _note_labels(notes)):
             when = f"{fmt_duration(n['elapsed_s'])} " if n.get("elapsed_s") is not None else ""
             text = " / ".join(x.strip() for x in n["text"].splitlines() if x.strip()) if n["kind"] == "review" else n["text"]
-            lines.append(f"- {when}{n['kind']}: {text}")
+            lines.append(f"- {when}{label}: {text}")
         batch = _largest_batch(notes)
         if batch >= 3:
             lines.append(f"Note: {batch} notes were logged within {BATCH_S} s of each other, so their times show "
@@ -2055,7 +2105,7 @@ def pr_body(root, slug):  # noqa: C901
              for r in results if r["source"] == "human" and str(r.get("coverage") or "").strip()]
     if ev.get("known_limits"):
         gaps.append(f"- Known limits: {ev['known_limits']}")
-    gaps += [f"- Open caveat: {n['text']}" for n in notes if n["kind"] == "open"]
+    gaps += [f"- Open caveat: {text}" for text in _still_open(notes)]
     if ev.get("route") != "quick" and not any(n["kind"] == "tried" for n in notes):
         gaps.append("- No adversarial pass was recorded")
     elif ev.get("route") != "quick":
@@ -2095,10 +2145,11 @@ def pr_body(root, slug):  # noqa: C901
     lines += [f"- {d}" for d in details]
     # ponytail: output tails stay out of the PR (they can hold secrets); the reviewer re-runs the check instead
     if notes:
-        shown = [n for n in notes if n["kind"] != "guard"][:MAX_PR_NOTES]  # the Guard line above sums them
+        shown = [(n, label) for n, label in zip(notes, _note_labels(notes))
+                 if n["kind"] != "guard"][:MAX_PR_NOTES]  # the Guard line above sums them
         lines += ["", "Caveats logged during the run:", ""]
         lines += [f"- {fmt_duration(n['elapsed_s']) + ' ' if n.get('elapsed_s') is not None else ''}"
-                  f"{n['kind']}: {_first_line(n['text'], 300) if n['kind'] == 'review' else n['text']}" for n in shown]
+                  f"{label}: {_first_line(n['text'], 300) if n['kind'] == 'review' else n['text']}" for n, label in shown]
         rest = len([n for n in notes if n["kind"] != "guard"]) - len(shown)
         if rest > 0:
             lines.append(f"- and {rest} more: run `herd status {slug}`")
@@ -2899,7 +2950,7 @@ def _slug_arg(root, args, none_ok=False):
 USAGE = {
     "init": 'herd init <slug> "<goal>" [--request "<message>"] [--quick "<check>"] [--worktree]',
     "check": "herd check [slug]",
-    "note": 'herd note --found|--fixed|--open|--decision|--late-red|--human-change|--tried [--attack bad-input|collision|one-bad-part|recount|refusal|other-reading --check "<command>" [--timeout S] | --covered-by <criterion id> (recount, refusal, other-reading) [--refuses "<command>"] [--example "<command>" --expect "<text>" [--expect-changed "<reason>"]]] "text"',
+    "note": 'herd note --found|--fixed [--closes N (the open note it resolves)]|--open|--decision|--late-red|--human-change|--tried [--attack bad-input|collision|one-bad-part|recount|refusal|other-reading --check "<command>" [--timeout S] | --covered-by <criterion id> (recount, refusal, other-reading) [--refuses "<command>"] [--example "<command>" --expect "<text>" [--expect-changed "<reason>"]]] "text"',
     "detect": "herd detect",
     "lint": "herd lint [--suggest]   (without --suggest: the PostToolUse hook, reads hook JSON on stdin)",
     "verify": "herd verify [slug] [--verbose] [--fresh] [--only <id>]   (an unchanged tree runs no check unless --fresh; "
@@ -2936,7 +2987,7 @@ def _note_command(root, args):
     kinds = {"--found": "found", "--fixed": "fixed", "--open": "open", "--tried": "tried",
              "--decision": "decision", "--late-red": "late-red", "--human-change": "human-change"}
     opts = {}
-    for name in ("attack", "check", "timeout", "covered_by", "expect", "expect_changed", *PROGRAM_FLAGS):
+    for name in ("attack", "check", "timeout", "covered_by", "expect", "expect_changed", "closes", *PROGRAM_FLAGS):
         opts[name], args = _opt(args, f"--{name.replace('_', '-')}")
     try:
         opts["timeout"] = None if opts["timeout"] is None else float(opts["timeout"])
@@ -2953,13 +3004,14 @@ def _note_command(root, args):
     if len(rest) != 1:
         raise UsageError(f"unexpected argument `{rest[1]}`: quote the text as one argument" if rest
                          else "no note text")
-    add_note(root, _slug_arg(root, []), kinds[flags[0]], rest[0], **opts)
+    number = add_note(root, _slug_arg(root, []), kinds[flags[0]], rest[0], **opts)
     check = opts["check"]
     vacuous = [check] if check and VACUOUS.fullmatch(check.strip()) else []
     for cmd in vacuous + [opts[k] for k in PROGRAM_FLAGS if opts[k] and vacuous_program(opts[k])]:
             print(f"warning: `{cmd.strip()}` runs no project code, so it does not count for {opts['attack']}",
                   file=sys.stderr)
-    print(f"noted ({kinds[flags[0]]}): {rest[0]}")
+    about = "" if number is None else f" #{number}" if kinds[flags[0]] == "open" else f", closes open #{number}"
+    print(f"noted ({kinds[flags[0]]}{about}): {rest[0]}")
 
 
 def main(argv):  # noqa: C901
@@ -3011,6 +3063,8 @@ def main(argv):  # noqa: C901
         elif cmd == "note":
             try:
                 _note_command(root, args)
+            except CloseRefused:
+                raise
             except ValueError as e:  # refused by add_note: it names the flag; show the usage too
                 raise UsageError(str(e)) from None
         elif cmd == "detect":
@@ -3088,7 +3142,10 @@ def main(argv):  # noqa: C901
                       + (f"Resolved at {stop['resolved_at']} by herd done." if stop.get("resolved_at")
                          else "The task went on after it (newer evidence): see below." if went_on
                          else f"Next: {stop.get('next')}"))
-            print(report(ev, load_notes(root, slug)) if ev else f"task {slug}: no evidence yet")
+            print(report(ev, load_notes(root, slug)) if ev else "\n".join(
+                [f"task {slug}: no evidence yet"]
+                + [f"- open #{i}: {n['text']}" if not c else f"- open #{i} (closed at {_note_when(c)}): {n['text']}"
+                   for i, n, c in open_notes(load_notes(root, slug))]))
             c = cancelled(root, slug)
             if c:
                 print(f"cancelled at {c['at']}" + (f": {c['reason']}" if c["reason"] else ""))

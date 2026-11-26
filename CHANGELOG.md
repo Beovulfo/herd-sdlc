@@ -2,6 +2,16 @@
 
 All notable changes to Herd. Versions follow `plugin/.claude-plugin/plugin.json`.
 
+## 0.14.6
+
+In 3 of 36 analysed sessions the final message had to warn the human that lines of Herd's pasted report were out of date. A limit logged with `herd note --open` was resolved later in the run, but `herd done` still listed it under "Not proven" (issue #126).
+
+- **Changed:** `herd note --fixed --closes N "text"` closes open note N. N counts open notes from 1 (`1` or `#1`). `herd note --open` prints it, and `herd status` and the evidence report show it.
+- **Changed:** a closed open note leaves "Not proven" in the final report and in the PR description. The final report lists it under "Caveats" as `open #N opened at T, closed at T2`.
+- **Changed:** `--closes` on a note that does not exist or is already closed, with another kind, or with a value that is not a number, is refused with one line.
+- **Changed:** the run skill tells the agent to close a limit once it is resolved.
+- **Known limits:** a closed note cannot be reopened: log a new one. Concurrent note calls are not locked, so two at the same instant could print the same number or both close one note. Closing is the agent's claim; Herd does not check that the limit is gone. Only `open` notes can be closed, so an outdated `found` note stays under "Caveats".
+
 ## 0.14.5
 
 `herd pr` could not open a draft pull request in a milestone, and silently ignored `--draft` and `--milestone`. In field runs, 11 of 36 sessions tried `git push` during a task (12 guard denials) to get such a PR (issue #125).

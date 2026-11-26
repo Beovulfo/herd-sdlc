@@ -55,16 +55,14 @@ Every step in detail: [docs/how-it-works.md](docs/how-it-works.md).
 
 ## Settings
 
-Optional, in `herd.toml` at the project root. All of them: [Settings](https://github.com/Beovulfo/herd-sdlc/wiki/Settings).
+Optional, in `herd.toml` at project root. All of them: [Settings](https://github.com/Beovulfo/herd-sdlc/wiki/Settings).
 
 | Table | Default |
 | --- | --- |
 | `[floor]` | `high`: `migrations/**`, `auth/**`, `billing/**`, `herd.toml`; `medium`: `api/**`; any other path is medium |
 | `[models]` | `design = "sonnet"`, `build = "haiku"` |
 | `[worktree] required = true` | off |
-| `[pr] open = true` | off; flags `--draft`, `--milestone NAME` |
-
-Once `herd pr` has opened a pull request, every `herd verify` rewrites its description from the latest evidence.
+| `[pr] open = true` | off; `herd verify` refreshes description; `--draft`, `--milestone NAME` |
 
 ## Benchmark
 

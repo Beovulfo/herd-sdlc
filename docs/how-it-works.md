@@ -37,6 +37,8 @@ flowchart LR
     G -->|opt-in| P[herd pr<br/>PR with the evidence]
 ```
 
+`herd init` records your request itself: the text of your latest `/herd:run` message in the session log. `--request` counts only when there is none; a differing one is kept as a decision note.
+
 Every criterion has a `check`, a shell command where exit 0 means pass. Before any code, the agent also logs six standard attacks, so they shape the design. On the standard route the first `herd verify` refuses while one has no note. For `recount`, `refusal` and `other-reading`, `--covered-by <criterion id>` reuses a criterion's check instead of a second test.
 
 The agent also solves one tiny case by hand: that answer is frozen before any code (`--expect`), and the real program's output must contain it. The checks run once before any work and should fail. `herd verify` runs no check when the work, `task.toml` and the attack notes are unchanged since the last full run; `--fresh` runs them all.

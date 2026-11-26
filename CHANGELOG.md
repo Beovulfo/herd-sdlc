@@ -2,6 +2,17 @@
 
 All notable changes to Herd. Versions follow `plugin/.claude-plugin/plugin.json`.
 
+## 0.14.3
+
+A builder could store its own summary as the request: `herd init` took `--request` from the agent and never read the human's words. In field runs on another project, 11 of 36 sessions had a lossy or missing request, and 6 of them cancelled and initialised again (issue #123).
+
+- **Changed:** `herd init` takes the request from the human's latest `/herd:run` message in the session log (the text of `<command-args>`, verbatim; the pre-init hook reads it), whatever `--request` says. It prints `request: from the session log` or `request: from --request`.
+- **Changed:** a `--request` that differs from that message (beyond whitespace) is kept as a `decision` note.
+- **Changed:** `--request` is used as before when the log has no such message, the message is bare, the hook cannot read the log, or the pre-init hook's record is more than 10 minutes old.
+- **Changed:** the run skill, the quick route and the designer say in one line that Herd records the message itself.
+- **Known limits:** a later task asked in plain words in the same session still gets the earlier `/herd:run` message; type `/herd:run` again for it. A message queued while the agent is busy, a run started without typing `/herd:run`, or a change of Claude Code's log layout falls back to `--request`. With the Bash sandbox denying reads of the home folder, `herd init` and `herd status` still cannot read the log for the session's model.
+- **Live runs:** the first build had `herd init` read the log itself. With the Bash sandbox and `denyRead: ["~/"]` it could not, and fell back to `--request` (3 of 3 benchmark runs). The hook runs outside the sandbox, so it now reads the message. Measured once, one headless Haiku run each with that sandbox: before, no `request.md`; after, `request: from the session log` and `request.md` byte-identical to the prompt, curly quotes included.
+
 ## 0.14.2
 
 In 4 of 36 analysed headless runs the main session started `herd:herd-designer` or `herd:herd-builder` in the background. It then tried to stop, the Stop gate blocked 3 times and released the task, and 3 of those sessions ended unfinished (issue #122).

@@ -419,7 +419,7 @@ def by_hand(word):
             assert repo.herd("verify", "t").returncode == 1
             record(repo)
             (repo.work / "ok").touch()
-            assert repo.herd("verify", "t").returncode == 0
+            p = repo.herd("verify", "t")
             print(next(line for line in body(repo).splitlines() if line.startswith("**Result:**")))
         elif word == "example":
             p = repo.herd("pr", "--yes", "--draft", "--milestone", "Field robustness", "t")

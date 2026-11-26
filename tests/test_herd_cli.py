@@ -845,7 +845,7 @@ class TestGate(Base):
 
 
 class TestGateOwner(Base):
-    """Issue #136: the Stop gate blocks only the session that ran `herd init`."""
+    """Issue #136: the Stop gate blocks the session that ran `herd init` and the last one to run herd here."""
 
     def logs(self):
         """A task owned by home/owner.jsonl; parent.jsonl and other/owner.jsonl are other sessions."""
@@ -952,6 +952,39 @@ class TestGateOwner(Base):
         (self.root / ".herd/tasks/t1/start.json").write_bytes(b"\xff\xfe")
         (self.root / ".herd/tasks/t1/gate_blocks").unlink(missing_ok=True)
         self.assertEqual(self.stop(parent)["decision"], "block")
+
+    def herd_command(self, log, command="python3 herd.py status"):
+        herd.preinit({"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(self.root),
+                      "transcript_path": str(log)})
+
+    def test_a_session_that_ran_a_herd_command_here_is_blocked_too(self):
+        home = self.logs()
+        (home / "next.jsonl").touch()
+        (home / "link.jsonl").symlink_to(home / "next.jsonl")
+        self.herd_command(home / "link.jsonl")
+        for log in ("next.jsonl", "link.jsonl", "owner.jsonl"):  # the continuation, and still the owner
+            with self.subTest(log=log):
+                (self.root / ".herd/tasks/t1/gate_blocks").unlink(missing_ok=True)
+                self.assertEqual(self.stop(home / log)["decision"], "block")
+        self.assertIsNone(self.stop(home / "parent.jsonl"))  # never ran a herd command
+
+    def test_only_the_last_herd_session_is_added(self):
+        home = self.logs()
+        self.herd_command(home / "other/owner.jsonl")
+        self.herd_command(home / "parent.jsonl")
+        self.herd_command(home / "other/owner.jsonl", command="ls")  # not a herd command: not recorded
+        self.assertIsNone(self.stop(home / "other/owner.jsonl"))
+        self.assertIsNotNone(self.stop(home / "parent.jsonl"))
+
+    def test_a_broken_session_record_adds_no_session(self):
+        home = self.logs()
+        record = herd._session_path(self.root)
+        for raw in (b"{", b"[]", b"7", b'{"log": 7}', b'{"log": "a\\u0000b"}', b"\xff\xfe"):
+            with self.subTest(raw=raw):
+                record.write_bytes(raw)
+                (self.root / ".herd/tasks/t1/gate_blocks").unlink(missing_ok=True)
+                self.assertIsNone(self.stop(home / "parent.jsonl"))
+                self.assertIsNotNone(self.stop(home / "owner.jsonl"))
 
     def test_hook_input_of_the_wrong_shape_never_gives_a_traceback(self):
         self.logs()

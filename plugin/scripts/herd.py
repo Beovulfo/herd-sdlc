@@ -2908,21 +2908,29 @@ def _count(path):
 
 
 def _other_session(root, slug, hook):
-    """True only when the hook's session log and the one `herd init` recorded are both known and differ. A parent
-    that spawned the owner into this checkout is such a session (issue #136). Unknown on either side: False."""
+    """True only when the hook's session log and the one `herd init` recorded are both known and differ, and it is
+    not the one that last ran a herd command in this checkout (a continuation of the task). A parent that spawned the
+    owner into this checkout and ran no herd command is such a session (issue #136). Unknown on either side: False."""
     start = _state(_dir(root, slug) / "start.json", {})
-    logs = (start.get("session") if isinstance(start, dict) else None, hook.get("transcript_path"))
-    if not all(isinstance(x, str) and x for x in logs):
+    owner, mine = start.get("session"), hook.get("transcript_path")
+    if not all(isinstance(x, str) and x for x in (owner, mine)):
         return False
     try:
-        return os.path.realpath(logs[0]) != os.path.realpath(logs[1])
+        mine = os.path.realpath(mine)
+        if os.path.realpath(owner) == mine:
+            return False
     except ValueError:  # a NUL byte: not a path
         return False
+    seen = _seen_session(root)
+    try:
+        return not seen or os.path.realpath(seen) != mine
+    except ValueError:  # a broken record adds no session
+        return True
 
 
 def gate(root, hook):
-    """Stop hook. None allows the stop; a dict blocks it with a reason for the agent. Only the task's owner session
-    is blocked: another one stops freely and leaves the block counters alone."""
+    """Stop hook. None allows the stop; a dict blocks it with a reason for the agent. Only the task's sessions are
+    blocked (see _other_session): another one stops freely and leaves the block counters alone."""
     slug = active_slug(root)
     if not slug or not _dir(root, slug).exists() or cancelled(root, slug) or _other_session(root, slug, hook):
         return None

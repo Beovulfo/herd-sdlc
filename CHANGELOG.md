@@ -2,6 +2,15 @@
 
 All notable changes to Herd. Versions follow `plugin/.claude-plugin/plugin.json`.
 
+## 0.14.8
+
+The Stop gate never read which session was stopping. A parent session that spawned a headless Herd session into the same worktree was blocked too, told to run `herd verify` while the child was running it, and each block used up the owner's stop budget (issue #136, part of #135).
+
+- **Changed:** `herd gate` compares the hook's `transcript_path` with the `session` that `start.json` recorded at `herd init`, after resolving symlinks. A different session stops freely: no block, and no change to `gate_blocks`, `done_blocks` or `stopped.json`.
+- **Changed:** with no recorded session, no `transcript_path`, or an unreadable `start.json`, the gate blocks as before.
+- **Changed:** `herd gate` no longer prints a traceback on hook input that is JSON but not an object, or on a `cwd` that is not text.
+- **Known limits:** a resumed owner session whose log path changed counts as another session: the gate no longer blocks it. The task stays active and `herd done` still needs the evidence. The same holds for a new session that continues the task. No session can take ownership over. If `herd init` runs without the pre-init hook (such as in a terminal), the recorded session may be an older one from that checkout, and then only that one is blocked. The same can happen if another session runs a herd command there between the owner's pre-init hook and its `herd init`. Not tried with a live parent and child, or a live resumed session.
+
 ## 0.14.7
 
 A check that makes every verify slow was invisible during the build: `evidence.json` held no time per check. In one analysed project CI on each pull request took 14 to 25 minutes, and no record showed which checks were slow (issue #127, part of #121).

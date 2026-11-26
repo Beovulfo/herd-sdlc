@@ -1,6 +1,7 @@
 import contextlib
 import io
 import json
+import random
 import re
 import os
 import shlex
@@ -841,6 +842,128 @@ class TestGate(Base):
 
     def run_done(self):
         return run_herd(self.root, "done").returncode
+
+
+class TestGateOwner(Base):
+    """Issue #136: the Stop gate blocks only the session that ran `herd init`."""
+
+    def logs(self):
+        """A task owned by home/owner.jsonl; parent.jsonl and other/owner.jsonl are other sessions."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        home = Path(os.path.realpath(tmp.name))
+        (home / "other").mkdir()
+        for name in ("owner.jsonl", "parent.jsonl", "other/owner.jsonl"):
+            (home / name).touch()
+        self.task()
+        self.owner(str(home / "owner.jsonl"))
+        return home
+
+    def owner(self, session):
+        path = self.root / ".herd/tasks/t1/start.json"
+        start = json.loads(path.read_text())
+        start["session"] = session
+        path.write_text(json.dumps(start))
+
+    def stop(self, log):
+        return herd.gate(self.root, {"transcript_path": str(log)})
+
+    def state(self):
+        return {f.name: f.read_bytes() for f in (self.root / ".herd/tasks/t1").iterdir() if f.is_file()}
+
+    def test_another_session_stops_and_changes_nothing(self):
+        home = self.logs()
+        before = self.state()
+        for _ in range(herd.MAX_BLOCKS + 2):
+            self.assertIsNone(self.stop(home / "parent.jsonl"))
+        self.assertEqual(self.state(), before)  # no gate_blocks, no done_blocks, no stopped.json
+
+    def test_another_session_leaves_a_passing_task_alone(self):
+        home = self.logs()
+        self.attacks()
+        (self.root / "greet.txt").write_text("hello")
+        herd.verify(self.root, "t1")
+        self.assertIsNone(self.stop(home / "parent.jsonl"))
+        self.assertFalse((self.root / ".herd/tasks/t1/done_blocks").exists())
+        self.assertIn("evidence passes", self.stop(home / "owner.jsonl")["reason"])
+
+    def test_the_owner_keeps_its_whole_budget(self):
+        home = self.logs()
+        blocked = 0
+        for _ in range(herd.MAX_BLOCKS + 2):
+            self.assertIsNone(self.stop(home / "parent.jsonl"))
+            blocked += self.stop(home / "owner.jsonl") is not None
+        self.assertEqual(blocked, herd.MAX_BLOCKS)
+        self.assertEqual((self.root / ".herd/tasks/t1/gate_blocks").read_text(), str(herd.MAX_BLOCKS))
+
+    def test_the_owner_through_any_path_to_its_log_is_blocked(self):
+        home = self.logs()
+        (home / "link.jsonl").symlink_to(home / "owner.jsonl")
+        (home / "linked-home").symlink_to(home, target_is_directory=True)
+        forms = [home / "owner.jsonl", home / "link.jsonl", home / "linked-home/owner.jsonl",
+                 f"{home}/other/../owner.jsonl", f"{home}//./owner.jsonl"]
+        for recorded in forms:
+            for seen in forms:
+                with self.subTest(recorded=str(recorded), seen=str(seen)):
+                    self.owner(str(recorded))
+                    (self.root / ".herd/tasks/t1/gate_blocks").unlink(missing_ok=True)
+                    self.assertEqual(self.stop(seen)["decision"], "block")
+
+    def test_blocks_exactly_the_owner_on_generated_paths(self):
+        home = self.logs()
+        names = ["owner.jsonl", "parent.jsonl", "other/owner.jsonl", "gone.jsonl", "Owner (1).jsonl",
+                 "s\u00e9ance.jsonl", "x" * 200 + ".jsonl"]
+        (home / "alias.jsonl").symlink_to(home / "parent.jsonl")
+        names.append("alias.jsonl")
+
+        def real(name):  # the oracle follows the one link by hand, not with the code under test
+            return "parent.jsonl" if name == "alias.jsonl" else name
+
+        rng = random.Random(136)
+        for _ in range(60):
+            a, b = rng.choice(names), rng.choice(names)
+            with self.subTest(recorded=a, seen=b):
+                self.owner(str(home / a))
+                (self.root / ".herd/tasks/t1/gate_blocks").unlink(missing_ok=True)
+                self.assertEqual(self.stop(home / b) is not None, real(a) == real(b))
+
+    def test_same_file_name_elsewhere_is_another_session(self):
+        home = self.logs()
+        self.assertIsNone(self.stop(home / "other/owner.jsonl"))
+
+    def test_unknown_owner_or_stopper_blocks(self):
+        home = self.logs()
+        parent = str(home / "parent.jsonl")
+        for hook in ({}, {"transcript_path": None}, {"transcript_path": ""}, {"transcript_path": 7},
+                     {"transcript_path": ["a"]}, {"transcript_path": "a\0b"}, {"transcript_path": "\ud800"}):
+            with self.subTest(hook=hook):
+                (self.root / ".herd/tasks/t1/gate_blocks").unlink(missing_ok=True)
+                self.assertEqual(herd.gate(self.root, hook)["decision"], "block")
+        for session in (None, "", 7, ["a"], "a\0b"):
+            with self.subTest(session=session):
+                self.owner(session)
+                (self.root / ".herd/tasks/t1/gate_blocks").unlink(missing_ok=True)
+                self.assertEqual(self.stop(parent)["decision"], "block")
+        for text in ("{", "[]", "7", '"x"', "null", ""):
+            with self.subTest(start=text):
+                (self.root / ".herd/tasks/t1/start.json").write_text(text)
+                (self.root / ".herd/tasks/t1/gate_blocks").unlink(missing_ok=True)
+                self.assertEqual(self.stop(parent)["decision"], "block")
+        (self.root / ".herd/tasks/t1/start.json").write_bytes(b"\xff\xfe")
+        (self.root / ".herd/tasks/t1/gate_blocks").unlink(missing_ok=True)
+        self.assertEqual(self.stop(parent)["decision"], "block")
+
+    def test_hook_input_of_the_wrong_shape_never_gives_a_traceback(self):
+        self.logs()
+        for raw in ("[]", "7", '"x"', '{"cwd": 7}', "{}"):
+            with self.subTest(raw=raw):
+                (self.root / ".herd/tasks/t1/gate_blocks").unlink(missing_ok=True)
+                p = run_herd(self.root, "gate", input=raw)
+                self.assertNotIn("Traceback", p.stderr)
+                self.assertEqual(json.loads(p.stdout)["decision"], "block")
+        p = run_herd(self.root, "gate", input="{")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertNotIn("Traceback", p.stderr)
 
 
 class TestCli(Base):

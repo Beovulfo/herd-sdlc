@@ -6,7 +6,7 @@ argument-hint: "<the task, one or two sentences>"
 
 # Herd run: goal in, evidence out
 
-Work the task to the end without waiting on the human. You deliver code plus **evidence** that the criteria pass. "Done" means `herd done` succeeded, not that you say so. A Stop hook enforces this while a task is active.
+Work the task to the end without waiting on the human. You deliver code plus **evidence** that the criteria pass. "Done" means `herd done` succeeded, not that you say so. A Stop hook enforces this on the session that ran `herd init`, while the task is active.
 
 `herd <command>` means `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/herd.py" <command>`, written out in full, run from the project root (or the task's worktree). Checks in `task.toml` run from there too.
 

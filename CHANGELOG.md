@@ -2,6 +2,16 @@
 
 All notable changes to Herd. Versions follow `plugin/.claude-plugin/plugin.json`.
 
+## 0.14.9
+
+A pull request kept showing results that a later `herd verify` had replaced, because only `herd pr` and `herd done` wrote its description. In field use, a PR still listed a failing criterion after it was fixed and verified, and needed a hand-written correction (issue #137, part of #135).
+
+- **Changed:** when `.herd/tasks/<slug>/pr` exists and `gh` is on PATH, `herd verify` ends by rewriting that pull request's description from the latest evidence, also when it skips an unchanged tree. Body only (`gh pr edit <url> --body-file -`): no push, title, draft or milestone change.
+- **Changed:** open notes closed with `--closes` leave "What is not proven" in the refreshed description, which names the verified commit and any uncommitted changes.
+- **Changed:** before rewriting an open pull request's description, `herd verify`, `herd pr` and `herd done` read it (`gh pr view <url> --json body -q .body`) and keep every line after Herd's footer line, so a `Closes #N` line there stays. If the read fails, the description is rewritten without those lines, with one warning.
+- **Changed:** a failed, missing-record or timed-out (60 s) refresh prints one warning line and never changes the exit code.
+- **Known limits:** the description can name a commit that is not pushed yet. A merged or closed pull request with a recorded URL is rewritten too. `herd verify --only` and `herd note` refresh nothing. Text added to the description above Herd's footer line is lost at the next rewrite: put `Closes #N` after it. The last line that starts like the footer counts, so text above a copy of it in your own lines is lost. A description that cannot be read is rewritten without its added lines. Each read has its own 60 s limit. An edit made between the read and the write is lost. Tested against a stand-in `gh`, not real GitHub.
+
 ## 0.14.8
 
 The Stop gate never read which session was stopping. A parent session that spawned a headless Herd session into the same worktree was blocked too, told to run `herd verify` while the child was running it, and each block used up the owner's stop budget (issue #136, part of #135).

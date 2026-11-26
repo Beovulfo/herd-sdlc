@@ -1,8 +1,10 @@
 """`herd pr --draft --milestone NAME`, and refusal of anything else (issue #125).
 
 A temporary repository with a bare local origin and a fake `gh` that logs each call as one JSON list.
-`python3 -m tests.test_pr_flags refuse-collision|refuse-bad-milestone|example` runs one case by hand.
+`python3 -m tests.test_pr_flags refuse-collision|refuse-bad-milestone|example|refresh` runs one case by hand.
 """
+import contextlib
+import io
 import json
 import os
 import random
@@ -12,6 +14,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from scripts import herd
 
@@ -24,7 +27,18 @@ a = sys.argv[1:]
 with open(os.environ["GH_LOG"], "a") as f:
     f.write(json.dumps(a) + "\\n")
 if "--body-file" in a:
-    sys.stdin.read()
+    with open(os.environ["GH_LOG"] + ".body", "w") as f:
+        f.write(sys.stdin.read())
+if os.environ.get("GH_FAIL") == "edit" and a[:2] == ["pr", "edit"]:
+    sys.exit("HTTP 502\\nsecond line of the error")
+if a[:2] == ["pr", "view"] and "body" in a:  # the remote description is the last one written
+    if os.environ.get("GH_FAIL") == "read":
+        sys.exit("HTTP 502")
+    remote = os.environ["GH_LOG"] + ".body"
+    if os.path.exists(remote):
+        with open(remote, "rb") as f:
+            sys.stdout.buffer.write(f.read() + b"\\n")  # gh ends its output with a newline
+    sys.exit(0)
 if a[:2] == ["pr", "view"]:
     if os.environ.get("GH_OPEN"):
         print("{URL}")
@@ -217,6 +231,239 @@ class TestRefusal(Base):
         self.assertEqual(seen, {True, False})
 
 
+def record(repo, value=URL + "\n", slug="t"):
+    path = repo.work / ".herd/tasks" / slug / "pr"
+    path.write_bytes(value if isinstance(value, bytes) else value.encode())
+
+
+def body(repo):
+    return Path(str(repo.log) + ".body").read_text()
+
+
+class Refresh(Base):
+    def verify(self, *args, code=0, **env):
+        self.repo.log.unlink(missing_ok=True)
+        p = self.repo.herd("verify", "t", *args, **env)
+        self.assertEqual(p.returncode, code, p.stdout + p.stderr)
+        self.assertNotIn("Traceback", p.stderr)
+        return p
+
+    def task(self, *checks):
+        text = "".join(f'[[criteria]]\nid = "C{i}"\ntext = "t{i}"\nsource = "agent-proposed"\ncheck = "{c}"\n'
+                       for i, c in enumerate(checks, 1))
+        (self.repo.work / ".herd/tasks/t/task.toml").write_text('goal = "g"\n' + text)
+
+    def warned(self, p):
+        lines = [line for line in p.stderr.splitlines() if "not refreshed" in line]
+        self.assertEqual(len(lines), 1, p.stderr)
+        self.assertEqual(len(p.stderr.strip().splitlines()), 1, p.stderr)
+
+
+class TestRefresh(Refresh):
+    def test_edits_only_the_body_of_the_recorded_pr(self):
+        record(self.repo)
+        self.verify("--fresh")
+        self.assertEqual(self.repo.calls(), [["pr", "view", URL, "--json", "body", "-q", ".body"],
+                                             ["pr", "edit", URL, "--body-file", "-"]])
+        self.assertIn("1 of 1 criteria proven", body(self.repo))
+        self.assertFalse(self.repo.pushed())
+
+    def test_a_skipped_verify_refreshes_too_and_shows_a_closed_note_gone(self):
+        record(self.repo)
+        self.repo.herd("note", "--open", "limit-xyz")
+        self.verify()
+        self.assertIn("Open caveat: limit-xyz", body(self.repo))
+        self.repo.herd("note", "--fixed", "--closes", "1", "resolved")
+        p = self.verify()
+        self.assertIn("unchanged since", p.stdout)
+        self.assertNotIn("Open caveat", body(self.repo))
+
+    def test_body_names_the_commit_and_uncommitted_changes(self):
+        record(self.repo)
+        head = self.repo.git("rev-parse", "HEAD")[:12]
+        self.verify("--fresh")
+        self.assertIn(f"on commit `{head}`.", body(self.repo))
+        (self.repo.work / "dirty.txt").write_text("x")
+        self.verify()
+        self.assertIn(f"on commit `{head}` plus uncommitted changes.", body(self.repo))
+
+    def test_only_writes_no_evidence_and_edits_nothing(self):
+        record(self.repo)
+        self.verify("--only", "C1")
+        self.assertEqual(self.repo.calls(), [])
+
+
+class TestRefreshNoGh(Refresh):
+    def test_no_gh_on_path_is_silent(self):
+        record(self.repo)
+        tools = self.repo.work.parent / "tools"
+        tools.mkdir()
+        for name in ("git", "sh"):
+            (tools / name).symlink_to(shutil.which(name))
+        for check, code in (("true", 0), ("false", 1)):
+            self.task(check)
+            p = self.verify("--fresh", code=code, PATH=str(tools))
+            self.assertEqual((p.stderr, self.repo.calls()), ("", []))
+            self.assertNotIn("pr:", p.stdout)
+
+
+class TestRefreshBadInput(Refresh):
+    BAD = ("", "\n", "7", "--title", "not a url", "https://", f"{URL} extra", f"{URL}\n{URL}2\n", b"\xff\xfe")
+
+    def test_bad_record_warns_once_and_calls_no_gh(self):
+        for value in self.BAD:
+            record(self.repo, value)
+            self.warned(self.verify())
+            self.assertEqual(self.repo.calls(), [], value)
+
+    def test_record_that_is_a_folder(self):
+        (self.repo.work / ".herd/tasks/t/pr").mkdir()
+        self.warned(self.verify("--fresh"))
+        self.assertEqual(self.repo.calls(), [])
+
+    def test_failing_gh_keeps_both_exit_codes(self):
+        record(self.repo)
+        self.warned(self.verify("--fresh", GH_FAIL="edit"))
+        self.task("false")
+        self.warned(self.verify("--fresh", code=1, GH_FAIL="edit"))
+
+    def test_gh_that_cannot_start_or_hangs(self):
+        record(self.repo)
+        gh = Path(self.repo.env["PATH"].split(os.pathsep)[0]) / "gh"
+        for script in ("#!/no/such/interpreter\n", "#!/bin/sh\nexec sleep 20\n"):
+            gh.write_text(script)
+            err = io.StringIO()
+            with mock.patch.dict(os.environ, self.repo.env), mock.patch.object(herd, "PR_REFRESH_S", 0.3), \
+                    contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+                herd.refresh_pr(self.repo.work, "t")
+            self.assertEqual(len(err.getvalue().strip().splitlines()), 1, err.getvalue())
+
+
+class TestRefreshCollision(Refresh):
+    def test_each_task_edits_its_own_pr(self):
+        tasks = self.repo.work / ".herd/tasks"
+        shutil.copytree(tasks / "t", tasks / "u")  # a second task with the same goal, criterion and check
+        record(self.repo)
+        record(self.repo, URL + "2\n", slug="u")
+        for slug, url in (("t", URL), ("u", URL + "2"), ("t", URL)):
+            self.repo.log.unlink(missing_ok=True)
+            self.assertEqual(self.repo.herd("verify", slug).returncode, 0)
+            self.assertEqual(self.repo.call("edit")[2], url)
+
+    def test_two_different_prs_in_one_record_are_refused(self):
+        record(self.repo, f"{URL}\n{URL}2\n")
+        self.warned(self.verify())
+        self.assertEqual(self.repo.calls(), [])
+
+
+class TestRefreshRecount(Refresh):
+    def test_counts_match_the_rows_of_the_body(self):
+        rng = random.Random(137)
+        record(self.repo)
+        for _ in range(8):
+            checks = rng.choices(["true", "false", ""], k=rng.randint(1, 6))
+            self.task(*checks)
+            self.verify("--fresh", code=int("false" in checks))
+            text = body(self.repo)
+            rows = len([line for line in text.splitlines() if line.startswith("| C")])
+            self.assertEqual(rows, checks.count("true"), text)
+            self.assertIn(f"**Result:** {rows} of {len(checks)} criteria proven by a passing check "
+                          f"({checks.count('false')} failing, {checks.count('')} unchecked)", text)
+
+
+def recordable(value):
+    """One web address and nothing else. Written apart from herd's pattern."""
+    words = value.split()
+    return len(words) == 1 and any(words[0].startswith(s) and words[0] != s for s in ("http://", "https://"))
+
+
+class TestRefreshRefusal(Refresh):
+    def test_random_records(self):
+        rng = random.Random(1370)
+        parts = ["https://", "http://", "h.invalid/pull/1", " ", "\n", "-x", "ftp://"]
+        seen = set()
+        for _ in range(60):
+            value = "".join(rng.choices(parts, [4, 2, 4, 1, 2, 1, 1], k=rng.randint(0, 4)))
+            record(self.repo, value)
+            p = self.verify()
+            ok = recordable(value)
+            seen.add(ok)
+            self.assertEqual(self.repo.call("edit"), ["pr", "edit", value.strip(), "--body-file", "-"] if ok else None,
+                             repr(value))
+            self.assertEqual("not refreshed" in p.stderr, not ok, repr(value))
+        self.assertEqual(seen, {True, False})
+
+
+class TestRefreshOtherReading(Refresh):
+    def test_any_way_of_recording_from_any_branch(self):
+        for i, value in enumerate((URL + "\n", URL, URL + "\r\n", f"  {URL}  \n", "http://h.invalid/o/r/pull/12\n")):
+            self.repo.git("switch", "-q", "-c", f"other-{i}")
+            record(self.repo, value)
+            self.verify()
+            self.assertEqual(self.repo.call("edit")[2], value.strip(), repr(value))
+
+
+FOOT = "Opened by Herd with `herd pr`. Herd never merges: review the evidence above, then merge."
+
+
+def remote(repo, text):
+    """Set the description the PR has now."""
+    Path(f"{repo.log}.body").write_bytes(text.encode())
+
+
+class TestRefreshKeepsTail(Refresh):
+    def refreshed(self, before, **env):
+        record(self.repo)
+        remote(self.repo, before)
+        p = self.verify("--fresh", **env)
+        return p, Path(f"{self.repo.log}.body").read_bytes().decode()
+
+    def test_text_after_the_footer_stays_and_does_not_grow(self):
+        for tail in ("\nCloses #1", "\n\nCloses #1\n", "Closes #1\n\n- caf\u00e9\n"):
+            _, first = self.refreshed(f"old evidence\n\n---\n{FOOT}\n{tail}")
+            self.assertTrue(first.endswith(f"{FOOT}\n{tail}"), repr(first[-200:]))
+            self.assertNotIn("old evidence", first)
+            self.verify("--fresh")
+            self.assertEqual(Path(f"{self.repo.log}.body").read_bytes().decode().split(FOOT)[1], f"\n{tail}")
+
+    def test_a_description_edited_on_the_web_has_crlf_lines(self):
+        _, text = self.refreshed(f"old\r\n---\r\n{FOOT}\r\n\r\nCloses #1")
+        self.assertTrue(text.endswith(f"{FOOT}\n\nCloses #1"), repr(text[-200:]))
+
+    def test_only_the_last_footer_line_counts(self):
+        _, text = self.refreshed(f"{FOOT}\nold evidence\nsee: {FOOT}\n{FOOT}\nCloses #1")
+        self.assertNotIn("old evidence", text)
+        self.assertTrue(text.endswith(f"{FOOT}\nCloses #1"), repr(text[-200:]))
+        self.assertEqual(text.count(FOOT), 1)
+
+    def test_nothing_is_kept_without_a_footer_or_a_tail(self):
+        for before in ("", "Closes #1", f"x\n{FOOT}", f"x\n{FOOT}\n"):
+            _, text = self.refreshed(before)
+            self.assertTrue(text.endswith(f"{FOOT}\n"), repr(before))
+            self.assertNotIn("Closes #1", text)
+
+    def test_a_failed_read_still_refreshes_and_warns_once(self):
+        p, text = self.refreshed(f"{FOOT}\nCloses #1", GH_FAIL="read")
+        self.assertIn("1 of 1 criteria proven", text)
+        self.assertIn("pr: description refreshed", p.stdout)
+        self.assertEqual(len(p.stderr.strip().splitlines()), 1, p.stderr)
+        self.assertIn("not kept", p.stderr)
+
+    def test_herd_pr_on_an_open_pr_keeps_it_too(self):
+        remote(self.repo, f"old\n{FOOT}\n\nCloses #1")
+        self.ok("--yes", "t", GH_OPEN="1")
+        self.assertTrue(body(self.repo).endswith(f"{FOOT}\n\nCloses #1"))
+        p = self.ok("--yes", "t", GH_OPEN="1", GH_FAIL="read")
+        self.assertEqual(p.stderr.count("not kept"), 1, p.stderr)
+        self.assertTrue(body(self.repo).endswith(f"{FOOT}\n"))
+
+    def test_a_new_pr_reads_no_body(self):
+        remote(self.repo, f"{FOOT}\nCloses #1")
+        self.ok("--yes", "t")
+        self.assertEqual([c for c in self.repo.calls() if "body" in c], [])
+        self.assertNotIn("Closes #1", body(self.repo))
+
+
 class TestDocs(unittest.TestCase):
     def test_guard_hint_names_the_draft_flag(self):
         self.assertIn("herd pr --draft", herd.GUARD_WHY["git push"])
@@ -227,11 +474,27 @@ class TestDocs(unittest.TestCase):
             self.assertIn("--draft", text, name)
             self.assertIn("--milestone", text, name)
 
+    def test_pr_reference_says_where_closes_goes(self):
+        self.assertRegex((ROOT / "plugin/skills/run/pr.md").read_text(), r"`Closes #N` after[^.]*footer[^.]*kept")
+
+    def test_docs_say_verify_refreshes_the_description(self):
+        for name in ("README.md", "plugin/skills/run/pr.md", "docs/how-it-works.md"):
+            self.assertRegex((ROOT / name).read_text(), r"`herd verify`[^.]*(rewrites|refreshes)[^.]*description", name)
+
 
 def by_hand(word):
     repo = Repo()
     try:
-        if word == "example":
+        if word == "refresh":
+            # the issue's reproduction: a failing verify, a recorded PR, then a passing verify
+            toml = repo.work / ".herd/tasks/t/task.toml"
+            toml.write_text(toml.read_text().replace('"true"', '"test -f ok"'))
+            assert repo.herd("verify", "t").returncode == 1
+            record(repo)
+            (repo.work / "ok").touch()
+            p = repo.herd("verify", "t")
+            print(next(line for line in body(repo).splitlines() if line.startswith("**Result:**")))
+        elif word == "example":
             p = repo.herd("pr", "--yes", "--draft", "--milestone", "Field robustness", "t")
             create = repo.call("create")
             print(f"draft={'yes' if '--draft' in create else 'no'} milestone=[{milestone_of(create)}]")
@@ -246,6 +509,6 @@ def by_hand(word):
 
 
 if __name__ == "__main__":
-    if sys.argv[1:] and sys.argv[1] in ("example", "refuse-collision", "refuse-bad-milestone"):
+    if sys.argv[1:] and sys.argv[1] in ("example", "refresh", "refuse-collision", "refuse-bad-milestone"):
         sys.exit(by_hand(sys.argv[1]))
     unittest.main()

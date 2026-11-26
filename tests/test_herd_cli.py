@@ -999,6 +999,76 @@ class TestGateOwner(Base):
         self.assertNotIn("Traceback", p.stderr)
 
 
+class TestGateWithoutInit(Base):
+    """Issue #124: a /herd:run session that edits files but never runs `herd init` is sent back to it."""
+    RUN = ("<command-message>herd:run</command-message>\n<command-name>/herd:run</command-name>\n"
+           "<command-args>Fix the typo in README.md</command-args>")
+
+    def log(self, request=RUN, tools=(("Edit", {"file_path": "README.md", "old_string": "x", "new_string": "y"}),)):
+        lines = [{"type": "user", "message": {"role": "user", "content": request}}]
+        lines += [{"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": f"t{i}", "name": name, "input": inp}]}} for i, (name, inp) in enumerate(tools)]
+        fd, path = tempfile.mkstemp(suffix=".jsonl")
+        os.close(fd)
+        path = Path(path)
+        self.addCleanup(path.unlink, missing_ok=True)
+        path.write_text("".join(json.dumps(x) + "\n" for x in lines))
+        return path
+
+    def stop(self, log):
+        return herd.gate(self.root, {"transcript_path": str(log)})
+
+    def test_blocks_then_releases_and_records_it(self):
+        log = self.log()
+        for i in range(1, herd.MAX_BLOCKS + 1):
+            out = self.stop(log)
+            self.assertEqual(out["decision"], "block")
+            self.assertIn(f"({i}/{herd.MAX_BLOCKS} stop attempts blocked)", out["reason"])
+            self.assertIn("init <slug>", out["reason"])
+        self.assertIsNone(self.stop(log))
+        record = json.loads((self.root / ".git" / herd.NOINIT_FILE).read_text())
+        self.assertEqual(record[os.path.realpath(log)]["blocks"], herd.MAX_BLOCKS)
+        self.assertIn("released", record[os.path.realpath(log)])
+        self.assertEqual(self.stop(self.log())["decision"], "block")  # another session has its own budget
+
+    def test_other_sessions_stop_freely(self):
+        edit = ("Write", {"file_path": "a.txt", "content": "a"})
+        init = ("Bash", {"command": "cd /x && python3 /p/scripts/herd.py init fix-typo \"Fix the typo\""})
+        cases = {"no /herd:run": self.log(request="Fix the typo"),
+                 "quoted /herd:run": self.log(request="say " + self.RUN),
+                 "bare /herd:run": self.log(request="<command-name>/herd:run</command-name>\n<command-args></command-args>"),
+                 "no edit": self.log(tools=(("Read", {"file_path": "README.md"}),)),
+                 "ran herd init": self.log(tools=(edit, init)),
+                 "missing log": self.root.parent / "gone.jsonl"}
+        for name, log in cases.items():
+            with self.subTest(name):
+                self.assertIsNone(self.stop(log))
+        for hook in ({}, {"transcript_path": None}, {"transcript_path": 7}, {"transcript_path": "a\0b"},
+                     {"transcript_path": "\ud800"}):
+            with self.subTest(hook=hook):
+                self.assertIsNone(herd.gate(self.root, hook))
+        self.assertFalse((self.root / ".git" / herd.NOINIT_FILE).exists())
+
+    def test_herd_init_in_a_subagent_log_counts(self):
+        log = self.log()
+        sub = log.parent / log.stem / "subagents"
+        sub.mkdir(parents=True)
+        self.addCleanup(shutil.rmtree, log.parent / log.stem)
+        (sub / "agent-1.jsonl").write_text(json.dumps({"type": "assistant", "isSidechain": True, "message": {
+            "content": [{"type": "tool_use", "name": "Bash", "input": {"command": "python3 herd.py init t1 \"g\""}}]}}))
+        self.assertIsNone(self.stop(log))  # a designer subagent started the task, since done
+
+    def test_odd_content_items_do_not_crash(self):
+        log = self.log()
+        with log.open("a") as f:  # a string, a number and a null among the content items
+            f.write(json.dumps({"type": "assistant", "message": {"content": ["text", 3, None]}}) + "\n")
+        self.assertEqual(self.stop(log)["decision"], "block")
+
+    def test_an_active_task_keeps_the_task_gate(self):
+        self.task()
+        self.assertIn("Herd task `t1`", self.stop(self.log())["reason"])
+
+
 class TestCli(Base):
     def run_cli(self, *args):
         p = subprocess.run(["python3", str(Path(herd.__file__)), *args], cwd=self.root,

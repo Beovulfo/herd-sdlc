@@ -391,7 +391,7 @@ def log_request(path):
                             found = m[1]
                 except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
                     continue
-    except (OSError, TypeError):
+    except (OSError, TypeError, ValueError):  # ValueError: a NUL byte or a lone surrogate in the path
         return None
     return found if found and found.strip() else None
 
@@ -1040,7 +1040,7 @@ def _edited_files(log):
                 continue
             for c in content if isinstance(content, list) else []:
                 inp = c.get("input") if isinstance(c, dict) and c.get("type") == "tool_use" else None
-                if c.get("name") in EDIT_TOOLS and isinstance(inp, dict):
+                if isinstance(inp, dict) and c.get("name") in EDIT_TOOLS:
                     path = inp.get("file_path") or inp.get("notebook_path")
                     if isinstance(path, str) and path:
                         files.add(path)
@@ -2985,11 +2985,58 @@ def _other_session(root, slug, hook):
         return True
 
 
+NOINIT_FILE = "herd-noinit.json"  # in the checkout's git dir: {session log: stop blocks} for /herd:run without a task
+
+
+def _skipped_init(log, cwd):
+    """True when a session log has a /herd:run request and an edit, but no Bash command in it or its subagents' logs
+    (the designer runs `herd init`) that ran `herd.py init`."""
+    if not log_request(log):
+        return False
+    try:
+        log = Path(log)
+        for f in [log] + sorted((log.parent / log.stem / "subagents").glob("*.jsonl")):
+            for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
+                try:
+                    content = json.loads(line)["message"]["content"]
+                except (ValueError, KeyError, TypeError):
+                    continue
+                for c in content if isinstance(content, list) else []:
+                    inp = c.get("input") if isinstance(c, dict) and c.get("type") == "tool_use" else None
+                    if isinstance(inp, dict) and c.get("name") == "Bash" and _init_target(str(inp.get("command")), cwd):
+                        return False
+        return bool(_edited_files(log))
+    except (OSError, ValueError):
+        return False
+
+
+def _gate_no_task(root, hook):
+    """Stop gate with no active task (issue #124): a /herd:run session that edited files without `herd init` is sent
+    back to it, at most MAX_BLOCKS times; the release is recorded in NOINIT_FILE. Any other session stops freely."""
+    log, record = hook.get("transcript_path"), _session_path(root)
+    if not isinstance(log, str) or not log or not record or not _skipped_init(log, root):
+        return None
+    seen, key = _state(record.with_name(NOINIT_FILE), {}), os.path.realpath(log)
+    n = seen[key].get("blocks", 0) if isinstance(seen.get(key), dict) else 0
+    n = n if isinstance(n, int) else 0
+    now = datetime.now(timezone.utc).isoformat()
+    seen[key] = {"blocks": n, "released": now} if n >= MAX_BLOCKS else {"blocks": n + 1, "at": now}
+    record.with_name(NOINIT_FILE).write_text(json.dumps(seen, indent=2) + "\n")
+    if n >= MAX_BLOCKS:
+        return None
+    return {"decision": "block", "reason": f"This session was started with /herd:run and edited files, but no Herd "
+            f"task was started ({n + 1}/{MAX_BLOCKS} stop attempts blocked). Run `python3 {SELF} init <slug> "
+            "\"<goal>\"` and follow the run skill, even for a docs-only change. If the human dropped the task, say so "
+            "and stop."}
+
+
 def gate(root, hook):
     """Stop hook. None allows the stop; a dict blocks it with a reason for the agent. Only the task's sessions are
     blocked (see _other_session): another one stops freely and leaves the block counters alone."""
     slug = active_slug(root)
-    if not slug or not _dir(root, slug).exists() or cancelled(root, slug) or _other_session(root, slug, hook):
+    if not slug:
+        return _gate_no_task(root, hook)
+    if not _dir(root, slug).exists() or cancelled(root, slug) or _other_session(root, slug, hook):
         return None
     counter = _dir(root, slug) / "gate_blocks"
     try:

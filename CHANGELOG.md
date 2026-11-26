@@ -2,6 +2,15 @@
 
 All notable changes to Herd. Versions follow `plugin/.claude-plugin/plugin.json`.
 
+## 0.14.10
+
+A session started with `/herd:run` could skip Herd entirely: with no active task the Stop gate allowed every stop. In field use, 1 of 36 sessions (Haiku, a docs-only request) ran `herd status`, edited 3 files and opened a pull request with no `.herd/tasks` folder; the rerun on Sonnet cost $0.43 instead of $0.01 (issue #124, part of #121).
+
+- **Changed:** with no active task, `herd gate` reads the hook's `transcript_path`. It blocks the stop when the log has a `/herd:run` message with arguments (the parser `herd init` already uses), an Edit, Write, MultiEdit or NotebookEdit call (also in subagent logs), and no Bash command that ran `herd.py init` (in the session's log or its subagents' logs, since the designer subagent runs it). The reason says to run `herd init <slug> "<goal>"`.
+- **Changed:** the same `MAX_BLOCKS` (3) circuit breaker applies, per session log. The count and the release are recorded in `herd-noinit.json` in the checkout's git dir, never in the work tree.
+- **Changed:** sessions without a `/herd:run` message, without an edit, or that ran `herd init` (a task done or cancelled since) stop freely, as before. A missing or unreadable log allows the stop.
+- **Known limits:** edits made through Bash (`sed`, `cat >`) are not seen, so a session that edits only that way still stops freely. A failed `herd init` command counts as run. `herd cancel` needs a task, so a session whose human dropped the request is released only after 3 blocks. Not tried in a live session.
+
 ## 0.14.9
 
 A pull request kept showing results that a later `herd verify` had replaced, because only `herd pr` and `herd done` wrote its description. In field use, a PR still listed a failing criterion after it was fixed and verified, and needed a hand-written correction (issue #137, part of #135).

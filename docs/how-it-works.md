@@ -6,7 +6,7 @@ The detail behind the [README](../README.md): the problem, each step of a run, m
 
 Most agent workflows ask people to write long requirement lists, then trust the agent when it says "done". Herd flips that: you give a goal and, if you like, success criteria; the agent returns the code and **evidence** (command output, commit SHA, timestamps). You review evidence, not process.
 
-- **Done means proven.** A Stop hook blocks the agent from finishing until every check passes, with evidence newer than the last edit. It blocks the session that ran `herd init` and the last session to run a herd command in that checkout, such as one that continues the task. Any other, such as a parent that spawned the session into the same worktree and ran no herd command, stops freely.
+- **Done means proven.** A Stop hook blocks the agent from finishing until every check passes, with evidence newer than the last edit. It blocks the session that ran `herd init` and the last session to run a herd command in that checkout, such as one that continues the task. Any other, such as a parent that spawned the session into the same worktree and ran no herd command, stops freely. A session started with `/herd:run` that edits files but never runs `herd init` is blocked too and told to start a task, at most three times.
 - **Your words stay yours.** Criteria you write are quoted verbatim and never weakened.
 - **Caveats surface early.** The agent must try to break its own work and log what it finds.
 - **Light.** A small Python CLI on the standard library, no dependencies, plain-text task files.

@@ -2,6 +2,16 @@
 
 All notable changes to Herd. Versions follow `plugin/.claude-plugin/plugin.json`.
 
+## 0.14.3
+
+A builder could store its own summary as the request: `herd init` took `--request` from the agent and never read the human's words. In field runs on another project, 11 of 36 sessions had a lossy or missing request, and 6 of them cancelled and initialised again (issue #123).
+
+- **Changed:** `herd init` takes the request from the human's latest `/herd:run` message in the session log (the text of `<command-args>`, verbatim), whatever `--request` says. It prints `request: from the session log` or `request: from --request`.
+- **Changed:** a `--request` that differs from that message (beyond whitespace) is kept as a `decision` note.
+- **Changed:** `--request` is used as before when the log has no such message, the message is bare, the log cannot be read, or the pre-init hook's record is more than 10 minutes old.
+- **Changed:** the run skill, the quick route and the designer say in one line that Herd records the message itself.
+- **Known limits:** a later task asked in plain words in the same session still gets the earlier `/herd:run` message; type `/herd:run` again for it. A message queued while the agent is busy, a run started without typing `/herd:run`, or a change of Claude Code's log layout falls back to `--request`. Not run in a live session on 0.14.3.
+
 ## 0.14.1
 
 The demo GIF in the README showed red error output. Two causes: `herd status` before `herd init` exited 1, and a plain `herd init` left `.herd/` in `git status` (issue #116).

@@ -2,6 +2,12 @@
 
 All notable changes to Herd. Versions follow `plugin/.claude-plugin/plugin.json`.
 
+## 0.14.11
+
+The 0.14.10 Stop gate blocked a finished task. In the 0.14.10 benchmark, 1 of 3 Haiku runs ran `herd init` as `H=.../herd.py; python3 "$H" init ...` and passed `herd done`, and the gate then blocked 3 stops with "no Herd task was started": the command check only knows a literal `herd.py init`.
+
+- **Fixed:** with no active task, the gate also reads `.herd/tasks/*/start.json`. A task whose recorded session is this session's log counts as an init, however the command was written. The command check stays for a task folder that is gone.
+
 ## 0.14.10
 
 A session started with `/herd:run` could skip Herd entirely: with no active task the Stop gate allowed every stop. In field use, 1 of 36 sessions (Haiku, a docs-only request) ran `herd status`, edited 3 files and opened a pull request with no `.herd/tasks` folder; the rerun on Sonnet cost $0.43 instead of $0.01 (issue #124, part of #121).

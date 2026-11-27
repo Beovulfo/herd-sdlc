@@ -637,6 +637,16 @@ def _branch(root):
     return _git(root, "rev-parse", "--abbrev-ref", "HEAD").decode().strip()
 
 
+def _pr_base(root, branch):
+    """The branch `herd pr` targets for a task cut from `branch`: `branch` itself, or, when `branch` is not on its
+    remote but tracks a remote branch (as `git worktree add -b work <path> origin/main` makes it), that branch."""
+    upstream = _git(root, "rev-parse", "--abbrev-ref", f"{branch}@{{upstream}}").decode().strip()
+    remote, _, name = upstream.partition("/")
+    if name and not _git(root, "rev-parse", "--verify", "-q", f"refs/remotes/{remote}/{branch}"):
+        return name
+    return branch
+
+
 def _gitpath(root, what):
     out = _git(root, "rev-parse", what).decode().strip()
     return str((Path(root) / out).resolve()) if out else ""  # older git prints these relative to root
@@ -699,7 +709,7 @@ def task_branch(root, slug):
     p = subprocess.run(["git", "switch", "-c", f"herd/{slug}"], cwd=root, capture_output=True, text=True)
     if p.returncode:
         return None, f"could not create branch herd/{slug}: {p.stderr.strip()[-200:]}"
-    (_dir(root, slug) / "base").write_text(base + "\n")  # `herd pr` targets it
+    (_dir(root, slug) / "base").write_text(_pr_base(root, base) + "\n")  # `herd pr` targets it
     return base, None
 
 
@@ -747,7 +757,7 @@ def init_worktree(root, slug, goal, quick_check=None, request=None):
     path = tree / Path(root).resolve().relative_to(toplevel(root).resolve())  # same subfolder as the project
     try:
         source = init_task(path, slug, goal, quick_check=quick_check, request=request, seen_in=root)
-        (_dir(path, slug) / "base").write_text(base + "\n")
+        (_dir(path, slug) / "base").write_text(_pr_base(root, base) + "\n")
     except Exception:  # undo only what this call made: its own new worktree and branch
         subprocess.run(["git", "worktree", "remove", "--force", str(tree)], cwd=root, capture_output=True)
         subprocess.run(["git", "branch", "-D", f"herd/{slug}"], cwd=root, capture_output=True)

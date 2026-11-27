@@ -29,6 +29,8 @@ python3 examples/supermarket-route/verifier/run_leg.py --name haiku-herd-v0.12.1
   --model claude-haiku-5-5 --prompt examples/supermarket-route/prompt.md --herd-tag v0.12.1
 ```
 
+Herd's hooks run the first `python3` on `PATH` and need Python 3.11 or newer. The sandbox hides your home folder, so with `--herd-tag` the leg refuses to start when that Python is older or sits under `~` (as a Python installed by `uv` does). `--python DIR` copies a Python install, the folder that holds `bin/python3`, into each run and puts it first on `PATH`. Each run also sets `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0`, so `claude -p` does not stop background agents 10 minutes after the last turn.
+
 Check the sandbox on your machine and Claude Code version before a leg (about one cent):
 
 ```

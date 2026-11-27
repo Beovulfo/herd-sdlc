@@ -3,10 +3,13 @@
 solutions, the other runs and the network. See the "Run isolation" section of ../README.md.
 
   python3 run_leg.py --name haiku-herd-v0.12.1 --runs 6 --model claude-haiku-5-5 (--task TASK | --prompt PROMPT_FILE) \
-      [--herd-tag v0.12.1] [--root DIR] [--budget 10] [--dry-run]
+      [--herd-tag v0.12.1] [--python DIR] [--root DIR] [--budget 10] [--dry-run]
 
 TASK is a folder under examples/ (supermarket-route, bus-transfer), as a name or a path; it supplies
 examples/TASK/prompt.md unless --prompt is given. The hidden files of every task are refused in a run's reach.
+Herd's hooks run the first `python3` on PATH and need 3.11 or newer; the sandbox hides HOME, so with
+--herd-tag that Python must sit outside HOME. --python DIR copies a Python install (the folder that holds
+bin/python3, for example one under ~/.local/share/uv/python) into each run and puts it first on PATH.
   python3 run_leg.py --selftest
 
 Prove a finished run stayed inside its sandbox with leak_audit.py.
@@ -47,6 +50,7 @@ def parse(argv):
     ap.add_argument("--prompt")
     ap.add_argument("--task")
     ap.add_argument("--herd-tag")
+    ap.add_argument("--python")
     ap.add_argument("--root")
     ap.add_argument("--budget", type=float, default=10)
     ap.add_argument("--dry-run", action="store_true")
@@ -128,6 +132,20 @@ def outside_home_repo(env):
     return [os.path.realpath(repo)] if repo and not _under(os.path.realpath(repo), home) else []
 
 
+def python_problem(env):
+    """Why the first python3 on env's PATH cannot run Herd inside the sandbox, or None."""
+    py = shutil.which("python3", path=env.get("PATH", ""))
+    if not py:
+        return "no python3 on PATH"
+    home = os.path.realpath(env.get("HOME", os.path.expanduser("~")))
+    if _under(os.path.realpath(py), home):
+        return f"{py} is inside HOME, which the sandbox hides"
+    r = subprocess.run([py, "-c", "import sys; print(sys.version_info >= (3, 11))"], capture_output=True, text=True)
+    if r.stdout.strip() != "True":
+        return f"{py} is older than 3.11"
+    return None
+
+
 def create_run(root, n_runs, i, ns, env):
     run_dir = Path(root) / f"run-{i}"
     for sub in ("work", "xdg"):
@@ -146,13 +164,25 @@ def create_run(root, n_runs, i, ns, env):
         tar = subprocess.run(["git", "-C", _repo_root(), "archive", "--format=tar", *spec],
                              capture_output=True, check=True).stdout
         subprocess.run(["tar", "-xf", "-", "-C", str(run_dir / "plugin")], input=tar, check=True)
+    if ns.python:
+        shutil.copytree(os.path.realpath(ns.python), run_dir / "py", symlinks=True)
     (run_dir / "settings.json").write_text(json.dumps(build_settings(root, n_runs, i, outside_home_repo(env)), indent=2) + "\n")
     return run_dir
 
 
+def run_env(run_dir, env):
+    """The run's environment: its own git config, its copied Python first on PATH, and no cutoff of
+    background agents (claude -p otherwise stops them 10 minutes after the last turn)."""
+    out = {**_git_env(run_dir, env), "CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS": "0"}
+    py_bin = Path(run_dir) / "py" / "bin"
+    if py_bin.is_dir():
+        out["PATH"] = f"{py_bin}{os.pathsep}{env.get('PATH', '')}"
+    return out
+
+
 def start(cmd, run_dir, log, err, env):
     with open(log, "wb") as out, open(err, "wb") as errf:
-        return subprocess.Popen(cmd, cwd=Path(run_dir) / "work", env=_git_env(run_dir, env), stdin=subprocess.DEVNULL,
+        return subprocess.Popen(cmd, cwd=Path(run_dir) / "work", env=run_env(run_dir, env), stdin=subprocess.DEVNULL,
                                 stdout=out, stderr=errf, start_new_session=True)
 
 
@@ -193,6 +223,15 @@ def run(argv, env=None, scan_dirs=None):  # noqa: C901
     if ns.herd_tag and not tag_exists(ns.herd_tag):
         print(f"refused: {ns.herd_tag} is not a tag or commit of this repository", file=sys.stderr)
         return 2
+    if ns.python and not os.path.isfile(os.path.join(ns.python, "bin", "python3")):
+        print(f"refused: --python {ns.python} has no bin/python3", file=sys.stderr)
+        return 2
+    if ns.herd_tag and not ns.python:
+        problem = python_problem(env)
+        if problem:
+            print(f"refused: Herd needs a python3 of 3.11 or newer that a run can reach: {problem}; "
+                  "pass --python DIR to copy one into each run", file=sys.stderr)
+            return 2
     denied = denied_paths(root, 0, 0)
     scan = scan_dirs if scan_dirs is not None else ["/tmp", "/private/tmp", tmpdir]
     bad = preflight(scan, denied)

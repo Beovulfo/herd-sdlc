@@ -2,6 +2,13 @@
 
 All notable changes to Herd. Versions follow `plugin/.claude-plugin/plugin.json`.
 
+## 0.14.13
+
+`herd pr` failed when the task started on a branch that was never pushed. An orchestrator that makes each worktree with `git worktree add -b work <path> origin/main` and runs a plain `herd init` there got a recorded base of `work`, so `gh pr create --base work` was refused: the base branch is not on the remote.
+
+- **Fixed:** `herd init` (plain and `--worktree`) records the branch the start branch tracks on its remote, such as `main`, when the start branch itself is not on that remote. A pushed start branch, or one with no remote upstream, stays the base as before.
+- **Known limits:** the remote is read from the local remote-tracking refs, so a start branch pushed by someone else since the last fetch still counts as not pushed. Not tried in a live session.
+
 ## 0.14.12
 
 A new `/herd:run` session that continued a task finished in an earlier session (to merge the base branch or fix review comments on its PR) was blocked at 3 stops with "no Herd task was started": `start.json` named only the session that ran `herd init`, and there was no way to take the task up again (issue #145).

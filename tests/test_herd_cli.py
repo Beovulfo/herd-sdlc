@@ -1484,6 +1484,35 @@ class TestTaskBranch(Base):
         self.assertEqual((self.root / ".herd/tasks/t1/base").read_text().strip(), start)  # herd pr targets it
         self.assertEqual((self.root / "README.md").read_text(), "edited, not committed")  # nothing lost
 
+    def test_init_from_an_unpushed_branch_records_its_upstream_as_the_base(self):
+        # a branch made by `git worktree add -b work <path> origin/main` tracks origin/main and is not on origin
+        start = self.branch()
+        origin = self.root.parent / (self.root.name + "-up.git")
+        try:
+            subprocess.run(["git", "init", "-q", "--bare", str(origin)], check=True)
+            git(self.root, "remote", "add", "origin", str(origin))
+            git(self.root, "push", "-q", "origin", f"{start}:trunk")
+            git(self.root, "fetch", "-q", "origin")
+            git(self.root, "switch", "-q", "-c", "work", "--track", "origin/trunk")
+            p = self.cli("init", "t1", "g")
+            self.assertEqual(p.returncode, 0, p.stderr)
+            self.assertEqual((self.root / ".herd/tasks/t1/base").read_text().strip(), "trunk")
+        finally:
+            shutil.rmtree(origin, ignore_errors=True)
+
+    def test_init_from_a_pushed_branch_keeps_it_as_the_base(self):
+        start = self.branch()
+        origin = self.root.parent / (self.root.name + "-up.git")
+        try:
+            subprocess.run(["git", "init", "-q", "--bare", str(origin)], check=True)
+            git(self.root, "remote", "add", "origin", str(origin))
+            git(self.root, "push", "-q", "-u", "origin", start)
+            p = self.cli("init", "t1", "g")
+            self.assertEqual(p.returncode, 0, p.stderr)
+            self.assertEqual((self.root / ".herd/tasks/t1/base").read_text().strip(), start)
+        finally:
+            shutil.rmtree(origin, ignore_errors=True)
+
     def test_already_on_the_task_branch_stays_there(self):
         git(self.root, "switch", "-q", "-c", "herd/t1")
         p = self.cli("init", "t1", "g")

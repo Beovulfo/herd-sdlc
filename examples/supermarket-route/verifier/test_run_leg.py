@@ -32,9 +32,20 @@ class Base(unittest.TestCase):
         self.home.mkdir()
         self.tmpdir = self.tmp / "tmpdir"
         self.tmpdir.mkdir()
-        self.env = {"HOME": str(self.home), "TMPDIR": str(self.tmpdir), "PATH": os.environ["PATH"]}
+        self.fake_bin = self.fake_python(self.tmp / "fakepy", "True")
+        self.env = {"HOME": str(self.home), "TMPDIR": str(self.tmpdir),
+                    "PATH": f"{self.fake_bin}{os.pathsep}{os.environ['PATH']}"}
         self.prompt = self.tmp / "prompt.md"
         self.prompt.write_text("Build a thing.\n\"quoted\" $x `y`\n")
+
+    @staticmethod
+    def fake_python(prefix, answer):
+        """A bin/ folder whose python3 answers the 3.11 question with `answer`."""
+        b = Path(prefix) / "bin"
+        b.mkdir(parents=True)
+        (b / "python3").write_text(f"#!/bin/sh\necho {answer}\n")
+        (b / "python3").chmod(0o755)
+        return b
 
     def args(self, *extra, name="leg"):
         return ["--name", name, "--runs", "3", "--model", "claude-haiku-5-5", "--prompt", str(self.prompt), *extra]
@@ -289,3 +300,49 @@ class TestHiddenBus(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPython(Base):
+    def test_old_python_is_refused_with_a_tag(self):
+        env = {**self.env, "PATH": f"{self.fake_python(self.tmp / 'old', 'False')}{os.pathsep}{self.env['PATH']}"}
+        code, out = run_main(self.args("--dry-run", "--herd-tag", "HEAD"), env, [str(self.tmpdir)])
+        self.assertEqual(code, 2, out)
+        self.assertIn("older than 3.11", out)
+        self.assertFalse((self.tmpdir / "herd-bench" / "leg").exists())
+
+    def test_python_under_home_is_refused_with_a_tag(self):
+        env = {**self.env, "PATH": f"{self.fake_python(self.home / 'uv', 'True')}{os.pathsep}{self.env['PATH']}"}
+        code, out = run_main(self.args("--dry-run", "--herd-tag", "HEAD"), env, [str(self.tmpdir)])
+        self.assertEqual(code, 2, out)
+        self.assertIn("inside HOME", out)
+
+    def test_no_tag_needs_no_python_check(self):
+        env = {**self.env, "PATH": f"{self.fake_python(self.tmp / 'old', 'False')}{os.pathsep}{self.env['PATH']}"}
+        code, out = run_main(self.args("--dry-run"), env, [str(self.tmpdir)])
+        self.assertEqual(code, 0, out)
+
+    def test_python_option_copies_it_and_puts_it_first_on_path(self):
+        src = self.home / "uv" / "cpython-3.12"
+        self.fake_python(src, "True")
+        env = {**self.env, "PATH": f"{self.fake_python(self.tmp / 'old', 'False')}{os.pathsep}{self.env['PATH']}"}
+        code, out = run_main(self.args("--dry-run", "--herd-tag", "HEAD", "--python", str(src)), env, [str(self.tmpdir)])
+        self.assertEqual(code, 0, out)
+        run1 = self.tmpdir / "herd-bench" / "leg" / "run-1"
+        self.assertTrue((run1 / "py" / "bin" / "python3").is_file())
+        renv = rl.run_env(run1, env)
+        self.assertTrue(renv["PATH"].startswith(str(run1 / "py" / "bin") + os.pathsep))
+        self.assertEqual(shutil.which("python3", path=renv["PATH"]), str(run1 / "py" / "bin" / "python3"))
+
+    def test_python_option_without_bin_python3_is_refused(self):
+        (self.tmp / "empty").mkdir()
+        code, out = run_main(self.args("--dry-run", "--python", str(self.tmp / "empty")), self.env, [str(self.tmpdir)])
+        self.assertEqual(code, 2, out)
+        self.assertIn("no bin/python3", out)
+
+    def test_runs_keep_background_agents(self):
+        renv = rl.run_env(self.tmp / "run-1", self.env)
+        self.assertEqual(renv["CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"], "0")
+        self.assertEqual(renv["PATH"], self.env["PATH"])
+        with mock.patch.object(rl.subprocess, "Popen") as popen:
+            rl.start(["true"], self.tmp, self.tmp / "l", self.tmp / "e", self.env)
+        self.assertEqual(popen.call_args.kwargs["env"]["CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"], "0")

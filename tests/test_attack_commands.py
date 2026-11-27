@@ -49,7 +49,11 @@ class TestRefuses(Attacks):
         self.assertEqual([n["refuses"] for n in herd.load_notes(self.root, "t1")], [REFUSES, REFUSES])
         states = herd._attack_states(herd.verify(self.root, "t1")["attacks"])
         self.assertEqual([states[a][0] for a in PLACE["refuses"]], ["passing", "passing"])
-        self.assertIn(REFUSES, states["bad-input"][1])
+        self.assertIn(f"check: {OK}; refuses: {REFUSES}", states["bad-input"][1])
+        p = self.cli("verify", "--fresh", "--verbose")
+        self.assertIn(f"attack bad-input passing: check: {OK}; refuses: {REFUSES}", p.stdout)
+        evidence = herd.report(herd.verify(self.root, "t1"))
+        self.assertIn(f"bad-input passing (check: {OK}; refuses: {REFUSES})", evidence)
 
     def test_only_a_real_refusal_passes(self):
         self.built()
@@ -70,7 +74,7 @@ class TestRefuses(Attacks):
         self.state("python3 prog.py milk")
         ev = herd.verify(self.root, "t1")
         what = herd._attack_states(ev["attacks"])["one-bad-part"][1]
-        self.assertIn("--refuses python3 prog.py milk", what)
+        self.assertIn("refuses: python3 prog.py milk: exit 0, needs 1 to 125", what)
         self.assertIn("exit 0", what)
 
     def test_a_failing_check_still_fails(self):
@@ -115,7 +119,11 @@ class TestExample(Attacks):
                      "--expect-changed", "logged after red", "x")
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(herd.load_notes(self.root, "t1")[0]["example"], EXAMPLE)
-        self.assertEqual(herd._attack_states(herd.verify(self.root, "t1")["attacks"])["other-reading"][0], "passing")
+        states = herd._attack_states(herd.verify(self.root, "t1")["attacks"])
+        self.assertEqual(states["other-reading"][0], "passing")
+        self.assertIn(f"check: {OK}; example: {EXAMPLE}; expect: aisle 3", states["other-reading"][1])
+        p = self.cli("verify", "--fresh", "--verbose")
+        self.assertIn(f"attack other-reading passing: check: {OK}; example: {EXAMPLE}; expect: aisle 3", p.stdout)
         self.assertEqual(self.state("python3 prog.py 'two milk'"), "failing")
         self.assertEqual(self.state("python3 -c \"import sys; print('warn', file=sys.stderr)\""), "failing")
 

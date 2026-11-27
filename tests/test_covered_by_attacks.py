@@ -130,7 +130,7 @@ class Recount(Repo):
             words = {"passing": "passing", "failing": "failing"}
             for name, (cid, state) in want.items():
                 if state in words:
-                    self.assertIn(f"{name} {words[state]} (`--covered-by {cid}`)", report)
+                    self.assertIn(f"{name} {words[state]} (check: --covered-by {cid})", report)
 
 
 class Refusal(Repo):

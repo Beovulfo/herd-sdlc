@@ -577,8 +577,8 @@ class TestNotes(Base):
         self.assertNotIn("not recorded", text)
         self.attacks()
         text = herd.report(herd.verify(self.root, "t1"))
-        self.assertIn("Adversarial pass: 7 attempts recorded; bad-input passing (`", text)
-        self.assertIn("; collision passing (`", text)
+        self.assertIn("Adversarial pass: 7 attempts recorded; bad-input passing (check:", text)
+        self.assertIn("; collision passing (check:", text)
         self.assertNotIn("missing", text)
 
     def test_quick_route_has_no_adversarial_line(self):
@@ -1623,7 +1623,7 @@ class TestAttackChecks(Base):
         herd.add_note(self.root, "t1", "tried", "right test", attack="bad-input", check=OK)
         herd.verify(self.root, "t1")
         self.assertEqual(herd.problems(self.root, "t1"), [])  # not stuck on the typo
-        self.assertIn("Earlier bad-input command now fails: `python3 -m unittest tests.test_nope`",
+        self.assertIn("Earlier bad-input command now fails: `check: python3 -m unittest tests.test_nope`",
                       herd.pr_body(self.root, "t1"))
         self.assertEqual(self.cli("done").returncode, 0)
 
@@ -1679,7 +1679,7 @@ class TestAttackChecks(Base):
         herd.add_note(self.root, "t1", "tried", "fine", attack="collision", check=OK)
         p = self.cli("verify")
         self.assertEqual(p.returncode, 1)  # a failing attack fails verify, like a failing criterion
-        self.assertIn("attack bad-input failing: false", p.stdout)
+        self.assertIn("attack bad-input failing: check: false", p.stdout)
         self.assertNotIn("attack collision", p.stdout)  # only what needs attention
         self.assertIn("attack collision passing", self.cli("verify", "--verbose").stdout)
 
@@ -1737,7 +1737,7 @@ class TestAttackChecks(Base):
         text = herd.report(ev)
         self.assertIn("bad-input failing", text)
         self.assertIn("collision failing", text)
-        self.assertIn("`python3 -m unittest tests.test_bad`", text)
+        self.assertIn("check: python3 -m unittest tests.test_bad", text)
         self.assertIn("missing: one-bad-part, recount, refusal, other-reading", text)
         body = herd.pr_body(self.root, "t1")
         self.assertIn("bad-input failing", body)
@@ -2549,7 +2549,7 @@ class TestCoveredBy(Base):
         (self.root / "greet.txt").write_text("hello")
         ev = herd.verify(self.root, "t1")
         self.assertEqual(self.states(ev), dict.fromkeys(self.COVERABLE, "passing"))
-        self.assertIn("recount passing (`--covered-by C1`)", herd.report(ev))
+        self.assertIn("recount passing (check: --covered-by C1)", herd.report(ev))
         for a in ("bad-input", "collision", "one-bad-part"):
             herd.add_note(self.root, "t1", "tried", f"n/a: {a}", attack=a)
         herd.add_note(self.root, "t1", "tried", "with its example", attack="other-reading", covered_by="C1",

@@ -577,8 +577,8 @@ class TestNotes(Base):
         self.assertNotIn("not recorded", text)
         self.attacks()
         text = herd.report(herd.verify(self.root, "t1"))
-        self.assertIn("Adversarial pass: 7 attempts recorded; bad-input passing (`", text)
-        self.assertIn("; collision passing (`", text)
+        self.assertIn("Adversarial pass: 7 attempts recorded; bad-input passing (check:", text)
+        self.assertIn("; collision passing (check:", text)
         self.assertNotIn("missing", text)
 
     def test_quick_route_has_no_adversarial_line(self):

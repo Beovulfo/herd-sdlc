@@ -2,6 +2,10 @@
 
 All notable changes to Herd. Versions follow `plugin/.claude-plugin/plugin.json`.
 
+## 0.14.14
+
+- **Fixed:** attack evidence now separates the unit-test check from extra probe commands. Verify and `evidence.md` print `check: <cmd>; refuses: <cmd>` for `--refuses` and `check: <cmd>; example: <cmd>; expect: <text>` for `--example`/`--expect` instead of joining them under a flag as one command.
+
 ## 0.14.13
 
 `herd pr` failed when the task started on a branch that was never pushed. An orchestrator that makes each worktree with `git worktree add -b work <path> origin/main` and runs a plain `herd init` there got a recorded base of `work`, so `gh pr create --base work` was refused: the base branch is not on the remote.

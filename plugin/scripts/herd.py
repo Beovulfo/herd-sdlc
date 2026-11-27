@@ -1460,6 +1460,7 @@ def _run_programs(root, note, a, ran):
             a["expect"], a["example_output"] = expect, out
         a["vacuous"] = a.get("vacuous") or vacuous_program(cmd)
         if why:
+            a["probe_fault"] = why
             a["status"], a["output_tail"], a["zero_tests"] = "failing", out, False
             a["program_fault"] = f"--{kind} {cmd}: {why}"
 
@@ -1914,9 +1915,27 @@ def _attack_state(a):
 
 def _attack_what(a):
     """The attack's commands, or the one that failed and why; the text of an attack without a command."""
-    programs = [f"--{k} {a[k]}" for k in PROGRAM_FLAGS if a.get(k)]
     covered = a.get("covered_by") and f"--covered-by {a['covered_by']}"
-    return a.get("program_fault") or " ".join([a.get("check") or covered or a["text"], *programs])
+    if a.get("program_fault") and not (a.get("refuses") or a.get("example")):
+        return a["program_fault"]
+    if not a.get("check") and not a.get("covered_by") and a["text"].strip().lower().startswith("n/a:"):
+        return a["text"]
+    check = a.get("check") or covered or a["text"]
+    parts = [f"check: {check}"]
+    for kind in PROGRAM_FLAGS:
+        cmd = a.get(kind)
+        if not cmd:
+            continue
+        field = f"{kind}: {cmd}"
+        if kind == "refuses" and a.get("probe_fault"):
+            field += f": {a['probe_fault']}"
+        if kind == "example":
+            if a.get("probe_fault"):
+                field += f": {a['probe_fault']}"
+        parts.append(field)
+        if kind == "example" and a.get("expect"):
+            parts.append(f"expect: {a['expect']}")
+    return "; ".join(parts)
 
 
 def _attack_states(attacks):
@@ -1940,7 +1959,7 @@ def _attack_line(notes, attacks):
     best = _attack_states(attacks)
     words = {"passing": "passing", "failing": "failing", "zero": "ran zero tests", "vacuous": "runs no project code"}
     parts = [f"{a} {best[a][1]}" if best[a][0] == "na" else f"{a} has no command" if best[a][0] == "nocheck"
-             else f"{a} {words[best[a][0]]} (`{best[a][1]}`)" for a in ATTACKS if a in best]
+             else f"{a} {words[best[a][0]]} ({best[a][1]})" for a in ATTACKS if a in best]
     missing = [a for a in ATTACKS if a not in best]
     return (f"Adversarial pass: {len(tried)} attempt{'s' if len(tried) != 1 else ''} recorded"
             + (f"; {'; '.join(parts)}" if parts else "") + (f"; missing: {', '.join(missing)}" if missing else ""))
